@@ -5,6 +5,7 @@ import re
 from dataclasses import replace
 from typing import Callable
 
+from mathforge.agents.registry import PromptContractLoader
 from mathforge.harness.schemas import ProblemIR, RoutePlan
 
 
@@ -27,6 +28,26 @@ _SUBJECT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "topology": ("拓扑", "紧致", "同胚", "topology", "compact", "homeomorph"),
     "numerical-analysis": ("数值", "误差", "迭代法", "numerical", "rounding error"),
 }
+
+_METHOD_FAMILIES: dict[str, tuple[str, str, str]] = {
+    "algebra": ("substitution-elimination", "factorization-invariant", "structural-transform"),
+    "geometry": ("synthetic-geometry", "coordinate-geometry", "vector-transformation"),
+    "number-theory": ("congruence", "valuation-factorization", "descent-extremal"),
+    "combinatorics": ("bijection-counting", "recurrence-generating", "invariant-extremal"),
+    "probability": ("conditioning", "indicator-linearity", "distribution-transform"),
+    "calculus": ("direct-analytic", "change-of-variable", "estimate-limit"),
+    "linear-algebra": ("row-space", "spectral", "linear-map-invariant"),
+    "optimization": ("calculus-stationarity", "convexity-inequality", "duality-transform"),
+    "logic": ("direct-deduction", "contradiction", "model-counterexample"),
+    "general-math": ("direct-deduction", "constructive-computation", "contradiction-extremal"),
+}
+
+
+def method_families_for(subject: str, problem_type: str) -> list[str]:
+    families = list(_METHOD_FAMILIES.get(subject, _METHOD_FAMILIES["general-math"]))
+    if problem_type == "proof" and "contradiction" not in " ".join(families):
+        families[-1] = "contradiction-or-extremal"
+    return families
 
 
 class RouterRuleEngine:
@@ -67,12 +88,18 @@ class RouterRuleEngine:
             use_rag=risk in {"medium", "high"},
             use_lemma_loop=risk == "high",
             use_llm_finalizer=problem.problem_type in {"proof", "explanation"},
+            method_families=method_families_for(primary, problem.problem_type),
         )
 
 
 class RouterPlanner:
-    def __init__(self, rule_engine: RouterRuleEngine | None = None) -> None:
+    def __init__(
+        self,
+        rule_engine: RouterRuleEngine | None = None,
+        contracts: PromptContractLoader | None = None,
+    ) -> None:
         self._rules = rule_engine or RouterRuleEngine()
+        self._contracts = contracts or PromptContractLoader()
 
     def plan(
         self,
@@ -90,13 +117,19 @@ class RouterPlanner:
             consume_call()
             response = llm_chat(
                 messages=[
-                    {"role": "system", "content": "Classify the math domain. Return JSON only."},
+                    {
+                        "role": "system",
+                        "content": self._contracts.system_prompt(
+                            "router_planner",
+                            "Classify the math domain and return JSON only.",
+                        ),
+                    },
                     {
                         "role": "user",
                         "content": (
                             f"Problem:\n{problem.normalized_problem}\n\n"
                             'Return {"primary_subject":"...","auxiliary_subject":null,'
-                            '"risk_level":"low|medium|high"}.'
+                            '"risk_level":"low|medium|high","method_families":["...","...","..."]}.'
                         ),
                     },
                 ],
@@ -125,6 +158,7 @@ class RouterPlanner:
                 risk_level=risk,
                 selected_skills=selected,
                 candidate_count={"low": 1, "medium": 2, "high": 3}[risk],
+                method_families=method_families_for(primary, problem.problem_type),
             )
         except (ValueError, TypeError, json.JSONDecodeError, RuntimeError):
             return rule_plan

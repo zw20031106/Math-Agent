@@ -6,6 +6,7 @@ from typing import Callable
 from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProofObligation
 from mathforge.tools.executor import ToolExecutor
 from mathforge.verification.equivalence import equivalence_clusters
+from mathforge.verification.methods import candidate_method_signature
 
 
 @dataclass(frozen=True)
@@ -51,8 +52,11 @@ class ArbitrationPolicy:
         if not candidates:
             raise ValueError("at least one candidate is required")
         clusters = equivalence_clusters(candidates, self._tools)
+        candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
         cluster_by_id = {
-            candidate_id: cluster for cluster in clusters for candidate_id in cluster
+            candidate_id: [candidate_by_id[item] for item in cluster]
+            for cluster in clusters
+            for candidate_id in cluster
         }
         ranks = [
             self._rank(candidate, evidence, obligations.get(candidate.candidate_id, []), cluster_by_id)
@@ -79,7 +83,7 @@ class ArbitrationPolicy:
         candidate: CandidateSolution,
         evidence: list[EvidenceRecord],
         obligations: list[ProofObligation],
-        clusters: dict[str, list[str]],
+        clusters: dict[str, list[CandidateSolution]],
     ) -> CandidateRank:
         own_evidence = [record for record in evidence if record.candidate_id == candidate.candidate_id]
         hard_fails = sum(
@@ -92,8 +96,21 @@ class ArbitrationPolicy:
             else 1.0
         )
         answer_consistency = int(bool(candidate.final_answer.strip()))
-        cluster = clusters.get(candidate.candidate_id, [candidate.candidate_id])
-        independent_agreement = max(0, len(cluster) - 1)
+        cluster = clusters.get(candidate.candidate_id, [candidate])
+        own_signature = candidate_method_signature(candidate)
+        independent_agreement = (
+            0
+            if candidate.is_method_duplicate
+            else len(
+                {
+                    candidate_method_signature(other)
+                    for other in cluster
+                    if other.candidate_id != candidate.candidate_id
+                    and not other.is_method_duplicate
+                    and candidate_method_signature(other) != own_signature
+                }
+            )
+        )
         soft_score = sum(
             1 if record.status == "pass" else -1 if record.status == "fail" else 0
             for record in own_evidence

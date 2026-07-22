@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mathforge.agents.registry import PromptContractLoader
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
@@ -19,27 +20,34 @@ class SolverRequest:
     problem: ProblemIR
     route: RoutePlan
     skill_context: str
-    primary_method_label: str
-    forbidden_methods: tuple[str, ...] = ()
+    method_family: str
+    forbidden_method_families: tuple[str, ...] = ()
 
 
 class PrimarySolver:
     role = "PrimarySolver"
 
+    def __init__(self, contracts: PromptContractLoader | None = None) -> None:
+        self._contracts = contracts or PromptContractLoader()
+
     def build_messages(self, request: SolverRequest) -> list[dict[str, str]]:
         return [
             {
                 "role": "system",
-                "content": (
-                    "You are PrimarySolver. Produce a rigorous, standard, independently "
-                    f"verifiable solution. {_OUTPUT_INSTRUCTION}"
+                "content": self._contracts.system_prompt(
+                    "primary_solver",
+                    (
+                        "Produce a rigorous independently verifiable solution. "
+                        f"{_OUTPUT_INSTRUCTION} Set method exactly to the assigned method family."
+                    ),
                 ),
             },
             {
                 "role": "user",
                 "content": (
                     f"Problem:\n{request.problem.normalized_problem}\n\nProvide a complete solution.\n\n"
-                    f"Planned method family: {request.primary_method_label}.\n"
+                    f"Required core method family: {request.method_family}.\n"
+                    f"Forbidden method families: {', '.join(request.forbidden_method_families) or 'none'}.\n"
                     f"{request.skill_context}"
                 ),
             },
@@ -49,23 +57,28 @@ class PrimarySolver:
 class AlternativeSolver:
     role = "AlternativeSolver"
 
+    def __init__(self, contracts: PromptContractLoader | None = None) -> None:
+        self._contracts = contracts or PromptContractLoader()
+
     def build_messages(self, request: SolverRequest) -> list[dict[str, str]]:
-        forbidden = ", ".join(request.forbidden_methods) or request.primary_method_label
+        forbidden = ", ".join(request.forbidden_method_families) or "none"
         return [
             {
                 "role": "system",
-                "content": (
-                    "You are AlternativeSolver. Solve independently using a different core "
-                    "method. You have not been given the PrimarySolver derivation. "
-                    f"{_OUTPUT_INSTRUCTION}"
+                "content": self._contracts.system_prompt(
+                    "alternative_solver",
+                    (
+                        "Solve independently using only the assigned core method family. "
+                        f"{_OUTPUT_INSTRUCTION} Set method exactly to the assigned method family."
+                    ),
                 ),
             },
             {
                 "role": "user",
                 "content": (
                     f"Problem:\n{request.problem.normalized_problem}\n\nProvide a complete solution.\n\n"
-                    f"Primary method label only: {request.primary_method_label}.\n"
-                    f"Forbidden methods: {forbidden}.\n{request.skill_context}"
+                    f"Required core method family: {request.method_family}.\n"
+                    f"Forbidden method families: {forbidden}.\n{request.skill_context}"
                 ),
             },
         ]
@@ -94,9 +107,13 @@ class SolverExecutor:
         if not response.strip():
             raise ValueError("empty solver response")
         budget.record_tokens(max(1, len(response) // 4))
-        return self._parser.parse(
+        candidate = self._parser.parse(
             response,
             candidate_id=request.candidate_id,
             role=solver.role,
             answer_type=request.problem.answer_type,
         )
+        candidate.planned_method_family = request.method_family
+        if candidate.method.strip().lower() != request.method_family.strip().lower():
+            candidate.parse_status = f"{candidate.parse_status}:method_contract_deviation"
+        return candidate

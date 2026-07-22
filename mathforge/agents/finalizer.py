@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mathforge.agents.registry import PromptContractLoader
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, ProblemIR
@@ -23,10 +24,12 @@ class LLMFinalizer:
         provider: OfficialClientProvider,
         parser: SolutionParser,
         formatter: DeterministicFormatter,
+        contracts: PromptContractLoader | None = None,
     ) -> None:
         self._provider = provider
         self._parser = parser
         self._formatter = formatter
+        self._contracts = contracts or PromptContractLoader()
 
     def finalize(
         self,
@@ -43,10 +46,13 @@ class LLMFinalizer:
                 messages=[
                     {
                         "role": "system",
-                        "content": (
-                            "You are LLMFinalizer. Improve exposition only. Do not introduce "
-                            "new conclusions or assumptions. Preserve the exact final answer. "
-                            "Return CandidateSolution JSON."
+                        "content": self._contracts.system_prompt(
+                            "finalizer",
+                            (
+                                "Improve exposition only. Do not introduce new conclusions or "
+                                "assumptions. Preserve the exact final answer. Return "
+                                "CandidateSolution JSON."
+                            ),
                         ),
                     },
                     {

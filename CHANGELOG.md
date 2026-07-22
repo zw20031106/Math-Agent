@@ -34,6 +34,17 @@
   the accepted Claim graph.
 - Completed token accounting for Router and Repair model calls.
 
+### R3
+
+- Added explicit, mutually exclusive method-family plans to RoutePlan and bound
+  every solver branch to one required family plus a forbidden-family set.
+- Distinguished planned families from returned method signatures, marked actual
+  duplicate methods, and excluded same-method/duplicate candidates from
+  independent-agreement scoring.
+- Made PromptContractLoader the system-prompt entry point for RouterPlanner,
+  PrimarySolver, AlternativeSolver, VerifierSkeptic, RepairAgent, and
+  LLMFinalizer, preserving each role's visible/forbidden context contract.
+
 ### P00
 
 - Imported and froze the official competition baseline.

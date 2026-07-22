@@ -248,6 +248,8 @@ class ClaimRepairService:
             unresolved_obligations=list(original.unresolved_obligations),
             parse_status=patch.parse_status,
             version=original.version + 1,
+            planned_method_family=original.planned_method_family,
+            is_method_duplicate=original.is_method_duplicate,
         )
         return proposed, changed
 

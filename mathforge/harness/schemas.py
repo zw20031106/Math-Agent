@@ -70,6 +70,8 @@ class CandidateSolution:
     unresolved_obligations: list[str] = field(default_factory=list)
     parse_status: str = "parsed"
     version: int = 1
+    planned_method_family: str = ""
+    is_method_duplicate: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -85,6 +87,8 @@ class CandidateSolution:
             "unresolved_obligations": list(self.unresolved_obligations),
             "parse_status": self.parse_status,
             "version": self.version,
+            "planned_method_family": self.planned_method_family,
+            "is_method_duplicate": self.is_method_duplicate,
         }
 
 
@@ -102,6 +106,7 @@ class RoutePlan:
     use_rag: bool = False
     use_lemma_loop: bool = False
     use_llm_finalizer: bool = False
+    method_families: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -117,6 +122,7 @@ class RoutePlan:
             "use_rag": self.use_rag,
             "use_lemma_loop": self.use_lemma_loop,
             "use_llm_finalizer": self.use_llm_finalizer,
+            "method_families": list(self.method_families),
         }
 
 

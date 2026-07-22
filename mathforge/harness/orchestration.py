@@ -9,8 +9,10 @@ from mathforge.agents.solver import (
     SolverExecutor,
     SolverRequest,
 )
+from mathforge.agents.router_planner import method_families_for
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
+from mathforge.verification.methods import candidate_method_signature
 
 
 @dataclass(frozen=True)
@@ -28,17 +30,6 @@ class FanoutResult:
     failures: list[BranchFailure]
 
 
-def candidate_method_signature(candidate: CandidateSolution) -> tuple:
-    topology = tuple(
-        sorted((claim.check_type, len(claim.depends_on), claim.importance) for claim in candidate.claims)
-    )
-    return (
-        candidate.method.strip().lower(),
-        tuple(sorted(theorem.strip().lower() for theorem in candidate.theorems)),
-        topology,
-    )
-
-
 class CandidateOrchestrator:
     def __init__(self, executor: SolverExecutor) -> None:
         self._executor = executor
@@ -54,13 +45,32 @@ class CandidateOrchestrator:
         max_tokens: int,
     ) -> FanoutResult:
         count = max(1, min(3, route.candidate_count))
-        primary_label = f"standard-{route.primary_subject}"
+        method_families = list(
+            dict.fromkeys(
+                route.method_families
+                or method_families_for(route.primary_subject, route.problem_type)
+            )
+        )
+        if len(method_families) < count:
+            method_families.extend(
+                family
+                for family in method_families_for("general-math", route.problem_type)
+                if family not in method_families
+            )
+        count = min(count, len(method_families))
         branches: list[tuple[int, PrimarySolver | AlternativeSolver, SolverRequest]] = []
         branches.append(
             (
                 0,
                 PrimarySolver(),
-                SolverRequest("primary-1", problem, route, skill_context, primary_label),
+                SolverRequest(
+                    "primary-1",
+                    problem,
+                    route,
+                    skill_context,
+                    method_families[0],
+                    tuple(method_families[1:count]),
+                ),
             )
         )
         for index in range(1, count):
@@ -73,8 +83,12 @@ class CandidateOrchestrator:
                         problem,
                         route,
                         skill_context,
-                        primary_label,
-                        (primary_label, f"alternative-{index - 1}"),
+                        method_families[index],
+                        tuple(
+                            family
+                            for family in method_families[:count]
+                            if family != method_families[index]
+                        ),
                     ),
                 )
             )
@@ -106,6 +120,7 @@ class CandidateOrchestrator:
             signature = candidate_method_signature(candidate)
             if signature in seen:
                 candidate.parse_status = f"{candidate.parse_status}:duplicate_method"
+                candidate.is_method_duplicate = True
             else:
                 seen.add(signature)
         failures.sort(key=lambda item: item.candidate_id)

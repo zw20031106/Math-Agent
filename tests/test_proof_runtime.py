@@ -114,7 +114,7 @@ class RoutedProofClient:
         del temperature, max_tokens
         system = messages[0]["content"]
         self.roles.append(system)
-        if system.startswith("Classify the math domain"):
+        if system.startswith("You are RouterPlanner"):
             return '{"primary_subject":"general-math","risk_level":"high"}'
         if system.startswith("You are VerifierSkeptic"):
             batch = json.loads(messages[-1]["content"].split("Batch:\n", 1)[1])

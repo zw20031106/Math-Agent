@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from mathforge.agents.registry import PromptContractLoader
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProblemIR
@@ -9,9 +10,15 @@ from mathforge.parsing.solution_parser import SolutionParser
 
 
 class RepairAgent:
-    def __init__(self, provider: OfficialClientProvider, parser: SolutionParser) -> None:
+    def __init__(
+        self,
+        provider: OfficialClientProvider,
+        parser: SolutionParser,
+        contracts: PromptContractLoader | None = None,
+    ) -> None:
         self._provider = provider
         self._parser = parser
+        self._contracts = contracts or PromptContractLoader()
 
     def repair(
         self,
@@ -37,9 +44,12 @@ class RepairAgent:
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "You are RepairAgent. Repair only the supplied failed claim dependency "
-                        "closure. Return CandidateSolution JSON with replacement claims."
+                    "content": self._contracts.system_prompt(
+                        "repair",
+                        (
+                            "Repair only the supplied failed claim impact closure. "
+                            "Return CandidateSolution JSON with replacement claims."
+                        ),
                     ),
                 },
                 {

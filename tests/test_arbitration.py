@@ -41,3 +41,20 @@ def test_arbiter_failure_is_not_required_for_deterministic_output():
     result = ArbitrationPolicy().select([first, second], [], {})
     assert result.selected.candidate_id == "first"
     assert not result.used_llm_arbiter
+
+
+def test_same_method_same_answer_has_zero_independent_agreement():
+    first = _candidate("first", "7", "PrimarySolver")
+    second = _candidate("second", "7", "AlternativeSolver")
+    first.method = second.method = "substitution-elimination"
+    result = ArbitrationPolicy().select([first, second], [], {})
+    assert [rank.independent_agreement for rank in result.ranks] == [0, 0]
+
+
+def test_distinct_actual_methods_can_contribute_one_agreement():
+    first = _candidate("first", "7", "PrimarySolver")
+    second = _candidate("second", "7", "AlternativeSolver")
+    first.method = "substitution-elimination"
+    second.method = "factorization-invariant"
+    result = ArbitrationPolicy().select([first, second], [], {})
+    assert [rank.independent_agreement for rank in result.ranks] == [1, 1]

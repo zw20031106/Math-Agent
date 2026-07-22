@@ -8,7 +8,8 @@ The official `main.py` and `llm_client.py` files are frozen and verified byte-fo
 
 `user_agent.ReasoningAgent` is a thin, thread-safe entry point. Each solve creates
 an isolated session, parses and routes the problem, runs risk-sized method-orthogonal
-candidates, checks claim evidence, batches unresolved proof claims through a
+candidates under mutually exclusive method-family contracts, checks actual
+method duplicates and claim evidence, batches unresolved proof claims through a
 soft-evidence VerifierSkeptic, enforces required proof obligations before
 lexicographic arbitration, and returns a compact judge-safe trace. High-risk
 problems can use a verified-lemma loop and evidence-scoped repair. Reviewed

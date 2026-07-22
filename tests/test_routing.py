@@ -18,6 +18,7 @@ def test_rule_router_classifies_clear_problem_without_llm():
     plan = RouterPlanner().plan(parsed, llm_chat=lambda **_: "{}", consume_call=consume)
     assert plan.primary_subject == "linear-algebra"
     assert calls == 0
+    assert len(plan.method_families) == len(set(plan.method_families)) == 3
 
 
 def test_ambiguous_router_failure_degrades_to_general_math():
@@ -64,4 +65,9 @@ def test_all_prompt_contracts_are_statically_valid():
         "repair",
         "finalizer",
     ):
-        assert loader.load(role).body
+        contract = loader.load(role)
+        assert contract.body
+        rendered = loader.system_prompt(role)
+        assert rendered.startswith(f"You are {contract.fields['role']}.")
+        assert contract.fields["visible_memory"] in rendered
+        assert contract.fields["forbidden_context"] in rendered

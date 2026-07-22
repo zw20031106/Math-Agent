@@ -172,6 +172,7 @@ class MathForgeHarness:
                 primary_subject=session.route_plan.primary_subject,
                 risk_level=session.route_plan.risk_level,
                 selected_skills=session.route_plan.selected_skills,
+                method_families=session.route_plan.method_families,
             )
             fanout = self._candidate_orchestrator.fanout(
                 session.problem_ir,
@@ -533,7 +534,7 @@ class MathForgeHarness:
             skill_context=(
                 f"{skill_context}\n\nVerified problem-local lemmas:\n{lemma_context}"
             )[: self._config.skill_char_budget],
-            primary_method_label=f"lemma-guided-{session.route_plan.primary_subject}",
+            method_family=f"lemma-guided-{session.route_plan.primary_subject}",
         )
         candidate = self._solver_executor.execute(
             PrimarySolver(),

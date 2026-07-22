@@ -45,8 +45,12 @@ def test_fanout_is_parallel_stable_and_hides_primary_text():
         for call in client.calls
         if call["messages"][0]["content"].startswith("You are AlternativeSolver")
     )
-    assert "Primary method label only" in alternative_prompt
+    assert "Required core method family: factorization-invariant" in alternative_prompt
+    assert "Forbidden method families: substitution-elimination" in alternative_prompt
     assert "Solved independently" not in alternative_prompt
+    assert result.candidates[0].planned_method_family == "substitution-elimination"
+    assert result.candidates[1].planned_method_family == "factorization-invariant"
+    assert result.candidates[1].is_method_duplicate is True
 
 
 class OneBranchFailsClient(FakeClient):

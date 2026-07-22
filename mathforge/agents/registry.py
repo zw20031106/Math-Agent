@@ -105,6 +105,26 @@ class PromptContract:
     fields: dict[str, str]
     body: str
 
+    @property
+    def max_context_chars(self) -> int:
+        return int(self.fields["max_context_chars"])
+
+    def render_system(self, runtime_instructions: str = "") -> str:
+        role = self.fields["role"]
+        contract_lines = [
+            f"You are {role}. Follow prompt contract version {self.fields['version']}.",
+            f"Objective: {self.fields['objective']}.",
+            f"Visible context only: {self.fields['visible_memory']}.",
+            f"Forbidden context: {self.fields['forbidden_context']}.",
+            f"Allowed tools: {self.fields['allowed_tools']}.",
+            f"Failure policy: {self.fields['failure_policy']}.",
+            f"Stop condition: {self.fields['stop_condition']}.",
+            self.body,
+        ]
+        if runtime_instructions.strip():
+            contract_lines.append(runtime_instructions.strip())
+        return "\n".join(contract_lines)
+
 
 class PromptContractLoader:
     def __init__(self, root: Path | None = None) -> None:
@@ -118,3 +138,6 @@ class PromptContractLoader:
             raise ValueError(f"prompt contract missing: {', '.join(missing)}")
         int(fields["max_context_chars"])
         return PromptContract(fields=fields, body=body)
+
+    def system_prompt(self, role_directory: str, runtime_instructions: str = "") -> str:
+        return self.load(role_directory).render_system(runtime_instructions)

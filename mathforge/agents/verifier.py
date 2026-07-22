@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 import re
 
+from mathforge.agents.registry import PromptContractLoader
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import (
@@ -42,8 +43,13 @@ class BatchVerificationResult:
 class VerifierSkepticAgent:
     """Review all candidates in one budgeted call and emit soft findings only."""
 
-    def __init__(self, provider: OfficialClientProvider) -> None:
+    def __init__(
+        self,
+        provider: OfficialClientProvider,
+        contracts: PromptContractLoader | None = None,
+    ) -> None:
         self._provider = provider
+        self._contracts = contracts or PromptContractLoader()
 
     def review(
         self,
@@ -61,11 +67,13 @@ class VerifierSkepticAgent:
                 messages=[
                     {
                         "role": "system",
-                        "content": (
-                            "You are VerifierSkeptic. Challenge the supplied claims and required "
-                            "proof obligations. You do not see private reasoning transcripts. "
-                            "Return JSON only. A pass must name both a real claim_id and one or "
-                            "more obligation_ids supported by that claim. Unknown is not pass."
+                        "content": self._contracts.system_prompt(
+                            "verifier_skeptic",
+                            (
+                                "Challenge the supplied claims and required proof obligations. "
+                                "Return JSON only. A pass must name both a real claim_id and one "
+                                "or more obligation_ids supported by that claim. Unknown is not pass."
+                            ),
                         ),
                     },
                     {
