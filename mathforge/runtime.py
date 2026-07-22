@@ -24,6 +24,7 @@ from mathforge.context.assembler import ContextAssembler, RawContextStore
 from mathforge.context.compressor import ContextCompressor
 from mathforge.memory.blackboard import MemoryBlackboard
 from mathforge.harness.lemma_loop import VerifiedLemmaLoop
+from mathforge.retrieval.retriever import Retriever
 
 
 class MathForgeHarness:
@@ -48,6 +49,7 @@ class MathForgeHarness:
         self._arbitration = ArbitrationPolicy(self._tool_executor)
         self._context_compressor = ContextCompressor()
         self._lemma_loop = VerifiedLemmaLoop()
+        self._retriever = Retriever()
 
     def solve(self, problem: str, metadata: dict) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
@@ -82,6 +84,22 @@ class MathForgeHarness:
                 session.route_plan.selected_skills,
                 self._config.skill_char_budget,
             )
+            if session.route_plan.use_rag:
+                cards = self._retriever.retrieve(
+                    session.problem_ir.normalized_problem,
+                    subject=session.route_plan.primary_subject,
+                    role="PrimarySolver",
+                    top_k=3,
+                )
+                if cards:
+                    rag_context = "\n\n".join(
+                        f"## Reviewed knowledge: {card.title}\n{card.statement}\n"
+                        f"Conditions: {', '.join(card.preconditions) or 'none'}\n"
+                        f"Source: {card.source_ref}"
+                        for card in cards
+                    )
+                    skill_context = f"{skill_context}\n\n{rag_context}"[: self._config.skill_char_budget]
+                trace.add("retrieval_completed", card_ids=[card.id for card in cards])
             trace.add(
                 "route_planned",
                 primary_subject=session.route_plan.primary_subject,

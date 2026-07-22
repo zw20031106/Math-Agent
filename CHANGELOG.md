@@ -68,3 +68,10 @@
   candidate versioning and per-candidate/per-problem attempt limits.
 - Repairs must reverify only affected claims and roll back when hard failures
   remain, reverification is missing, or evidence quality decreases.
+
+### P10
+
+- Added offline SQLite FTS5 knowledge cards, read-only BM25 retrieval, subject
+  and trust filtering, condition reranking, deduplication, and bounded Top-K.
+- Seeded eight reviewed high-priority domain cards from repository Skills and
+  preserved a no-database fallback with no network dependency.

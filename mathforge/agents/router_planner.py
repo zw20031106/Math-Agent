@@ -64,6 +64,7 @@ class RouterRuleEngine:
             selected_tools=tools,
             candidate_count=candidate_count,
             max_reasoning_rounds=2 if risk == "high" else 1,
+            use_rag=risk in {"medium", "high"},
             use_lemma_loop=risk == "high",
             use_llm_finalizer=problem.problem_type in {"proof", "explanation"},
         )
