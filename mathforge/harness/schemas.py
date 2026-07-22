@@ -165,6 +165,58 @@ class ProofObligation:
 
 
 @dataclass
+class LemmaCard:
+    lemma_id: str
+    statement: str
+    conditions: list[str]
+    dependencies: list[str]
+    proof_sketch: str
+    status: str
+    evidence_ids: list[str]
+    source_round: int
+    scope: str = "current_problem"
+
+    def to_dict(self) -> dict:
+        return {
+            "lemma_id": self.lemma_id,
+            "statement": self.statement,
+            "conditions": list(self.conditions),
+            "dependencies": list(self.dependencies),
+            "proof_sketch": self.proof_sketch,
+            "status": self.status,
+            "evidence_ids": list(self.evidence_ids),
+            "source_round": self.source_round,
+            "scope": self.scope,
+        }
+
+
+@dataclass
+class RoundState:
+    round_id: int
+    input_lemma_ids: list[str]
+    candidate_lemma_ids: list[str]
+    verified_lemma_ids: list[str]
+    rejected_lemma_ids: list[str]
+    resolved_obligations: list[str]
+    unresolved_obligations: list[str]
+    conflict_count: int
+    progress_score: float
+
+    def to_dict(self) -> dict:
+        return {
+            "round_id": self.round_id,
+            "input_lemma_ids": list(self.input_lemma_ids),
+            "candidate_lemma_ids": list(self.candidate_lemma_ids),
+            "verified_lemma_ids": list(self.verified_lemma_ids),
+            "rejected_lemma_ids": list(self.rejected_lemma_ids),
+            "resolved_obligations": list(self.resolved_obligations),
+            "unresolved_obligations": list(self.unresolved_obligations),
+            "conflict_count": self.conflict_count,
+            "progress_score": self.progress_score,
+        }
+
+
+@dataclass
 class MathSession:
     session_id: str
     problem: str
@@ -176,6 +228,9 @@ class MathSession:
     evidence: list[EvidenceRecord] = field(default_factory=list)
     proof_obligations: dict[str, list[ProofObligation]] = field(default_factory=dict)
     working_memory: Any = None
+    lemma_memory: Any = None
+    lemmas: list[LemmaCard] = field(default_factory=list)
+    rounds: list[RoundState] = field(default_factory=list)
     trace_events: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -197,5 +252,12 @@ class MathSession:
                 if self.working_memory is not None and hasattr(self.working_memory, "to_dict")
                 else None
             ),
+            "lemma_memory": (
+                self.lemma_memory.to_dict()
+                if self.lemma_memory is not None and hasattr(self.lemma_memory, "to_dict")
+                else None
+            ),
+            "lemmas": [lemma.to_dict() for lemma in self.lemmas],
+            "rounds": [round_state.to_dict() for round_state in self.rounds],
             "trace_events": [dict(event) for event in self.trace_events],
         }

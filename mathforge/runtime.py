@@ -23,6 +23,7 @@ from mathforge.verification.proof_obligations import ProofObligationEngine
 from mathforge.context.assembler import ContextAssembler, RawContextStore
 from mathforge.context.compressor import ContextCompressor
 from mathforge.memory.blackboard import MemoryBlackboard
+from mathforge.harness.lemma_loop import VerifiedLemmaLoop
 
 
 class MathForgeHarness:
@@ -46,6 +47,7 @@ class MathForgeHarness:
         self._obligation_engine = ProofObligationEngine()
         self._arbitration = ArbitrationPolicy(self._tool_executor)
         self._context_compressor = ContextCompressor()
+        self._lemma_loop = VerifiedLemmaLoop()
 
     def solve(self, problem: str, metadata: dict) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
@@ -124,6 +126,24 @@ class MathForgeHarness:
             for item in viable:
                 session.proof_obligations[item.candidate_id] = self._obligation_engine.generate(
                     session.problem_ir, item
+                )
+            lemma_result = self._lemma_loop.run(
+                session.route_plan,
+                viable,
+                session.evidence,
+                session.proof_obligations,
+                session.lemma_memory,
+            )
+            session.lemmas.extend(lemma_result.lemmas)
+            session.rounds.extend(lemma_result.rounds)
+            if session.route_plan.risk_level == "high":
+                trace.add(
+                    "lemma_loop_completed",
+                    rounds=len(lemma_result.rounds),
+                    verified=[
+                        lemma.lemma_id for lemma in lemma_result.lemmas if lemma.status == "verified"
+                    ],
+                    stop_reason=lemma_result.stop_reason,
                 )
             arbitration = self._arbitration.select(
                 viable,

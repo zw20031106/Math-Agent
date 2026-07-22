@@ -54,3 +54,10 @@
   stores, raw-context references, and claim dependency graphs.
 - Added deterministic evidence-preserving context compression with role-specific
   views, invariant validation, and automatic snapshot rollback.
+
+### P08
+
+- Added high-risk-only lemma curation and verification with explicit provisional,
+  verified, conflicted, and rejected states.
+- Added two-round progress accounting and stop conditions; only verified lemmas
+  enter solver-visible session memory.

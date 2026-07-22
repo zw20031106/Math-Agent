@@ -20,3 +20,6 @@ class LemmaMemory:
             for item in self._memory.read(frozenset({"lemma"}))
             if item.payload.get("status") == "verified"
         ]
+
+    def to_dict(self) -> dict:
+        return {"verified": self.verified()}
