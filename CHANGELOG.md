@@ -22,6 +22,18 @@
 - Claimless and incomplete proof candidates now fall back instead of being
   formatted as completed proofs.
 
+### R2
+
+- Added reproducible tool invocation records with exact arguments, assumptions,
+  domains, tool version, timeout, duration, and a stable input digest.
+- Made symbolic counterexamples domain-aware and conservative: incomplete
+  assumption parsing yields medium-strength unknown instead of a hard failure.
+- Expanded Repair scope through upstream prerequisites and downstream consumers,
+  required hard reverification of failed/changed/previously verified affected
+  claims, reran candidate answer-type validation, and rebuilt solution text from
+  the accepted Claim graph.
+- Completed token accounting for Router and Repair model calls.
+
 ### P00
 
 - Imported and froze the official competition baseline.

@@ -54,3 +54,55 @@ def test_isolated_timeout_is_unknown():
         {"expression": "(x+1)^20"},
     )
     assert result.status == "unknown"
+
+
+def test_symbolic_counterexamples_respect_assumptions_and_domains():
+    executor = ToolExecutor()
+    constrained = executor.execute(
+        "symbolic_equivalence",
+        {
+            "left": "sqrt(x^2)",
+            "right": "x",
+            "assumptions": ["x >= 0"],
+            "domains": {"x": "R"},
+        },
+    )
+    negative_domain = executor.execute(
+        "symbolic_equivalence",
+        {
+            "left": "sqrt(x^2)",
+            "right": "x",
+            "assumptions": ["x < 0"],
+            "domains": {"x": "R"},
+        },
+    )
+    unparsed = executor.execute(
+        "symbolic_equivalence",
+        {
+            "left": "x",
+            "right": "x+1",
+            "assumptions": ["x is sufficiently nice"],
+        },
+    )
+    assert constrained.status == "unknown"
+    assert constrained.strength == "medium"
+    assert negative_domain.status == "fail"
+    assert negative_domain.strength == "hard"
+    assert unparsed.status == "unknown"
+
+
+def test_tool_version_round_trips_in_result_schema():
+    result = ToolExecutor().execute(
+        "answer_type_check", {"answer": "2", "answer_type": "integer"}
+    )
+    assert result.tool_version == "1"
+    assert result.to_dict()["tool_version"] == "1"
+
+
+def test_symbolic_counterexample_search_uses_independent_symbol_values():
+    result = ToolExecutor().execute(
+        "symbolic_equivalence",
+        {"left": "x-y", "right": "0"},
+    )
+    assert result.status == "fail"
+    assert result.payload["counterexample"]["x"] != result.payload["counterexample"]["y"]

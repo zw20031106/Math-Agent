@@ -27,6 +27,7 @@ class ToolResult:
     strength: str
     summary: str
     payload: dict[str, Any]
+    tool_version: str = "1"
 
     def to_dict(self) -> dict:
         return {
@@ -35,6 +36,7 @@ class ToolResult:
             "strength": self.strength,
             "summary": self.summary,
             "payload": _json_value(self.payload),
+            "tool_version": self.tool_version,
         }
 
 
@@ -45,11 +47,19 @@ class ToolDefinition:
     isolated: bool
     proves: str
     limitations: str
+    version: str = "1"
 
 
 _DEFINITIONS = (
     ToolDefinition("safe_parse_expression", safe_parse_expression, False, "restricted syntax acceptance", "does not prove a formula"),
-    ToolDefinition("symbolic_equivalence", symbolic_equivalence, True, "exact equality or an exact counterexample", "depends on declared domains"),
+    ToolDefinition(
+        "symbolic_equivalence",
+        symbolic_equivalence,
+        True,
+        "exact equality or a domain-valid exact counterexample",
+        "unparseable assumptions make non-equivalence unknown",
+        "2",
+    ),
     ToolDefinition("simplify_expression", simplify_expression, True, "an exact algebraic simplification", "does not establish theorem conditions"),
     ToolDefinition("numerical_residual", numerical_residual, True, "finite-sample residual evidence", "cannot prove universal equality"),
     ToolDefinition("matrix_shape_check", matrix_shape_check, False, "matrix rectangularity and dimensions", "does not prove matrix identities"),
@@ -88,7 +98,10 @@ class ToolRegistry:
             schemas.append(
                 {
                     "name": definition.name,
-                    "description": f"Can establish: {definition.proves}. Limitation: {definition.limitations}.",
+                    "description": (
+                        f"Version {definition.version}. Can establish: {definition.proves}. "
+                        f"Limitation: {definition.limitations}."
+                    ),
                     "inputSchema": {
                         "type": "object",
                         "properties": properties,
@@ -109,4 +122,5 @@ def run_tool_direct(name: str, arguments: dict[str, Any]) -> ToolResult:
         strength=str(raw["strength"]),
         summary=str(raw["summary"]),
         payload=_json_value(raw.get("payload", {})),
+        tool_version=definition.version,
     )

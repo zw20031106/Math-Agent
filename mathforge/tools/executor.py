@@ -33,6 +33,10 @@ class ToolExecutor:
             mcp_adapter = StdioMCPAdapter(timeout=max(1.0, default_timeout + 1.0))
         self._mcp_adapter = mcp_adapter
 
+    @property
+    def default_timeout(self) -> float:
+        return self._default_timeout
+
     def execute(
         self,
         name: str,
@@ -48,12 +52,21 @@ class ToolExecutor:
         try:
             definition = self._registry.get(name)
         except KeyError:
-            return ToolResult(name, "error", "soft", "tool is not registered", {})
+            return ToolResult(
+                name, "error", "soft", "tool is not registered", {}, "unregistered"
+            )
         if not definition.isolated:
             try:
                 return run_tool_direct(name, dict(arguments))
             except Exception as error:
-                return ToolResult(name, "error", "soft", f"tool failed: {type(error).__name__}", {})
+                return ToolResult(
+                    name,
+                    "error",
+                    "soft",
+                    f"tool failed: {type(error).__name__}",
+                    {},
+                    definition.version,
+                )
         request = json.dumps({"name": name, "arguments": arguments}, ensure_ascii=False)
         try:
             completed = subprocess.run(
@@ -67,9 +80,13 @@ class ToolExecutor:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return ToolResult(name, "unknown", "soft", "tool timed out", {})
+            return ToolResult(
+                name, "unknown", "soft", "tool timed out", {}, definition.version
+            )
         if completed.returncode != 0:
-            return ToolResult(name, "error", "soft", "isolated tool failed", {})
+            return ToolResult(
+                name, "error", "soft", "isolated tool failed", {}, definition.version
+            )
         try:
             payload = json.loads(completed.stdout)
             return ToolResult(
@@ -78,6 +95,14 @@ class ToolExecutor:
                 str(payload["strength"]),
                 str(payload["summary"]),
                 dict(payload.get("payload", {})),
+                str(payload.get("tool_version", "1")),
             )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-            return ToolResult(name, "error", "soft", "invalid isolated tool response", {})
+            return ToolResult(
+                name,
+                "error",
+                "soft",
+                "invalid isolated tool response",
+                {},
+                definition.version,
+            )

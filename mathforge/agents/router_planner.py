@@ -80,6 +80,7 @@ class RouterPlanner:
         *,
         llm_chat: Callable[..., str] | None = None,
         consume_call: Callable[[], None] | None = None,
+        record_tokens: Callable[[int], None] | None = None,
     ) -> RoutePlan:
         rule_plan = self._rules.plan(problem)
         top_score = self._rules.rank(problem)[0][1]
@@ -102,6 +103,8 @@ class RouterPlanner:
                 temperature=0.0,
                 max_tokens=256,
             )
+            if record_tokens is not None:
+                record_tokens(max(1, len(response) // 4))
             match = re.search(r"\{.*\}", response, re.DOTALL)
             payload = json.loads(match.group(0)) if match else {}
             primary = str(payload.get("primary_subject", "general-math"))

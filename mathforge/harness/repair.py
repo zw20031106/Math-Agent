@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from mathforge.harness.schemas import CandidateSolution, Claim, EvidenceRecord
-from mathforge.verification.repair_scope import repair_dependency_closure
+from mathforge.verification.repair_scope import failed_claim_ids, repair_impact_closure
 
 
 RepairCallable = Callable[
@@ -51,7 +51,8 @@ class ClaimRepairService:
         repair: RepairCallable,
         reverify: ReverifyCallable,
     ) -> RepairResult:
-        affected = repair_dependency_closure(candidate, evidence)
+        originally_failed = failed_claim_ids(candidate.candidate_id, evidence)
+        affected = repair_impact_closure(candidate, evidence)
         if not affected:
             return RepairResult(candidate, None, False, False, [], [], [], "no_hard_claim_failure")
         if candidate.candidate_id in self._repaired_candidates:
@@ -90,8 +91,76 @@ class ClaimRepairService:
             return RepairResult(
                 candidate, proposed, True, True, affected, changed, [], "reverification_missing"
             )
+        passed_failed_claims = {
+            record.claim_id
+            for record in new_evidence
+            if record.candidate_id == proposed.candidate_id
+            and record.claim_id in originally_failed
+            and record.status == "pass"
+            and record.strength == "hard"
+        }
+        if set(originally_failed) - passed_failed_claims:
+            return RepairResult(
+                candidate,
+                proposed,
+                True,
+                True,
+                affected,
+                changed,
+                new_evidence,
+                "failed_claim_not_reverified",
+            )
+        previously_verified = {
+            claim.claim_id
+            for claim in candidate.claims
+            if claim.claim_id in affected and claim.status == "verified"
+        } | {
+            record.claim_id
+            for record in evidence
+            if record.candidate_id == candidate.candidate_id
+            and record.claim_id in affected
+            and record.status == "pass"
+            and record.strength == "hard"
+        }
+        required_reverification = set(changed) | previously_verified
+        passed_affected = {
+            record.claim_id
+            for record in new_evidence
+            if record.candidate_id == proposed.candidate_id
+            and record.claim_id in required_reverification
+            and record.status == "pass"
+            and record.strength == "hard"
+        }
+        if required_reverification - passed_affected:
+            return RepairResult(
+                candidate,
+                proposed,
+                True,
+                True,
+                affected,
+                changed,
+                new_evidence,
+                "affected_claim_not_reverified",
+            )
+        if any(
+            record.claim_id is None
+            and record.status == "fail"
+            and record.strength == "hard"
+            for record in new_evidence
+        ):
+            return RepairResult(
+                candidate,
+                proposed,
+                True,
+                True,
+                affected,
+                changed,
+                new_evidence,
+                "candidate_validation_failed",
+            )
+        new_local = [record for record in new_evidence if record.claim_id in affected]
         old_local = self._local_evidence(candidate, evidence, affected)
-        if self._evidence_quality(new_evidence) < self._evidence_quality(old_local):
+        if self._evidence_quality(new_local) < self._evidence_quality(old_local):
             return RepairResult(
                 candidate,
                 proposed,
@@ -148,7 +217,7 @@ class ClaimRepairService:
                         list(replacement.depends_on),
                         replacement.check_type,
                         replacement.importance,
-                        replacement.status,
+                        "unverified",
                     )
                 )
                 changed.append(claim.claim_id)
@@ -160,7 +229,7 @@ class ClaimRepairService:
                         list(claim.depends_on),
                         claim.check_type,
                         claim.importance,
-                        claim.status,
+                        "unverified" if claim.claim_id in affected else claim.status,
                     )
                 )
         proposed = CandidateSolution(
@@ -172,12 +241,27 @@ class ClaimRepairService:
             assumptions=list(original.assumptions),
             theorems=list(original.theorems),
             claims=merged_claims,
-            solution_text=original.solution_text,
+            solution_text=ClaimRepairService._rebuild_solution(
+                merged_claims,
+                patch.final_answer or original.final_answer,
+            ),
             unresolved_obligations=list(original.unresolved_obligations),
             parse_status=patch.parse_status,
             version=original.version + 1,
         )
         return proposed, changed
+
+    @staticmethod
+    def _rebuild_solution(claims: list[Claim], final_answer: str) -> str:
+        lines = ["Claim sequence:"]
+        for index, claim in enumerate(claims, start=1):
+            dependencies = (
+                f" (depends on: {', '.join(claim.depends_on)})" if claim.depends_on else ""
+            )
+            lines.append(f"{index}. [{claim.claim_id}] {claim.statement}{dependencies}")
+        if final_answer.strip():
+            lines.extend(["", f"Final answer: {final_answer.strip()}"])
+        return "\n".join(lines)
 
     @staticmethod
     def _evidence_quality(records: list[EvidenceRecord]) -> tuple[int, int, int, int]:

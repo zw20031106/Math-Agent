@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from mathforge.harness.repair import ClaimRepairService
 from mathforge.harness.schemas import CandidateSolution, Claim, EvidenceRecord
+from mathforge.verification.repair_scope import repair_impact_closure
 
 
 def _candidate() -> CandidateSolution:
@@ -58,7 +59,8 @@ def test_repair_changes_only_dependency_closure_and_creates_version():
         evidence,
         repair=repair,
         reverify=lambda repaired, affected: [
-            _record(repaired.candidate_id, "failed", "pass")
+            _record(repaired.candidate_id, claim_id, "pass")
+            for claim_id in ("base", "failed")
         ],
     )
     assert not result.rolled_back
@@ -66,6 +68,8 @@ def test_repair_changes_only_dependency_closure_and_creates_version():
     assert result.selected.candidate_id == "candidate-v2"
     assert next(claim for claim in result.selected.claims if claim.claim_id == "unrelated").statement == "keep me"
     assert candidate.version == 1
+    assert "corrected step" in result.selected.solution_text
+    assert "bad step" not in result.selected.solution_text
 
 
 def test_repair_rolls_back_without_reverification_and_honors_limit():
@@ -87,3 +91,74 @@ def test_repair_rolls_back_without_reverification_and_honors_limit():
     second = service.attempt(candidate, evidence, repair=patch, reverify=lambda *_: [])
     assert first.rolled_back and first.selected is candidate
     assert not second.triggered and second.reason == "candidate_limit"
+
+
+def test_repair_rolls_back_when_failed_claim_itself_was_not_reverified():
+    candidate = _candidate()
+    evidence = [_record("candidate", "failed", "fail")]
+
+    def patch(*_):
+        return CandidateSolution(
+            "patch",
+            "RepairAgent",
+            "local",
+            "new",
+            "expression",
+            claims=[Claim("failed", "corrected step", ["base"])],
+        )
+
+    result = ClaimRepairService().attempt(
+        candidate,
+        evidence,
+        repair=patch,
+        reverify=lambda repaired, affected: [
+            _record(repaired.candidate_id, "base", "pass")
+        ],
+    )
+    assert result.rolled_back
+    assert result.selected is candidate
+    assert result.reason == "failed_claim_not_reverified"
+
+
+def test_repair_rolls_back_when_previously_verified_dependency_is_stale():
+    candidate = _candidate()
+    evidence = [_record("candidate", "failed", "fail")]
+
+    def patch(*_):
+        return CandidateSolution(
+            "patch",
+            "RepairAgent",
+            "local",
+            "new",
+            "expression",
+            claims=[Claim("failed", "corrected step", ["base"])],
+        )
+
+    result = ClaimRepairService().attempt(
+        candidate,
+        evidence,
+        repair=patch,
+        reverify=lambda repaired, affected: [
+            _record(repaired.candidate_id, "failed", "pass")
+        ],
+    )
+    assert result.rolled_back
+    assert result.reason == "affected_claim_not_reverified"
+
+
+def test_repair_scope_includes_upstream_and_downstream_claims():
+    candidate = CandidateSolution(
+        "c",
+        "PrimarySolver",
+        "direct",
+        "1",
+        "integer",
+        claims=[
+            Claim("base", "base"),
+            Claim("failed", "bad", ["base"]),
+            Claim("consumer", "uses failed", ["failed"]),
+            Claim("unrelated", "independent"),
+        ],
+    )
+    evidence = [_record("c", "failed", "fail")]
+    assert repair_impact_closure(candidate, evidence) == ["base", "consumer", "failed"]

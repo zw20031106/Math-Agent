@@ -44,4 +44,5 @@ class StdioMCPAdapter:
             strength=str(payload["strength"]),
             summary=str(payload["summary"]),
             payload=dict(payload.get("payload", {})),
+            tool_version=str(payload.get("tool_version", "1")),
         )

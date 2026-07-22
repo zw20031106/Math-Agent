@@ -54,6 +54,7 @@ class RepairAgent:
             temperature=0.1,
             max_tokens=max_tokens,
         )
+        budget.record_tokens(max(1, len(response) // 4))
         return self._parser.parse(
             response,
             candidate_id=f"{candidate.candidate_id}-v{candidate.version + 1}",

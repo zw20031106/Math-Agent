@@ -130,6 +130,7 @@ class EvidenceRecord:
     strength: str
     description: str
     payload: dict[str, Any] = field(default_factory=dict)
+    invocation: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -141,6 +142,7 @@ class EvidenceRecord:
             "strength": self.strength,
             "description": self.description,
             "payload": dict(self.payload),
+            "invocation": dict(self.invocation),
         }
 
 

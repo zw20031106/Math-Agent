@@ -21,6 +21,24 @@ def repair_dependency_closure(
     candidate: CandidateSolution,
     evidence: list[EvidenceRecord],
 ) -> list[str]:
-    return ClaimGraph(candidate.claims).dependency_closure(
-        failed_claim_ids(candidate.candidate_id, evidence)
+    return repair_impact_closure(candidate, evidence)
+
+
+def repair_impact_closure(
+    candidate: CandidateSolution,
+    evidence: list[EvidenceRecord],
+) -> list[str]:
+    """Return failed claims, their prerequisites, and all downstream consumers."""
+    affected = set(
+        ClaimGraph(candidate.claims).dependency_closure(
+            failed_claim_ids(candidate.candidate_id, evidence)
+        )
     )
+    changed = True
+    while changed:
+        changed = False
+        for claim in candidate.claims:
+            if claim.claim_id not in affected and affected.intersection(claim.depends_on):
+                affected.add(claim.claim_id)
+                changed = True
+    return sorted(affected)

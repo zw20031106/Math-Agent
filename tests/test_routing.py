@@ -42,6 +42,17 @@ def test_all_domain_skills_load_and_budget_is_enforced():
     assert len(registry.compose(registry.names(), 120)) <= 120
 
 
+def test_ambiguous_router_records_response_tokens():
+    recorded_tokens = []
+    RouterPlanner().plan(
+        ProblemParser().parse("solve this problem"),
+        llm_chat=lambda **_: "not json",
+        consume_call=lambda: None,
+        record_tokens=recorded_tokens.append,
+    )
+    assert recorded_tokens == [2]
+
+
 def test_all_prompt_contracts_are_statically_valid():
     loader = PromptContractLoader()
     for role in (

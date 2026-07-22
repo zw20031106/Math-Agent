@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 from dataclasses import replace
+from time import perf_counter
 
 from mathforge.agents.registry import SkillRegistry
 from mathforge.agents.router_planner import RouterPlanner
@@ -107,6 +108,9 @@ class MathForgeHarness:
                 session.problem_ir,
                 llm_chat=self._provider.chat if self._config.enable_router else None,
                 consume_call=session.budget.consume if self._config.enable_router else None,
+                record_tokens=(
+                    session.budget.record_tokens if self._config.enable_router else None
+                ),
             )
             if not self._config.enable_alternatives:
                 session.route_plan = replace(session.route_plan, candidate_count=1)
@@ -189,18 +193,15 @@ class MathForgeHarness:
             tool_results = []
             if self._config.enable_tools:
                 for item in fanout.candidates:
-                    result = self._tool_executor.execute(
-                        "answer_type_check",
-                        {"answer": item.final_answer, "answer_type": session.problem_ir.answer_type},
-                    )
+                    result, _ = self._run_answer_type_check(session, item, ledger)
                     tool_results.append({"candidate_id": item.candidate_id, "status": result.status})
                     if self._config.enable_evidence:
-                        ledger.record_tool_result(
-                            candidate_id=item.candidate_id,
-                            claim_id=None,
-                            result=result,
+                        claim_records = self._claim_verifier.verify(
+                            item,
+                            ledger,
+                            domains=session.problem_ir.domains,
+                            assumptions=session.problem_ir.assumptions,
                         )
-                        claim_records = self._claim_verifier.verify(item, ledger)
                         tool_results.extend(
                             {
                                 "candidate_id": item.candidate_id,
@@ -226,10 +227,11 @@ class MathForgeHarness:
                             session.budget,
                             max_tokens=self._config.primary_max_tokens,
                         ),
-                        reverify=lambda candidate, affected: self._claim_verifier.verify(
+                        reverify=lambda candidate, affected: self._reverify_repair_candidate(
+                            session,
                             candidate,
                             ledger,
-                            only_claim_ids=affected,
+                            affected,
                         ),
                     )
                     if repair_result.proposed is not None:
@@ -320,19 +322,9 @@ class MathForgeHarness:
             session.candidates.extend(lemma_result.generated_candidates)
             for expanded in lemma_result.generated_candidates:
                 if self._config.enable_tools:
-                    expanded_result = self._tool_executor.execute(
-                        "answer_type_check",
-                        {
-                            "answer": expanded.final_answer,
-                            "answer_type": session.problem_ir.answer_type,
-                        },
+                    expanded_result, _ = self._run_answer_type_check(
+                        session, expanded, ledger
                     )
-                    if self._config.enable_evidence:
-                        ledger.record_tool_result(
-                            candidate_id=expanded.candidate_id,
-                            claim_id=None,
-                            result=expanded_result,
-                        )
                     if (
                         self._config.enable_evidence
                         and expanded_result.status == "fail"
@@ -475,6 +467,53 @@ class MathForgeHarness:
             "trace": trace.build(),
         }
 
+    def _run_answer_type_check(self, session, candidate, ledger: EvidenceLedger):
+        arguments = {
+            "answer": candidate.final_answer,
+            "answer_type": session.problem_ir.answer_type,
+        }
+        started = perf_counter()
+        result = self._tool_executor.execute("answer_type_check", arguments)
+        duration_ms = (perf_counter() - started) * 1000
+        records = []
+        if self._config.enable_evidence:
+            records.append(
+                ledger.record_tool_result(
+                    candidate_id=candidate.candidate_id,
+                    claim_id=None,
+                    result=result,
+                    arguments=arguments,
+                    assumptions=list(
+                        dict.fromkeys(
+                            [*session.problem_ir.assumptions, *candidate.assumptions]
+                        )
+                    ),
+                    domains=session.problem_ir.domains,
+                    duration_ms=duration_ms,
+                    timeout_seconds=self._tool_executor.default_timeout,
+                )
+            )
+        return result, records
+
+    def _reverify_repair_candidate(
+        self,
+        session,
+        candidate,
+        ledger: EvidenceLedger,
+        affected_claim_ids: list[str],
+    ):
+        _, records = self._run_answer_type_check(session, candidate, ledger)
+        records.extend(
+            self._claim_verifier.verify(
+                candidate,
+                ledger,
+                only_claim_ids=affected_claim_ids,
+                domains=session.problem_ir.domains,
+                assumptions=session.problem_ir.assumptions,
+            )
+        )
+        return records
+
     def _expand_with_verified_lemmas(
         self,
         session,
@@ -504,5 +543,10 @@ class MathForgeHarness:
             max_tokens=self._config.primary_max_tokens,
         )
         if self._config.enable_tools and self._config.enable_evidence:
-            self._claim_verifier.verify(candidate, ledger)
+            self._claim_verifier.verify(
+                candidate,
+                ledger,
+                domains=session.problem_ir.domains,
+                assumptions=session.problem_ir.assumptions,
+            )
         return candidate
