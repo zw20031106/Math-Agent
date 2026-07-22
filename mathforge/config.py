@@ -9,7 +9,7 @@ class HarnessConfig:
     model_max_concurrency: int = 4
     primary_temperature: float = 0.2
     primary_max_tokens: int = 4096
-    max_model_calls: int = 2
+    max_model_calls: int = 4
     skill_char_budget: int = 6000
 
     @classmethod

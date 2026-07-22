@@ -7,6 +7,8 @@ from mathforge.agents.router_planner import RouterPlanner
 from mathforge.config import HarnessConfig
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.fallback import FallbackSolver
+from mathforge.agents.solver import SolverExecutor
+from mathforge.harness.orchestration import CandidateOrchestrator
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
 from mathforge.harness.session import create_session
 from mathforge.harness.trace import TraceBuilder
@@ -14,14 +16,6 @@ from mathforge.output.answer_validator import AnswerValidator
 from mathforge.output.deterministic_formatter import DeterministicFormatter
 from mathforge.parsing.problem_parser import ProblemParser
 from mathforge.parsing.solution_parser import SolutionParser
-
-
-PRIMARY_SYSTEM_PROMPT = """You are PrimarySolver, a rigorous mathematical reasoner.
-Solve the problem using explicit assumptions and verifiable steps. End with a clear
-final answer. Do not claim to have used tools or evidence that were not provided.
-When practical, return a JSON object with method, solution_text, final_answer,
-answer_type, assumptions, theorems, claims, and unresolved_obligations.
-"""
 
 
 class MathForgeHarness:
@@ -38,6 +32,9 @@ class MathForgeHarness:
         self._formatter = DeterministicFormatter()
         self._router = RouterPlanner()
         self._skills = SkillRegistry()
+        self._candidate_orchestrator = CandidateOrchestrator(
+            SolverExecutor(self._provider, self._solution_parser)
+        )
 
     def solve(self, problem: str, metadata: dict) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
@@ -72,31 +69,23 @@ class MathForgeHarness:
                 risk_level=session.route_plan.risk_level,
                 selected_skills=session.route_plan.selected_skills,
             )
-            session.budget.consume()
-            response = self._provider.chat(
-                messages=[
-                    {"role": "system", "content": PRIMARY_SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Problem:\n{normalized_problem}\n\nProvide a complete solution.\n\n"
-                            f"Route: {session.route_plan.primary_subject}; "
-                            f"risk={session.route_plan.risk_level}.\n{skill_context}"
-                        ),
-                    },
-                ],
+            fanout = self._candidate_orchestrator.fanout(
+                session.problem_ir,
+                session.route_plan,
+                skill_context,
+                session.budget,
                 temperature=self._config.primary_temperature,
                 max_tokens=self._config.primary_max_tokens,
             )
-            if not response.strip():
-                raise ValueError("empty model response")
-            candidate = self._solution_parser.parse(
-                response,
-                candidate_id="primary-1",
-                role="PrimarySolver",
-                answer_type=session.problem_ir.answer_type,
+            session.candidates.extend(fanout.candidates)
+            trace.add(
+                "candidate_fanout_completed",
+                completed=[candidate.candidate_id for candidate in fanout.candidates],
+                failed=[failure.candidate_id for failure in fanout.failures],
             )
-            session.candidates.append(candidate)
+            if not fanout.candidates:
+                raise RuntimeError("all solver branches failed")
+            candidate = fanout.candidates[0]
             validation_errors = self._answer_validator.validate(candidate, session.problem_ir)
             trace.add("primary_completed", model_calls=session.budget.used_calls)
             if validation_errors:

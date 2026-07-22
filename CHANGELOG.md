@@ -26,3 +26,10 @@
   risk-adaptive plans, bounded dynamic skill loading, and fallback routing.
 - Added 18 compact domain skills, six general skills, and statically validated
   prompt contracts for the fixed LLM roles.
+
+### P04
+
+- Added deterministic, risk-sized Primary/Alternative fanout with bounded
+  parallel model calls, stable ordering, and branch-failure isolation.
+- Kept Primary derivations hidden from Alternative prompts and added structural
+  duplicate-method detection.
