@@ -47,7 +47,7 @@ class SolutionParser:
             value = json.loads(cleaned)
             return (value, "strict_json") if isinstance(value, dict) else (None, "")
         except (json.JSONDecodeError, TypeError):
-            pass
+            cleaned = cleaned.strip()
         decoder = json.JSONDecoder()
         for match in re.finditer(r"\{", cleaned):
             try:

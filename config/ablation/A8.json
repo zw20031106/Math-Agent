@@ -9,5 +9,6 @@
   "enable_memory": true,
   "enable_lemma_loop": true,
   "enable_rag": true,
-  "enable_repair": false
+  "enable_repair": false,
+  "enable_finalizer": false
 }

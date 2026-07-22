@@ -28,7 +28,7 @@ _BINARY = {
 
 
 class UnsafeExpression(ValueError):
-    pass
+    """The input lies outside the deliberately restricted expression grammar."""
 
 
 def parse_expression(expression: str) -> sympy.Expr:

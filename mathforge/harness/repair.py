@@ -60,11 +60,32 @@ class ClaimRepairService:
             return RepairResult(candidate, None, False, False, affected, [], [], "problem_limit")
         self._repaired_candidates.add(candidate.candidate_id)
         self._total_repairs += 1
-        proposed_patch = repair(candidate, affected, self._local_evidence(candidate, evidence, affected))
+        try:
+            proposed_patch = repair(
+                candidate,
+                affected,
+                self._local_evidence(candidate, evidence, affected),
+            )
+        except Exception:
+            return RepairResult(
+                candidate, None, True, True, affected, [], [], "repair_agent_failed"
+            )
         proposed, changed = self._merge_local_patch(candidate, proposed_patch, affected)
         if not changed:
             return RepairResult(candidate, proposed, True, True, affected, [], [], "no_local_change")
-        new_evidence = reverify(proposed, affected)
+        try:
+            new_evidence = reverify(proposed, affected)
+        except Exception:
+            return RepairResult(
+                candidate,
+                proposed,
+                True,
+                True,
+                affected,
+                changed,
+                [],
+                "reverification_failed",
+            )
         if not new_evidence:
             return RepairResult(
                 candidate, proposed, True, True, affected, changed, [], "reverification_missing"

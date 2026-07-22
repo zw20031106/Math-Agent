@@ -59,3 +59,42 @@ def test_rejected_lemma_is_not_reintroduced():
     )
     assert [lemma.status for lemma in result.lemmas] == ["rejected"]
     assert result.stop_reason == "no_new_progress"
+
+
+def test_verified_progress_can_drive_one_bounded_next_round():
+    first = CandidateSolution(
+        "first",
+        "PrimarySolver",
+        "direct",
+        "x",
+        "text",
+        claims=[Claim("first-claim", "first verified lemma", status="verified")],
+    )
+    calls: list[list[str]] = []
+
+    def expand(verified, round_id):
+        calls.append([lemma.lemma_id for lemma in verified])
+        assert round_id == 2
+        return CandidateSolution(
+            "second",
+            "PrimarySolver",
+            "lemma-guided",
+            "x",
+            "text",
+            claims=[Claim("second-claim", "second verified lemma", status="verified")],
+        )
+
+    memory = LemmaMemory(SessionMemory())
+    result = VerifiedLemmaLoop().run(
+        _route(),
+        [first],
+        [],
+        {},
+        memory,
+        expand_round=expand,
+    )
+    assert len(calls) == 1
+    assert [candidate.candidate_id for candidate in result.generated_candidates] == ["second"]
+    assert len(result.rounds) == 2
+    assert result.rounds[1].input_lemma_ids == result.rounds[0].verified_lemma_ids
+    assert len(memory.verified()) == 2

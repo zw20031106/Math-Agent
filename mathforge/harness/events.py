@@ -9,6 +9,7 @@ JUDGE_EVENTS = frozenset(
         "tool_checks",
         "lemma_loop_completed",
         "candidate_arbitrated",
+        "finalization_completed",
         "primary_completed",
         "answer_validation_warning",
         "repair_completed",

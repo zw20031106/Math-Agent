@@ -10,5 +10,6 @@
   "enable_lemma_loop": true,
   "enable_rag": true,
   "enable_repair": true,
+  "enable_finalizer": true,
   "use_mcp": false
 }

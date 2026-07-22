@@ -43,8 +43,8 @@ class ToolExecutor:
         if self._use_mcp and self._mcp_adapter is not None:
             try:
                 return self._mcp_adapter.execute(name, dict(arguments))
-            except Exception:
-                pass
+            except Exception as adapter_error:
+                del adapter_error
         try:
             definition = self._registry.get(name)
         except KeyError:

@@ -8,7 +8,7 @@ from mathforge.agents.router_planner import RouterPlanner
 from mathforge.config import HarnessConfig
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.fallback import FallbackSolver
-from mathforge.agents.solver import SolverExecutor
+from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.harness.orchestration import CandidateOrchestrator
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
 from mathforge.harness.session import create_session
@@ -26,6 +26,10 @@ from mathforge.context.compressor import ContextCompressor
 from mathforge.memory.blackboard import MemoryBlackboard
 from mathforge.harness.lemma_loop import VerifiedLemmaLoop
 from mathforge.retrieval.retriever import Retriever
+from mathforge.verification.evidence import ClaimEvidenceVerifier
+from mathforge.agents.repair import RepairAgent
+from mathforge.harness.repair import ClaimRepairService
+from mathforge.agents.finalizer import LLMFinalizer
 
 
 class MathForgeHarness:
@@ -42,15 +46,21 @@ class MathForgeHarness:
         self._formatter = DeterministicFormatter()
         self._router = RouterPlanner()
         self._skills = SkillRegistry()
-        self._candidate_orchestrator = CandidateOrchestrator(
-            SolverExecutor(self._provider, self._solution_parser)
-        )
+        self._solver_executor = SolverExecutor(self._provider, self._solution_parser)
+        self._candidate_orchestrator = CandidateOrchestrator(self._solver_executor)
         self._tool_executor = ToolExecutor(use_mcp=self._config.use_mcp)
         self._obligation_engine = ProofObligationEngine()
         self._arbitration = ArbitrationPolicy(self._tool_executor)
         self._context_compressor = ContextCompressor()
         self._lemma_loop = VerifiedLemmaLoop()
         self._retriever = Retriever()
+        self._claim_verifier = ClaimEvidenceVerifier(self._tool_executor)
+        self._repair_agent = RepairAgent(self._provider, self._solution_parser)
+        self._finalizer = LLMFinalizer(
+            self._provider,
+            self._solution_parser,
+            self._formatter,
+        )
 
     def solve(self, problem: str, metadata: dict) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
@@ -163,15 +173,59 @@ class MathForgeHarness:
                             claim_id=None,
                             result=result,
                         )
+                        claim_records = self._claim_verifier.verify(item, ledger)
+                        tool_results.extend(
+                            {
+                                "candidate_id": item.candidate_id,
+                                "claim_id": record.claim_id,
+                                "status": record.status,
+                            }
+                            for record in claim_records
+                        )
                 trace.add("tool_checks", checks=tool_results)
+            active_candidates = list(fanout.candidates)
+            if self._config.enable_repair and self._config.enable_evidence:
+                repair_service = ClaimRepairService()
+                repaired_candidates = []
+                for item in active_candidates:
+                    repair_result = repair_service.attempt(
+                        item,
+                        session.evidence,
+                        repair=lambda candidate, affected, local_evidence: self._repair_agent.repair(
+                            session.problem_ir,
+                            candidate,
+                            affected,
+                            local_evidence,
+                            session.budget,
+                            max_tokens=self._config.primary_max_tokens,
+                        ),
+                        reverify=lambda candidate, affected: self._claim_verifier.verify(
+                            candidate,
+                            ledger,
+                            only_claim_ids=affected,
+                        ),
+                    )
+                    if repair_result.proposed is not None:
+                        session.candidates.append(repair_result.proposed)
+                    if repair_result.triggered:
+                        trace.add(
+                            "repair_completed",
+                            candidate_id=item.candidate_id,
+                            selected_candidate_id=repair_result.selected.candidate_id,
+                            affected_claim_ids=repair_result.affected_claim_ids,
+                            rolled_back=repair_result.rolled_back,
+                            reason=repair_result.reason,
+                        )
+                    repaired_candidates.append(repair_result.selected)
+                active_candidates = repaired_candidates
             viable = (
                 [
                     item
-                    for item in fanout.candidates
+                    for item in active_candidates
                     if not ledger.has_hard_fail(item.candidate_id)
                 ]
                 if self._config.enable_evidence
-                else list(fanout.candidates)
+                else list(active_candidates)
             )
             trace.add(
                 "hard_evidence_gate",
@@ -193,9 +247,43 @@ class MathForgeHarness:
                 session.evidence,
                 session.proof_obligations,
                 session.lemma_memory,
+                expand_round=lambda verified, round_id: self._expand_with_verified_lemmas(
+                    session,
+                    verified,
+                    round_id,
+                    skill_context,
+                    ledger,
+                ),
             )
             session.lemmas.extend(lemma_result.lemmas)
             session.rounds.extend(lemma_result.rounds)
+            session.candidates.extend(lemma_result.generated_candidates)
+            for expanded in lemma_result.generated_candidates:
+                if self._config.enable_tools:
+                    expanded_result = self._tool_executor.execute(
+                        "answer_type_check",
+                        {
+                            "answer": expanded.final_answer,
+                            "answer_type": session.problem_ir.answer_type,
+                        },
+                    )
+                    if self._config.enable_evidence:
+                        ledger.record_tool_result(
+                            candidate_id=expanded.candidate_id,
+                            claim_id=None,
+                            result=expanded_result,
+                        )
+                    if (
+                        self._config.enable_evidence
+                        and expanded_result.status == "fail"
+                        and expanded_result.strength == "hard"
+                    ):
+                        continue
+                viable.append(expanded)
+                if self._config.enable_proof_obligations:
+                    session.proof_obligations[expanded.candidate_id] = (
+                        self._obligation_engine.generate(session.problem_ir, expanded)
+                    )
             if session.route_plan.risk_level == "high":
                 trace.add(
                     "lemma_loop_completed",
@@ -205,6 +293,9 @@ class MathForgeHarness:
                     ],
                     stop_reason=lemma_result.stop_reason,
                     error_rate=lemma_result.error_rate,
+                    generated_candidates=[
+                        item.candidate_id for item in lemma_result.generated_candidates
+                    ],
                 )
             arbitration = self._arbitration.select(
                 viable,
@@ -254,6 +345,20 @@ class MathForgeHarness:
             final_response = self._formatter.format(candidate, session.problem_ir)
             if not final_response.strip():
                 raise ValueError("empty formatted response")
+            if self._config.enable_finalizer and session.route_plan.use_llm_finalizer:
+                finalization = self._finalizer.finalize(
+                    session.problem_ir,
+                    candidate,
+                    final_response,
+                    session.budget,
+                    max_tokens=min(2048, self._config.primary_max_tokens),
+                )
+                final_response = finalization.text
+                trace.add(
+                    "finalization_completed",
+                    used_llm=finalization.used_llm,
+                    reason=finalization.reason,
+                )
         except Exception:  # The public contract requires a result on every path.
             final_response = self._fallback.solve(normalized_problem)
             trace.add("fallback_used", reason="primary_unavailable")
@@ -262,3 +367,35 @@ class MathForgeHarness:
             "final_response": final_response,
             "trace": trace.build(),
         }
+
+    def _expand_with_verified_lemmas(
+        self,
+        session,
+        verified_lemmas,
+        round_id: int,
+        skill_context: str,
+        ledger: EvidenceLedger,
+    ):
+        lemma_context = "\n".join(
+            f"- {lemma.statement} (conditions: {', '.join(lemma.conditions) or 'none'})"
+            for lemma in verified_lemmas
+        )
+        request = SolverRequest(
+            candidate_id=f"lemma-round-{round_id}",
+            problem=session.problem_ir,
+            route=session.route_plan,
+            skill_context=(
+                f"{skill_context}\n\nVerified problem-local lemmas:\n{lemma_context}"
+            )[: self._config.skill_char_budget],
+            primary_method_label=f"lemma-guided-{session.route_plan.primary_subject}",
+        )
+        candidate = self._solver_executor.execute(
+            PrimarySolver(),
+            request,
+            session.budget,
+            temperature=self._config.primary_temperature,
+            max_tokens=self._config.primary_max_tokens,
+        )
+        if self._config.enable_tools and self._config.enable_evidence:
+            self._claim_verifier.verify(candidate, ledger)
+        return candidate

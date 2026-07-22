@@ -97,3 +97,12 @@
   compression, repair, fallback, and concurrency-pollution metrics.
 - Froze the full competition configuration without inventing benchmark gains;
   modules can be disabled when measured accuracy does not justify their cost.
+
+### Integration hardening
+
+- Wired deterministic claim checks into the evidence ledger, connected hard
+  claim failures to bounded RepairAgent transactions, and retained every version.
+- Wired the proof/explanation LLMFinalizer with an exact-answer invariant and
+  deterministic rollback; removed ambiguous empty `pass` statements.
+- Connected verified lemma progress to a budgeted next-round Primary reasoner;
+  only verified cards are injected and full historical candidates remain hidden.

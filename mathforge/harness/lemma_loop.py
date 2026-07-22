@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from mathforge.agents.lemma_curator import LemmaCurator
 from mathforge.agents.verifier import LemmaVerifier
@@ -20,6 +21,7 @@ class LemmaLoopResult:
     lemmas: list[LemmaCard]
     rounds: list[RoundState]
     stop_reason: str
+    generated_candidates: list[CandidateSolution]
 
     @property
     def error_rate(self) -> float:
@@ -45,17 +47,21 @@ class VerifiedLemmaLoop:
         evidence: list[EvidenceRecord],
         obligations: dict[str, list[ProofObligation]],
         lemma_memory: LemmaMemory,
+        *,
+        expand_round: Callable[[list[LemmaCard], int], CandidateSolution | None] | None = None,
     ) -> LemmaLoopResult:
         if route.risk_level != "high" or not route.use_lemma_loop:
-            return LemmaLoopResult([], [], "not_high_risk")
+            return LemmaLoopResult([], [], "not_high_risk", [])
         max_rounds = max(1, min(2, route.max_reasoning_rounds))
         all_lemmas: list[LemmaCard] = []
         rounds: list[RoundState] = []
         excluded: set[str] = set()
         input_verified: list[str] = []
+        working_candidates = list(candidates)
+        generated_candidates: list[CandidateSolution] = []
         for round_id in range(1, max_rounds + 1):
             cards = self._curator.curate(
-                candidates,
+                working_candidates,
                 round_id=round_id,
                 excluded_statements=excluded,
             )
@@ -63,7 +69,7 @@ class VerifiedLemmaLoop:
             rejected: list[LemmaCard] = []
             conflicts = 0
             for card in cards:
-                checked = self._verifier.verify(card, candidates, evidence)
+                checked = self._verifier.verify(card, working_candidates, evidence)
                 all_lemmas.append(checked)
                 excluded.add(" ".join(checked.statement.lower().split()))
                 if checked.status == "verified":
@@ -96,10 +102,27 @@ class VerifiedLemmaLoop:
             )
             input_verified.extend(card.lemma_id for card in verified)
             if not cards:
-                return LemmaLoopResult(all_lemmas, rounds, "no_new_lemmas")
+                return LemmaLoopResult(
+                    all_lemmas, rounds, "no_new_lemmas", generated_candidates
+                )
             if progress <= 0:
-                return LemmaLoopResult(all_lemmas, rounds, "no_new_progress")
-        return LemmaLoopResult(all_lemmas, rounds, "round_limit")
+                return LemmaLoopResult(
+                    all_lemmas, rounds, "no_new_progress", generated_candidates
+                )
+            if round_id < max_rounds and verified and expand_round is not None:
+                try:
+                    expanded = expand_round(verified, round_id + 1)
+                except Exception:
+                    return LemmaLoopResult(
+                        all_lemmas,
+                        rounds,
+                        "round_expansion_failed",
+                        generated_candidates,
+                    )
+                if expanded is not None:
+                    working_candidates.append(expanded)
+                    generated_candidates.append(expanded)
+        return LemmaLoopResult(all_lemmas, rounds, "round_limit", generated_candidates)
 
     @staticmethod
     def _resolve_obligations(
