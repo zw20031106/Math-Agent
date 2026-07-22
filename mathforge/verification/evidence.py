@@ -37,6 +37,28 @@ class EvidenceLedger:
         self._records.append(record)
         return record
 
+    def record_verifier_finding(
+        self,
+        *,
+        candidate_id: str,
+        claim_id: str | None,
+        obligation_ids: list[str],
+        status: str,
+        description: str,
+    ) -> EvidenceRecord:
+        record = EvidenceRecord(
+            evidence_id=f"ev-{uuid4().hex[:12]}",
+            candidate_id=candidate_id,
+            claim_id=claim_id,
+            evidence_type="llm:VerifierSkeptic",
+            status=status if status in {"pass", "fail", "unknown"} else "unknown",
+            strength="soft",
+            description=description,
+            payload={"obligation_ids": list(obligation_ids)},
+        )
+        self._records.append(record)
+        return record
+
     def has_hard_fail(self, candidate_id: str, claim_id: str | None = None) -> bool:
         return any(
             record.candidate_id == candidate_id

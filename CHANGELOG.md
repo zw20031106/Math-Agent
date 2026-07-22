@@ -12,6 +12,16 @@
 - Marked the full competition configuration as an unvalidated candidate until
   real repeated ablations justify freezing it.
 
+### R1
+
+- Added a single-call, structured VerifierSkeptic production role for unresolved
+  medium/high-risk obligations; its findings are always soft evidence.
+- Added a proof-completion hard gate that requires every required obligation to
+  be satisfied by a mapped verified claim, deterministic evidence, or a mapped
+  Skeptic pass before arbitration and finalization.
+- Claimless and incomplete proof candidates now fall back instead of being
+  formatted as completed proofs.
+
 ### P00
 
 - Imported and froze the official competition baseline.

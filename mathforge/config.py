@@ -27,6 +27,7 @@ class HarnessConfig:
     enable_tools: bool = True
     enable_evidence: bool = True
     enable_proof_obligations: bool = True
+    enable_verifier: bool = True
     enable_memory: bool = True
     enable_lemma_loop: bool = True
     enable_rag: bool = True

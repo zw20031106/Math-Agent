@@ -31,6 +31,8 @@ from mathforge.verification.evidence import ClaimEvidenceVerifier
 from mathforge.agents.repair import RepairAgent
 from mathforge.harness.repair import ClaimRepairService
 from mathforge.agents.finalizer import LLMFinalizer
+from mathforge.agents.verifier import VerifierSkepticAgent
+from mathforge.verification.completion import ProofCompletionGate
 
 
 class MathForgeHarness:
@@ -62,6 +64,8 @@ class MathForgeHarness:
             self._solution_parser,
             self._formatter,
         )
+        self._verifier_agent = VerifierSkepticAgent(self._provider)
+        self._proof_completion_gate = ProofCompletionGate()
 
     def solve(self, problem: str, metadata: dict) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
@@ -106,6 +110,23 @@ class MathForgeHarness:
             )
             if not self._config.enable_alternatives:
                 session.route_plan = replace(session.route_plan, candidate_count=1)
+            if (
+                self._config.enable_verifier
+                and self._config.enable_evidence
+                and self._config.enable_proof_obligations
+                and session.problem_ir.problem_type in {"proof", "derivation"}
+            ):
+                candidate_capacity = max(
+                    1,
+                    self._config.max_model_calls - session.budget.used_calls - 1,
+                )
+                session.route_plan = replace(
+                    session.route_plan,
+                    candidate_count=min(
+                        session.route_plan.candidate_count,
+                        candidate_capacity,
+                    ),
+                )
             if not self._config.enable_lemma_loop:
                 session.route_plan = replace(session.route_plan, use_lemma_loop=False)
             if not self._config.enable_rag:
@@ -247,6 +268,39 @@ class MathForgeHarness:
                     session.proof_obligations[item.candidate_id] = self._obligation_engine.generate(
                         session.problem_ir, item
                     )
+            unresolved_required = [
+                obligation
+                for item in viable
+                for obligation in session.proof_obligations.get(item.candidate_id, [])
+                if obligation.required and obligation.status != "satisfied"
+            ]
+            if (
+                self._config.enable_verifier
+                and self._config.enable_evidence
+                and session.route_plan.risk_level in {"medium", "high"}
+                and unresolved_required
+            ):
+                verifier_result = self._verifier_agent.review(
+                    session.problem_ir,
+                    viable,
+                    session.proof_obligations,
+                    session.budget,
+                    max_tokens=min(1536, self._config.primary_max_tokens),
+                )
+                for finding in verifier_result.findings:
+                    ledger.record_verifier_finding(
+                        candidate_id=finding.candidate_id,
+                        claim_id=finding.claim_id,
+                        obligation_ids=finding.obligation_ids,
+                        status=finding.status,
+                        description=finding.description,
+                    )
+                trace.add(
+                    "verifier_completed",
+                    used_llm=verifier_result.used_llm,
+                    finding_count=len(verifier_result.findings),
+                    reason=verifier_result.reason,
+                )
             lemma_result = self._lemma_loop.run(
                 session.route_plan,
                 viable,
@@ -303,6 +357,41 @@ class MathForgeHarness:
                         item.candidate_id for item in lemma_result.generated_candidates
                     ],
                 )
+            if (
+                self._config.enable_proof_obligations
+                and session.problem_ir.problem_type in {"proof", "derivation"}
+            ):
+                completion_decisions = [
+                    self._proof_completion_gate.evaluate(
+                        item,
+                        session.evidence,
+                        session.proof_obligations.get(item.candidate_id, []),
+                    )
+                    for item in viable
+                ]
+                completed_ids = {
+                    decision.candidate_id
+                    for decision in completion_decisions
+                    if decision.status == "complete"
+                }
+                trace.add(
+                    "proof_completion_gate",
+                    accepted=sorted(completed_ids),
+                    rejected=[
+                        {
+                            "candidate_id": decision.candidate_id,
+                            "status": decision.status,
+                            "unresolved_obligation_ids": decision.unresolved_obligation_ids,
+                            "failed_obligation_ids": decision.failed_obligation_ids,
+                            "failed_claim_ids": decision.failed_claim_ids,
+                        }
+                        for decision in completion_decisions
+                        if decision.status != "complete"
+                    ],
+                )
+                viable = [item for item in viable if item.candidate_id in completed_ids]
+                if not viable:
+                    raise RuntimeError("no proof candidate passed completion gate")
             arbitration = self._arbitration.select(
                 viable,
                 session.evidence,

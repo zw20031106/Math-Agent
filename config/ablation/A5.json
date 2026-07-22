@@ -6,6 +6,7 @@
   "enable_tools": true,
   "enable_evidence": true,
   "enable_proof_obligations": true,
+  "enable_verifier": true,
   "enable_memory": false,
   "enable_lemma_loop": false,
   "enable_rag": false,
