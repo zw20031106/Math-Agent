@@ -8,6 +8,7 @@ from mathforge.agents.router_planner import RouterPlanner
 from mathforge.config import HarnessConfig
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.fallback import FallbackSolver
+from mathforge.harness.fingerprints import request_fingerprint
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.harness.orchestration import CandidateOrchestrator
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
@@ -77,7 +78,12 @@ class MathForgeHarness:
             ),
         )
         trace = TraceBuilder(session.trace_events, max_chars=self._config.trace_max_chars)
-        trace.add("session_started", session_id=session.session_id)
+        fingerprint_nonce = str(safe_metadata.get("benchmark_nonce", session.session_id))
+        trace.add(
+            "session_started",
+            session_id=session.session_id,
+            request_fingerprint=request_fingerprint(normalized_problem, fingerprint_nonce),
+        )
 
         try:
             session.problem_ir = self._problem_parser.parse(normalized_problem)
@@ -359,8 +365,20 @@ class MathForgeHarness:
                     used_llm=finalization.used_llm,
                     reason=finalization.reason,
                 )
+            trace.add(
+                "budget_summary",
+                model_calls=session.budget.used_calls,
+                estimated_tokens=session.budget.used_tokens,
+                outcome="primary",
+            )
         except Exception:  # The public contract requires a result on every path.
             final_response = self._fallback.solve(normalized_problem)
+            trace.add(
+                "budget_summary",
+                model_calls=session.budget.used_calls,
+                estimated_tokens=session.budget.used_tokens,
+                outcome="fallback",
+            )
             trace.add("fallback_used", reason="primary_unavailable")
 
         return {

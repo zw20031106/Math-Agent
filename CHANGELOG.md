@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### R0
+
+- Replaced suffix-based benchmark grading with answer-type-aware exact,
+  symbolic, set, interval, and matrix scorers; proof text is unscored unless an
+  explicit scorer is supplied.
+- Included fallback samples in call/token averages, added per-request isolation
+  fingerprints, and emitted dataset/config/code provenance in benchmark output.
+- Marked the full competition configuration as an unvalidated candidate until
+  real repeated ablations justify freezing it.
+
 ### P00
 
 - Imported and froze the official competition baseline.

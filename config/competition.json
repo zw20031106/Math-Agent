@@ -1,4 +1,5 @@
 {
+  "status": "candidate-unvalidated",
   "max_model_calls": 4,
   "max_model_tokens": 24000,
   "enable_router": true,

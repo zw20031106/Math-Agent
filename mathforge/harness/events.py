@@ -11,6 +11,7 @@ JUDGE_EVENTS = frozenset(
         "candidate_arbitrated",
         "finalization_completed",
         "primary_completed",
+        "budget_summary",
         "answer_validation_warning",
         "repair_completed",
         "deadline_finalize",
