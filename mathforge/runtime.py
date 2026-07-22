@@ -20,6 +20,9 @@ from mathforge.tools.executor import ToolExecutor
 from mathforge.verification.evidence import EvidenceLedger
 from mathforge.verification.arbitration import ArbitrationPolicy
 from mathforge.verification.proof_obligations import ProofObligationEngine
+from mathforge.context.assembler import ContextAssembler, RawContextStore
+from mathforge.context.compressor import ContextCompressor
+from mathforge.memory.blackboard import MemoryBlackboard
 
 
 class MathForgeHarness:
@@ -42,6 +45,7 @@ class MathForgeHarness:
         self._tool_executor = ToolExecutor()
         self._obligation_engine = ProofObligationEngine()
         self._arbitration = ArbitrationPolicy(self._tool_executor)
+        self._context_compressor = ContextCompressor()
 
     def solve(self, problem: str, metadata: dict) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
@@ -56,6 +60,12 @@ class MathForgeHarness:
 
         try:
             session.problem_ir = self._problem_parser.parse(normalized_problem)
+            blackboard = MemoryBlackboard(session.working_memory)
+            blackboard.publish(
+                "System",
+                "raw",
+                {"problem": session.problem_ir.raw_problem, "metadata": safe_metadata},
+            )
             trace.add(
                 "problem_parsed",
                 problem_type=session.problem_ir.problem_type,
@@ -121,6 +131,26 @@ class MathForgeHarness:
                 session.proof_obligations,
             )
             candidate = arbitration.selected
+            context_assembler = ContextAssembler(
+                RawContextStore(self._config.raw_context_max_chars)
+            )
+            snapshot = context_assembler.assemble(
+                session.problem_ir,
+                viable,
+                session.evidence,
+                session.proof_obligations,
+                final_answer=candidate.final_answer,
+            )
+            final_view = self._context_compressor.compress(
+                snapshot,
+                role="LLMFinalizer",
+                max_chars=self._config.raw_context_max_chars,
+            )
+            blackboard.publish(
+                "System",
+                "working",
+                {"context_snapshot": final_view.to_dict()},
+            )
             trace.add(
                 "candidate_arbitrated",
                 selected=candidate.candidate_id,

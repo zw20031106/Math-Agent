@@ -175,6 +175,7 @@ class MathSession:
     candidates: list[CandidateSolution] = field(default_factory=list)
     evidence: list[EvidenceRecord] = field(default_factory=list)
     proof_obligations: dict[str, list[ProofObligation]] = field(default_factory=dict)
+    working_memory: Any = None
     trace_events: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -191,5 +192,10 @@ class MathSession:
                 candidate_id: [obligation.to_dict() for obligation in obligations]
                 for candidate_id, obligations in self.proof_obligations.items()
             },
+            "working_memory": (
+                self.working_memory.to_dict()
+                if self.working_memory is not None and hasattr(self.working_memory, "to_dict")
+                else None
+            ),
             "trace_events": [dict(event) for event in self.trace_events],
         }

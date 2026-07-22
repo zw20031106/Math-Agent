@@ -47,3 +47,10 @@
   answer equivalence clustering, and deterministic lexicographic arbitration.
 - Hard failures are ranked before required coverage and agreement; weighted
   soft evidence is used only after all stronger criteria.
+
+### P07
+
+- Added isolated session memory, permissioned blackboard views, read-only static
+  stores, raw-context references, and claim dependency graphs.
+- Added deterministic evidence-preserving context compression with role-specific
+  views, invariant validation, and automatic snapshot rollback.

@@ -11,6 +11,7 @@ class HarnessConfig:
     primary_max_tokens: int = 4096
     max_model_calls: int = 4
     skill_char_budget: int = 6000
+    raw_context_max_chars: int = 48000
 
     @classmethod
     def from_environment(cls) -> "HarnessConfig":
