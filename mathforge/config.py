@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from dataclasses import fields
+import json
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -18,6 +21,16 @@ class HarnessConfig:
     exploration_deadline_seconds: float = 780.0
     hard_deadline_seconds: float = 870.0
     trace_max_chars: int = 12000
+    enable_router: bool = True
+    enable_skills: bool = True
+    enable_alternatives: bool = True
+    enable_tools: bool = True
+    enable_evidence: bool = True
+    enable_proof_obligations: bool = True
+    enable_memory: bool = True
+    enable_lemma_loop: bool = True
+    enable_rag: bool = True
+    enable_repair: bool = True
 
     @classmethod
     def from_environment(cls) -> "HarnessConfig":
@@ -32,3 +45,12 @@ class HarnessConfig:
             "yes",
         }
         return cls(model_max_concurrency=concurrency, use_mcp=use_mcp)
+
+    @classmethod
+    def from_json(cls, path: Path) -> "HarnessConfig":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("configuration must be a JSON object")
+        allowed = {field.name for field in fields(cls)}
+        values = {key: value for key, value in payload.items() if key in allowed}
+        return cls(**values)

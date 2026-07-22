@@ -1,0 +1,13 @@
+{
+  "max_model_calls": 1,
+  "enable_router": false,
+  "enable_skills": false,
+  "enable_alternatives": false,
+  "enable_tools": false,
+  "enable_evidence": false,
+  "enable_proof_obligations": false,
+  "enable_memory": false,
+  "enable_lemma_loop": false,
+  "enable_rag": false,
+  "enable_repair": false
+}

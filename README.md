@@ -26,6 +26,8 @@ python scripts/validate_submission.py
 ```
 
 Rebuild the reviewed offline FTS5 database with `python scripts/build_rag.py`.
+Run an ablation with
+`python scripts/run_benchmark.py --input cases.jsonl --config config/ablation/A4.json --output benchmark-results/A4.json`.
 
 ## Runtime configuration
 

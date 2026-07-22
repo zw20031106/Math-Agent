@@ -72,11 +72,12 @@ class MathForgeHarness:
         try:
             session.problem_ir = self._problem_parser.parse(normalized_problem)
             blackboard = MemoryBlackboard(session.working_memory)
-            blackboard.publish(
-                "System",
-                "raw",
-                {"problem": session.problem_ir.raw_problem, "metadata": safe_metadata},
-            )
+            if self._config.enable_memory:
+                blackboard.publish(
+                    "System",
+                    "raw",
+                    {"problem": session.problem_ir.raw_problem, "metadata": safe_metadata},
+                )
             trace.add(
                 "problem_parsed",
                 problem_type=session.problem_ir.problem_type,
@@ -84,9 +85,15 @@ class MathForgeHarness:
             )
             session.route_plan = self._router.plan(
                 session.problem_ir,
-                llm_chat=self._provider.chat,
-                consume_call=session.budget.consume,
+                llm_chat=self._provider.chat if self._config.enable_router else None,
+                consume_call=session.budget.consume if self._config.enable_router else None,
             )
+            if not self._config.enable_alternatives:
+                session.route_plan = replace(session.route_plan, candidate_count=1)
+            if not self._config.enable_lemma_loop:
+                session.route_plan = replace(session.route_plan, use_lemma_loop=False)
+            if not self._config.enable_rag:
+                session.route_plan = replace(session.route_plan, use_rag=False)
             if not session.budget.can_start_exploration() and session.route_plan.candidate_count > 1:
                 session.route_plan = replace(
                     session.route_plan,
@@ -95,9 +102,13 @@ class MathForgeHarness:
                     use_lemma_loop=False,
                 )
                 trace.add("deadline_finalize", stage="before_fanout")
-            skill_context = self._skills.compose(
-                session.route_plan.selected_skills,
-                self._config.skill_char_budget,
+            skill_context = (
+                self._skills.compose(
+                    session.route_plan.selected_skills,
+                    self._config.skill_char_budget,
+                )
+                if self._config.enable_skills
+                else ""
             )
             if session.route_plan.use_rag:
                 cards = self._retriever.retrieve(
@@ -138,15 +149,30 @@ class MathForgeHarness:
             if not fanout.candidates:
                 raise RuntimeError("all solver branches failed")
             ledger = EvidenceLedger(session.evidence)
-            for item in fanout.candidates:
-                result = self._tool_executor.execute(
-                    "answer_type_check",
-                    {"answer": item.final_answer, "answer_type": session.problem_ir.answer_type},
-                )
-                ledger.record_tool_result(candidate_id=item.candidate_id, claim_id=None, result=result)
-            viable = [
-                item for item in fanout.candidates if not ledger.has_hard_fail(item.candidate_id)
-            ]
+            tool_results = []
+            if self._config.enable_tools:
+                for item in fanout.candidates:
+                    result = self._tool_executor.execute(
+                        "answer_type_check",
+                        {"answer": item.final_answer, "answer_type": session.problem_ir.answer_type},
+                    )
+                    tool_results.append({"candidate_id": item.candidate_id, "status": result.status})
+                    if self._config.enable_evidence:
+                        ledger.record_tool_result(
+                            candidate_id=item.candidate_id,
+                            claim_id=None,
+                            result=result,
+                        )
+                trace.add("tool_checks", checks=tool_results)
+            viable = (
+                [
+                    item
+                    for item in fanout.candidates
+                    if not ledger.has_hard_fail(item.candidate_id)
+                ]
+                if self._config.enable_evidence
+                else list(fanout.candidates)
+            )
             trace.add(
                 "hard_evidence_gate",
                 accepted=[item.candidate_id for item in viable],
@@ -156,10 +182,11 @@ class MathForgeHarness:
             )
             if not viable:
                 raise RuntimeError("all candidates failed hard evidence")
-            for item in viable:
-                session.proof_obligations[item.candidate_id] = self._obligation_engine.generate(
-                    session.problem_ir, item
-                )
+            if self._config.enable_proof_obligations:
+                for item in viable:
+                    session.proof_obligations[item.candidate_id] = self._obligation_engine.generate(
+                        session.problem_ir, item
+                    )
             lemma_result = self._lemma_loop.run(
                 session.route_plan,
                 viable,
@@ -177,6 +204,7 @@ class MathForgeHarness:
                         lemma.lemma_id for lemma in lemma_result.lemmas if lemma.status == "verified"
                     ],
                     stop_reason=lemma_result.stop_reason,
+                    error_rate=lemma_result.error_rate,
                 )
             arbitration = self._arbitration.select(
                 viable,
@@ -184,26 +212,31 @@ class MathForgeHarness:
                 session.proof_obligations,
             )
             candidate = arbitration.selected
-            context_assembler = ContextAssembler(
-                RawContextStore(self._config.raw_context_max_chars)
-            )
-            snapshot = context_assembler.assemble(
-                session.problem_ir,
-                viable,
-                session.evidence,
-                session.proof_obligations,
-                final_answer=candidate.final_answer,
-            )
-            final_view = self._context_compressor.compress(
-                snapshot,
-                role="LLMFinalizer",
-                max_chars=self._config.raw_context_max_chars,
-            )
-            blackboard.publish(
-                "System",
-                "working",
-                {"context_snapshot": final_view.to_dict()},
-            )
+            if self._config.enable_memory:
+                context_assembler = ContextAssembler(
+                    RawContextStore(self._config.raw_context_max_chars)
+                )
+                snapshot = context_assembler.assemble(
+                    session.problem_ir,
+                    viable,
+                    session.evidence,
+                    session.proof_obligations,
+                    final_answer=candidate.final_answer,
+                )
+                final_view = self._context_compressor.compress(
+                    snapshot,
+                    role="LLMFinalizer",
+                    max_chars=self._config.raw_context_max_chars,
+                )
+                blackboard.publish(
+                    "System",
+                    "working",
+                    {"context_snapshot": final_view.to_dict()},
+                )
+                trace.add(
+                    "compression_validated",
+                    invariant_failure=final_view is snapshot,
+                )
             trace.add(
                 "candidate_arbitrated",
                 selected=candidate.candidate_id,
@@ -211,7 +244,11 @@ class MathForgeHarness:
                 equivalence_clusters=arbitration.clusters,
             )
             validation_errors = self._answer_validator.validate(candidate, session.problem_ir)
-            trace.add("primary_completed", model_calls=session.budget.used_calls)
+            trace.add(
+                "primary_completed",
+                model_calls=session.budget.used_calls,
+                estimated_tokens=session.budget.used_tokens,
+            )
             if validation_errors:
                 trace.add("answer_validation_warning", codes=validation_errors)
             final_response = self._formatter.format(candidate, session.problem_ir)

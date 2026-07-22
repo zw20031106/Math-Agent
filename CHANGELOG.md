@@ -89,3 +89,11 @@
   and size limits; raw failures, private candidates, and local paths are excluded.
 - Added call, estimated-token, and ordered time budgets plus exploration cutoff,
   submission validation, concurrency coverage, and full operational documentation.
+
+### P13
+
+- Added A0–A9 feature-flag configurations and a concurrent JSONL benchmark runner
+  covering correctness, domain/type accuracy, cost, latency, failure, lemma,
+  compression, repair, fallback, and concurrency-pollution metrics.
+- Froze the full competition configuration without inventing benchmark gains;
+  modules can be disabled when measured accuracy does not justify their cost.

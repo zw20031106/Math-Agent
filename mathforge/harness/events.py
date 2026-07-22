@@ -6,12 +6,14 @@ JUDGE_EVENTS = frozenset(
         "retrieval_completed",
         "candidate_fanout_completed",
         "hard_evidence_gate",
+        "tool_checks",
         "lemma_loop_completed",
         "candidate_arbitrated",
         "primary_completed",
         "answer_validation_warning",
         "repair_completed",
         "deadline_finalize",
+        "compression_validated",
         "fallback_used",
     }
 )
