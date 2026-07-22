@@ -89,12 +89,45 @@ class CandidateSolution:
 
 
 @dataclass
+class RoutePlan:
+    primary_subject: str
+    auxiliary_subject: str | None
+    problem_type: str
+    answer_type: str
+    risk_level: str
+    selected_skills: list[str] = field(default_factory=list)
+    selected_tools: list[str] = field(default_factory=list)
+    candidate_count: int = 1
+    max_reasoning_rounds: int = 1
+    use_rag: bool = False
+    use_lemma_loop: bool = False
+    use_llm_finalizer: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "primary_subject": self.primary_subject,
+            "auxiliary_subject": self.auxiliary_subject,
+            "problem_type": self.problem_type,
+            "answer_type": self.answer_type,
+            "risk_level": self.risk_level,
+            "selected_skills": list(self.selected_skills),
+            "selected_tools": list(self.selected_tools),
+            "candidate_count": self.candidate_count,
+            "max_reasoning_rounds": self.max_reasoning_rounds,
+            "use_rag": self.use_rag,
+            "use_lemma_loop": self.use_lemma_loop,
+            "use_llm_finalizer": self.use_llm_finalizer,
+        }
+
+
+@dataclass
 class MathSession:
     session_id: str
     problem: str
     metadata: dict[str, Any]
     budget: CallBudget
     problem_ir: ProblemIR | None = None
+    route_plan: RoutePlan | None = None
     candidates: list[CandidateSolution] = field(default_factory=list)
     trace_events: list[dict[str, Any]] = field(default_factory=list)
 
@@ -105,6 +138,7 @@ class MathSession:
             "metadata": dict(self.metadata),
             "budget": self.budget.to_dict(),
             "problem_ir": self.problem_ir.to_dict() if self.problem_ir else None,
+            "route_plan": self.route_plan.to_dict() if self.route_plan else None,
             "candidates": [candidate.to_dict() for candidate in self.candidates],
             "trace_events": [dict(event) for event in self.trace_events],
         }

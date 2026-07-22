@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from mathforge.agents.registry import SkillRegistry
+from mathforge.agents.router_planner import RouterPlanner
 from mathforge.config import HarnessConfig
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.fallback import FallbackSolver
@@ -34,6 +36,8 @@ class MathForgeHarness:
         self._solution_parser = SolutionParser()
         self._answer_validator = AnswerValidator()
         self._formatter = DeterministicFormatter()
+        self._router = RouterPlanner()
+        self._skills = SkillRegistry()
 
     def solve(self, problem: str, metadata: dict) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
@@ -53,13 +57,32 @@ class MathForgeHarness:
                 problem_type=session.problem_ir.problem_type,
                 answer_type=session.problem_ir.answer_type,
             )
+            session.route_plan = self._router.plan(
+                session.problem_ir,
+                llm_chat=self._provider.chat,
+                consume_call=session.budget.consume,
+            )
+            skill_context = self._skills.compose(
+                session.route_plan.selected_skills,
+                self._config.skill_char_budget,
+            )
+            trace.add(
+                "route_planned",
+                primary_subject=session.route_plan.primary_subject,
+                risk_level=session.route_plan.risk_level,
+                selected_skills=session.route_plan.selected_skills,
+            )
             session.budget.consume()
             response = self._provider.chat(
                 messages=[
                     {"role": "system", "content": PRIMARY_SYSTEM_PROMPT},
                     {
                         "role": "user",
-                        "content": f"Problem:\n{normalized_problem}\n\nProvide a complete solution.",
+                        "content": (
+                            f"Problem:\n{normalized_problem}\n\nProvide a complete solution.\n\n"
+                            f"Route: {session.route_plan.primary_subject}; "
+                            f"risk={session.route_plan.risk_level}.\n{skill_context}"
+                        ),
                     },
                 ],
                 temperature=self._config.primary_temperature,

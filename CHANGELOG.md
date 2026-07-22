@@ -19,3 +19,10 @@
   answer-type inference, and explicit serializable solution schemas.
 - Added resilient model-output parsing, answer validation, and deterministic
   formatting that preserves the extracted exact answer.
+
+### P03
+
+- Added rule-first domain routing with an LLM fallback for ambiguous problems,
+  risk-adaptive plans, bounded dynamic skill loading, and fallback routing.
+- Added 18 compact domain skills, six general skills, and statically validated
+  prompt contracts for the fixed LLM roles.
