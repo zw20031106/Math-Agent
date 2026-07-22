@@ -145,6 +145,26 @@ class EvidenceRecord:
 
 
 @dataclass
+class ProofObligation:
+    obligation_id: str
+    kind: str
+    description: str
+    required: bool = True
+    status: str = "unresolved"
+    source_claim_ids: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "obligation_id": self.obligation_id,
+            "kind": self.kind,
+            "description": self.description,
+            "required": self.required,
+            "status": self.status,
+            "source_claim_ids": list(self.source_claim_ids),
+        }
+
+
+@dataclass
 class MathSession:
     session_id: str
     problem: str
@@ -154,6 +174,7 @@ class MathSession:
     route_plan: RoutePlan | None = None
     candidates: list[CandidateSolution] = field(default_factory=list)
     evidence: list[EvidenceRecord] = field(default_factory=list)
+    proof_obligations: dict[str, list[ProofObligation]] = field(default_factory=dict)
     trace_events: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -166,5 +187,9 @@ class MathSession:
             "route_plan": self.route_plan.to_dict() if self.route_plan else None,
             "candidates": [candidate.to_dict() for candidate in self.candidates],
             "evidence": [record.to_dict() for record in self.evidence],
+            "proof_obligations": {
+                candidate_id: [obligation.to_dict() for obligation in obligations]
+                for candidate_id, obligations in self.proof_obligations.items()
+            },
             "trace_events": [dict(event) for event in self.trace_events],
         }

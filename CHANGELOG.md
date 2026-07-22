@@ -40,3 +40,10 @@
   result schema, with restricted AST parsing and isolated subprocess timeouts.
 - Added claim-level evidence records and a hard-failure gate before candidate
   selection, while treating timeouts as unknown.
+
+### P06
+
+- Added type-aware proof obligations, conservative verifier findings, exact
+  answer equivalence clustering, and deterministic lexicographic arbitration.
+- Hard failures are ranked before required coverage and agreement; weighted
+  soft evidence is used only after all stronger criteria.

@@ -18,6 +18,8 @@ from mathforge.parsing.problem_parser import ProblemParser
 from mathforge.parsing.solution_parser import SolutionParser
 from mathforge.tools.executor import ToolExecutor
 from mathforge.verification.evidence import EvidenceLedger
+from mathforge.verification.arbitration import ArbitrationPolicy
+from mathforge.verification.proof_obligations import ProofObligationEngine
 
 
 class MathForgeHarness:
@@ -38,6 +40,8 @@ class MathForgeHarness:
             SolverExecutor(self._provider, self._solution_parser)
         )
         self._tool_executor = ToolExecutor()
+        self._obligation_engine = ProofObligationEngine()
+        self._arbitration = ArbitrationPolicy(self._tool_executor)
 
     def solve(self, problem: str, metadata: dict) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
@@ -107,7 +111,22 @@ class MathForgeHarness:
             )
             if not viable:
                 raise RuntimeError("all candidates failed hard evidence")
-            candidate = viable[0]
+            for item in viable:
+                session.proof_obligations[item.candidate_id] = self._obligation_engine.generate(
+                    session.problem_ir, item
+                )
+            arbitration = self._arbitration.select(
+                viable,
+                session.evidence,
+                session.proof_obligations,
+            )
+            candidate = arbitration.selected
+            trace.add(
+                "candidate_arbitrated",
+                selected=candidate.candidate_id,
+                ranking=[rank.candidate_id for rank in arbitration.ranks],
+                equivalence_clusters=arbitration.clusters,
+            )
             validation_errors = self._answer_validator.validate(candidate, session.problem_ir)
             trace.add("primary_completed", model_calls=session.budget.used_calls)
             if validation_errors:
