@@ -75,3 +75,10 @@
   and trust filtering, condition reranking, deduplication, and bounded Top-K.
 - Seeded eight reviewed high-priority domain cards from repository Skills and
   preserved a no-database fallback with no network dependency.
+
+### P11
+
+- Added an optional local JSON-RPC StdIO MCP server and adapter that reuse the
+  existing tool registry and executor without duplicating implementations.
+- Direct execution remains the default; process or protocol failures fall back
+  to Direct automatically, and no HTTP or network service is used.

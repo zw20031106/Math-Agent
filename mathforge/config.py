@@ -12,6 +12,7 @@ class HarnessConfig:
     max_model_calls: int = 4
     skill_char_budget: int = 6000
     raw_context_max_chars: int = 48000
+    use_mcp: bool = False
 
     @classmethod
     def from_environment(cls) -> "HarnessConfig":
@@ -20,4 +21,9 @@ class HarnessConfig:
             concurrency = max(1, int(raw_concurrency))
         except ValueError:
             concurrency = 4
-        return cls(model_max_concurrency=concurrency)
+        use_mcp = os.environ.get("MATHFORGE_USE_MCP", "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        return cls(model_max_concurrency=concurrency, use_mcp=use_mcp)

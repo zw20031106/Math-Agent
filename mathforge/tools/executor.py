@@ -7,13 +7,31 @@ import sys
 from typing import Any
 
 from mathforge.tools.registry import ToolRegistry, ToolResult, run_tool_direct
+from typing import Protocol
+
+
+class MCPAdapter(Protocol):
+    def execute(self, name: str, arguments: dict[str, Any]) -> ToolResult: ...
 
 
 class ToolExecutor:
-    def __init__(self, registry: ToolRegistry | None = None, default_timeout: float = 3.0) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry | None = None,
+        default_timeout: float = 3.0,
+        *,
+        use_mcp: bool = False,
+        mcp_adapter: MCPAdapter | None = None,
+    ) -> None:
         self._registry = registry or ToolRegistry()
         self._default_timeout = default_timeout
         self._repo_root = Path(__file__).resolve().parents[2]
+        self._use_mcp = use_mcp
+        if use_mcp and mcp_adapter is None:
+            from mathforge.tools.mcp_adapter import StdioMCPAdapter
+
+            mcp_adapter = StdioMCPAdapter(timeout=max(1.0, default_timeout + 1.0))
+        self._mcp_adapter = mcp_adapter
 
     def execute(
         self,
@@ -22,6 +40,11 @@ class ToolExecutor:
         *,
         timeout: float | None = None,
     ) -> ToolResult:
+        if self._use_mcp and self._mcp_adapter is not None:
+            try:
+                return self._mcp_adapter.execute(name, dict(arguments))
+            except Exception:
+                pass
         try:
             definition = self._registry.get(name)
         except KeyError:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 from typing import Any, Callable
 
 from mathforge.tools.formatting import answer_type_check, latex_syntax_check
@@ -71,6 +72,32 @@ class ToolRegistry:
             return self._definitions[name]
         except KeyError as error:
             raise KeyError(f"unknown tool: {name}") from error
+
+    def mcp_schemas(self) -> list[dict]:
+        schemas: list[dict] = []
+        for definition in sorted(self._definitions.values(), key=lambda item: item.name):
+            signature = inspect.signature(definition.function)
+            properties: dict[str, dict] = {}
+            required: list[str] = []
+            for name, parameter in signature.parameters.items():
+                if name == "kwargs":
+                    continue
+                properties[name] = {"description": f"Argument {name}"}
+                if parameter.default is inspect.Parameter.empty:
+                    required.append(name)
+            schemas.append(
+                {
+                    "name": definition.name,
+                    "description": f"Can establish: {definition.proves}. Limitation: {definition.limitations}.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                        "additionalProperties": False,
+                    },
+                }
+            )
+        return schemas
 
 
 def run_tool_direct(name: str, arguments: dict[str, Any]) -> ToolResult:

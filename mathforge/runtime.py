@@ -44,7 +44,7 @@ class MathForgeHarness:
         self._candidate_orchestrator = CandidateOrchestrator(
             SolverExecutor(self._provider, self._solution_parser)
         )
-        self._tool_executor = ToolExecutor()
+        self._tool_executor = ToolExecutor(use_mcp=self._config.use_mcp)
         self._obligation_engine = ProofObligationEngine()
         self._arbitration = ArbitrationPolicy(self._tool_executor)
         self._context_compressor = ContextCompressor()
