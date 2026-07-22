@@ -61,3 +61,10 @@
   verified, conflicted, and rejected states.
 - Added two-round progress accounting and stop conditions; only verified lemmas
   enter solver-visible session memory.
+
+### P09
+
+- Added evidence-triggered, claim-dependency-scoped repair with immutable
+  candidate versioning and per-candidate/per-problem attempt limits.
+- Repairs must reverify only affected claims and roll back when hard failures
+  remain, reverification is missing, or evidence quality decreases.
