@@ -121,6 +121,30 @@ class RoutePlan:
 
 
 @dataclass
+class EvidenceRecord:
+    evidence_id: str
+    candidate_id: str
+    claim_id: str | None
+    evidence_type: str
+    status: str
+    strength: str
+    description: str
+    payload: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "evidence_id": self.evidence_id,
+            "candidate_id": self.candidate_id,
+            "claim_id": self.claim_id,
+            "evidence_type": self.evidence_type,
+            "status": self.status,
+            "strength": self.strength,
+            "description": self.description,
+            "payload": dict(self.payload),
+        }
+
+
+@dataclass
 class MathSession:
     session_id: str
     problem: str
@@ -129,6 +153,7 @@ class MathSession:
     problem_ir: ProblemIR | None = None
     route_plan: RoutePlan | None = None
     candidates: list[CandidateSolution] = field(default_factory=list)
+    evidence: list[EvidenceRecord] = field(default_factory=list)
     trace_events: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -140,5 +165,6 @@ class MathSession:
             "problem_ir": self.problem_ir.to_dict() if self.problem_ir else None,
             "route_plan": self.route_plan.to_dict() if self.route_plan else None,
             "candidates": [candidate.to_dict() for candidate in self.candidates],
+            "evidence": [record.to_dict() for record in self.evidence],
             "trace_events": [dict(event) for event in self.trace_events],
         }

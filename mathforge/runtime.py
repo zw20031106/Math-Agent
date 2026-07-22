@@ -16,6 +16,8 @@ from mathforge.output.answer_validator import AnswerValidator
 from mathforge.output.deterministic_formatter import DeterministicFormatter
 from mathforge.parsing.problem_parser import ProblemParser
 from mathforge.parsing.solution_parser import SolutionParser
+from mathforge.tools.executor import ToolExecutor
+from mathforge.verification.evidence import EvidenceLedger
 
 
 class MathForgeHarness:
@@ -35,6 +37,7 @@ class MathForgeHarness:
         self._candidate_orchestrator = CandidateOrchestrator(
             SolverExecutor(self._provider, self._solution_parser)
         )
+        self._tool_executor = ToolExecutor()
 
     def solve(self, problem: str, metadata: dict) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
@@ -85,7 +88,26 @@ class MathForgeHarness:
             )
             if not fanout.candidates:
                 raise RuntimeError("all solver branches failed")
-            candidate = fanout.candidates[0]
+            ledger = EvidenceLedger(session.evidence)
+            for item in fanout.candidates:
+                result = self._tool_executor.execute(
+                    "answer_type_check",
+                    {"answer": item.final_answer, "answer_type": session.problem_ir.answer_type},
+                )
+                ledger.record_tool_result(candidate_id=item.candidate_id, claim_id=None, result=result)
+            viable = [
+                item for item in fanout.candidates if not ledger.has_hard_fail(item.candidate_id)
+            ]
+            trace.add(
+                "hard_evidence_gate",
+                accepted=[item.candidate_id for item in viable],
+                rejected=[
+                    item.candidate_id for item in fanout.candidates if item not in viable
+                ],
+            )
+            if not viable:
+                raise RuntimeError("all candidates failed hard evidence")
+            candidate = viable[0]
             validation_errors = self._answer_validator.validate(candidate, session.problem_ir)
             trace.add("primary_completed", model_calls=session.budget.used_calls)
             if validation_errors:

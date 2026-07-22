@@ -33,3 +33,10 @@
   parallel model calls, stable ordering, and branch-failure isolation.
 - Kept Primary derivations hidden from Alternative prompts and added structural
   duplicate-method detection.
+
+### P05
+
+- Added nine high-value mathematical checks behind a registry and uniform JSON
+  result schema, with restricted AST parsing and isolated subprocess timeouts.
+- Added claim-level evidence records and a hard-failure gate before candidate
+  selection, while treating timeouts as unknown.
