@@ -13,6 +13,11 @@ class HarnessConfig:
     skill_char_budget: int = 6000
     raw_context_max_chars: int = 48000
     use_mcp: bool = False
+    max_model_tokens: int = 24000
+    soft_deadline_seconds: float = 720.0
+    exploration_deadline_seconds: float = 780.0
+    hard_deadline_seconds: float = 870.0
+    trace_max_chars: int = 12000
 
     @classmethod
     def from_environment(cls) -> "HarnessConfig":

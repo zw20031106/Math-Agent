@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from dataclasses import replace
 
 from mathforge.agents.registry import SkillRegistry
 from mathforge.agents.router_planner import RouterPlanner
@@ -57,9 +58,15 @@ class MathForgeHarness:
         session = create_session(
             normalized_problem,
             safe_metadata,
-            CallBudget(max_calls=self._config.max_model_calls),
+            CallBudget(
+                max_calls=self._config.max_model_calls,
+                max_tokens=self._config.max_model_tokens,
+                soft_deadline_seconds=self._config.soft_deadline_seconds,
+                exploration_deadline_seconds=self._config.exploration_deadline_seconds,
+                hard_deadline_seconds=self._config.hard_deadline_seconds,
+            ),
         )
-        trace = TraceBuilder(session.trace_events)
+        trace = TraceBuilder(session.trace_events, max_chars=self._config.trace_max_chars)
         trace.add("session_started", session_id=session.session_id)
 
         try:
@@ -80,6 +87,14 @@ class MathForgeHarness:
                 llm_chat=self._provider.chat,
                 consume_call=session.budget.consume,
             )
+            if not session.budget.can_start_exploration() and session.route_plan.candidate_count > 1:
+                session.route_plan = replace(
+                    session.route_plan,
+                    candidate_count=1,
+                    max_reasoning_rounds=1,
+                    use_lemma_loop=False,
+                )
+                trace.add("deadline_finalize", stage="before_fanout")
             skill_context = self._skills.compose(
                 session.route_plan.selected_skills,
                 self._config.skill_char_budget,

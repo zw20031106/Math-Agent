@@ -93,6 +93,7 @@ class SolverExecutor:
         )
         if not response.strip():
             raise ValueError("empty solver response")
+        budget.record_tokens(max(1, len(response) // 4))
         return self._parser.parse(
             response,
             candidate_id=request.candidate_id,

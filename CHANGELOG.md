@@ -82,3 +82,10 @@
   existing tool registry and executor without duplicating implementations.
 - Direct execution remains the default; process or protocol failures fall back
   to Direct automatically, and no HTTP or network service is used.
+
+### P12
+
+- Added dual internal/judge trace handling with event allowlisting, sanitization,
+  and size limits; raw failures, private candidates, and local paths are excluded.
+- Added call, estimated-token, and ordered time budgets plus exploration cutoff,
+  submission validation, concurrency coverage, and full operational documentation.
