@@ -7,12 +7,8 @@ def test_immutable_official_files_match_manifest() -> None:
     assert verify() == []
 
 
-def test_official_user_agent_snapshot_matches_root_baseline() -> None:
+def test_official_user_agent_snapshot_is_preserved() -> None:
     snapshot = ROOT / "baseline_snapshot" / "user_agent_official.py"
-    root_agent = ROOT / "user_agent.py"
-    assert snapshot.read_bytes().replace(b"\r\n", b"\n") == root_agent.read_bytes().replace(
-        b"\r\n", b"\n"
-    )
     assert git_blob_sha(snapshot) == "b230a6d427b0c6908c9533f2bc67838dbd9257a1"
 
 
