@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### S1
+
+- Added versioned, validated ProblemIR, RoutePlan, Claim, and
+  CandidateSolution contracts with bounded Claim graphs, strict deserialization,
+  and host ownership of candidate identity, role, answer type, method plan, and
+  version.
+- Added an explicit Runtime phase machine with declared success, skip, failure,
+  and fallback transitions recorded in judge-safe traces.
+- Made `config/competition.json` the default public and benchmark configuration,
+  added fully expanded safe/balanced/competition profiles, and rejected unknown,
+  mistyped, out-of-range, or dependency-invalid settings at startup.
+- Added semantic configuration and content fingerprints for Prompt, Skill, RAG,
+  and Tool inputs to public traces and benchmark metadata.
+- Made submission validation explicitly warn while the competition profile
+  remains `candidate-unvalidated`.
+
 ### S0
 
 - Added host-owned Claim kinds, verification states, and a fixed tool capability

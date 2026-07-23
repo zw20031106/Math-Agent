@@ -77,7 +77,7 @@ class RouterRuleEngine:
         tools = ["answer_type_check"]
         if problem.answer_type == "expression":
             tools.append("symbolic_equivalence")
-        return RoutePlan(
+        plan = RoutePlan(
             primary_subject=primary,
             auxiliary_subject=auxiliary,
             problem_type=problem.problem_type,
@@ -92,6 +92,8 @@ class RouterRuleEngine:
             use_llm_finalizer=problem.problem_type in {"proof", "explanation"},
             method_families=method_families_for(primary, problem.problem_type),
         )
+        plan.validate()
+        return plan
 
 
 class RouterPlanner:
@@ -153,7 +155,7 @@ class RouterPlanner:
                 risk = rule_plan.risk_level
             selected = [primary] + ([auxiliary] if auxiliary else [])
             selected.append("proof-obligation" if problem.problem_type == "proof" else "answer-normalization")
-            return replace(
+            planned = replace(
                 rule_plan,
                 primary_subject=primary,
                 auxiliary_subject=auxiliary,
@@ -162,5 +164,7 @@ class RouterPlanner:
                 candidate_count={"low": 1, "medium": 2, "high": 3}[risk],
                 method_families=method_families_for(primary, problem.problem_type),
             )
+            planned.validate()
+            return planned
         except (BudgetExceeded, ValueError, TypeError, json.JSONDecodeError, RuntimeError):
             return rule_plan

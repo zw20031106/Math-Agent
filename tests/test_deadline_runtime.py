@@ -160,6 +160,8 @@ def test_soft_cutoff_disables_optional_runtime_stages_before_they_start():
         soft_deadline_seconds=0.000001,
         exploration_deadline_seconds=0.1,
         hard_deadline_seconds=0.2,
+        enable_skills=True,
+        enable_tools=True,
         enable_evidence=True,
         enable_rag=True,
         enable_repair=True,

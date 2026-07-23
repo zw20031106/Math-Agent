@@ -1,13 +1,103 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from enum import Enum
+import re
+from typing import Any, ClassVar
 
 from mathforge.harness.budget import CallBudget
+from mathforge.harness.state import (
+    InvalidRuntimeTransition,
+    RuntimePhase,
+    transition_allowed,
+)
+
+
+CORE_SCHEMA_VERSION = "1.0"
+MAX_CLAIMS = 64
+MAX_CLAIM_STATEMENT_CHARS = 4000
+MAX_TOTAL_CLAIM_CHARS = 24000
+_CLAIM_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+
+
+class SchemaValidationError(ValueError):
+    pass
+
+
+class CandidateRole(str, Enum):
+    PRIMARY_SOLVER = "PrimarySolver"
+    ALTERNATIVE_SOLVER = "AlternativeSolver"
+    REPAIR_AGENT = "RepairAgent"
+    LLM_FINALIZER = "LLMFinalizer"
+
+
+class ProblemType(str, Enum):
+    MULTIPLE_CHOICE = "multiple_choice"
+    FILL_BLANK = "fill_blank"
+    CALCULATION = "calculation"
+    DERIVATION = "derivation"
+    PROOF = "proof"
+    EXPLANATION = "explanation"
+
+
+class AnswerType(str, Enum):
+    CHOICE = "choice"
+    INTEGER = "integer"
+    FRACTION = "fraction"
+    EXPRESSION = "expression"
+    SET = "set"
+    INTERVAL = "interval"
+    MATRIX = "matrix"
+    TEXT = "text"
+
+
+class RiskLevel(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+def _require_schema_version(payload: dict[str, Any], expected: str) -> None:
+    if payload.get("schema_version") != expected:
+        raise SchemaValidationError(
+            f"unsupported schema version: {payload.get('schema_version')!r}"
+        )
+
+
+def _require_string_list(value: Any, field_name: str) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise SchemaValidationError(f"{field_name} must be a list of strings")
+    return list(value)
+
+
+def _reject_unknown_fields(
+    payload: dict[str, Any],
+    allowed: set[str],
+    schema_name: str,
+) -> None:
+    unknown = set(payload) - allowed
+    if unknown:
+        raise SchemaValidationError(f"unknown {schema_name} fields: {sorted(unknown)}")
+
+
+def _require_string_fields(
+    payload: dict[str, Any],
+    names: tuple[str, ...],
+    schema_name: str,
+) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for name in names:
+        value = payload.get(name)
+        if not isinstance(value, str):
+            raise SchemaValidationError(f"{schema_name}.{name} must be a string")
+        result[name] = value
+    return result
 
 
 @dataclass
 class ProblemIR:
+    SCHEMA_VERSION: ClassVar[str] = CORE_SCHEMA_VERSION
+
     raw_problem: str
     normalized_problem: str
     problem_type: str
@@ -19,9 +109,11 @@ class ProblemIR:
     requested_output: str = ""
     options: list[str] = field(default_factory=list)
     risk_flags: list[str] = field(default_factory=list)
+    schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": self.schema_version,
             "raw_problem": self.raw_problem,
             "normalized_problem": self.normalized_problem,
             "problem_type": self.problem_type,
@@ -35,9 +127,116 @@ class ProblemIR:
             "risk_flags": list(self.risk_flags),
         }
 
+    def validate(self) -> None:
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise SchemaValidationError("invalid ProblemIR schema version")
+        string_fields = (
+            self.raw_problem,
+            self.normalized_problem,
+            self.problem_type,
+            self.answer_type,
+            self.requested_output,
+        )
+        if any(not isinstance(value, str) for value in string_fields):
+            raise SchemaValidationError("ProblemIR string field has invalid type")
+        if self.problem_type not in {item.value for item in ProblemType}:
+            raise SchemaValidationError(f"invalid problem type: {self.problem_type}")
+        if self.answer_type not in {item.value for item in AnswerType}:
+            raise SchemaValidationError(f"invalid answer type: {self.answer_type}")
+        for name, value in (
+            ("symbols", self.symbols),
+            ("assumptions", self.assumptions),
+            ("options", self.options),
+            ("risk_flags", self.risk_flags),
+        ):
+            _require_string_list(value, f"ProblemIR.{name}")
+        if not isinstance(self.domains, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in self.domains.items()
+        ):
+            raise SchemaValidationError("ProblemIR.domains must map strings to strings")
+        if not isinstance(self.subject_candidates, list):
+            raise SchemaValidationError("ProblemIR.subject_candidates must be a list")
+        for item in self.subject_candidates:
+            if (
+                not isinstance(item, (list, tuple))
+                or len(item) != 2
+                or not isinstance(item[0], str)
+                or type(item[1]) not in {int, float}
+                or not 0.0 <= float(item[1]) <= 1.0
+            ):
+                raise SchemaValidationError(
+                    "ProblemIR.subject_candidates entries must be [subject, probability]"
+                )
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ProblemIR":
+        if not isinstance(payload, dict):
+            raise SchemaValidationError("ProblemIR payload must be an object")
+        _require_schema_version(payload, cls.SCHEMA_VERSION)
+        allowed = {
+            "schema_version",
+            "raw_problem",
+            "normalized_problem",
+            "problem_type",
+            "answer_type",
+            "subject_candidates",
+            "symbols",
+            "assumptions",
+            "domains",
+            "requested_output",
+            "options",
+            "risk_flags",
+        }
+        _reject_unknown_fields(payload, allowed, "ProblemIR")
+        strings = _require_string_fields(
+            payload,
+            (
+            "raw_problem",
+            "normalized_problem",
+            "problem_type",
+            "answer_type",
+            "requested_output",
+            ),
+            "ProblemIR",
+        )
+        raw_subjects = payload.get("subject_candidates")
+        if not isinstance(raw_subjects, list):
+            raise SchemaValidationError("ProblemIR.subject_candidates must be a list")
+        raw_domains = payload.get("domains")
+        if not isinstance(raw_domains, dict):
+            raise SchemaValidationError("ProblemIR.domains must be an object")
+        problem = cls(
+            raw_problem=strings["raw_problem"],
+            normalized_problem=strings["normalized_problem"],
+            problem_type=strings["problem_type"],
+            answer_type=strings["answer_type"],
+            subject_candidates=[
+                tuple(item) if isinstance(item, list) else item
+                for item in raw_subjects
+            ],
+            symbols=_require_string_list(payload.get("symbols"), "ProblemIR.symbols"),
+            assumptions=_require_string_list(
+                payload.get("assumptions"),
+                "ProblemIR.assumptions",
+            ),
+            domains=dict(raw_domains),
+            requested_output=strings["requested_output"],
+            options=_require_string_list(payload.get("options"), "ProblemIR.options"),
+            risk_flags=_require_string_list(
+                payload.get("risk_flags"),
+                "ProblemIR.risk_flags",
+            ),
+            schema_version=cls.SCHEMA_VERSION,
+        )
+        problem.validate()
+        return problem
+
 
 @dataclass
 class Claim:
+    SCHEMA_VERSION: ClassVar[str] = CORE_SCHEMA_VERSION
+
     claim_id: str
     statement: str
     depends_on: list[str] = field(default_factory=list)
@@ -46,9 +245,11 @@ class Claim:
     status: str = "unverified"
     claim_kind: str = "unknown"
     verification_state: str = "unknown"
+    schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": self.schema_version,
             "claim_id": self.claim_id,
             "statement": self.statement,
             "depends_on": list(self.depends_on),
@@ -59,9 +260,82 @@ class Claim:
             "verification_state": self.verification_state,
         }
 
+    def validate(self) -> None:
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise SchemaValidationError("invalid Claim schema version")
+        string_fields = (
+            self.claim_id,
+            self.statement,
+            self.check_type,
+            self.importance,
+            self.status,
+            self.claim_kind,
+            self.verification_state,
+        )
+        if any(not isinstance(value, str) for value in string_fields):
+            raise SchemaValidationError("Claim string field has invalid type")
+        _require_string_list(self.depends_on, "Claim.depends_on")
+        if not _CLAIM_ID.fullmatch(self.claim_id):
+            raise SchemaValidationError(f"invalid claim id: {self.claim_id!r}")
+        if len(self.statement) > MAX_CLAIM_STATEMENT_CHARS:
+            raise SchemaValidationError(f"claim statement too long: {self.claim_id}")
+        if len(self.depends_on) > MAX_CLAIMS:
+            raise SchemaValidationError(f"too many dependencies: {self.claim_id}")
+        if any(not _CLAIM_ID.fullmatch(value) for value in self.depends_on):
+            raise SchemaValidationError(f"invalid claim dependency: {self.claim_id}")
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "Claim":
+        if not isinstance(payload, dict):
+            raise SchemaValidationError("Claim payload must be an object")
+        _require_schema_version(payload, cls.SCHEMA_VERSION)
+        allowed = {
+            "schema_version",
+            "claim_id",
+            "statement",
+            "depends_on",
+            "check_type",
+            "importance",
+            "status",
+            "claim_kind",
+            "verification_state",
+        }
+        _reject_unknown_fields(payload, allowed, "Claim")
+        string_fields = _require_string_fields(
+            payload,
+            (
+                "claim_id",
+                "statement",
+                "check_type",
+                "importance",
+                "status",
+                "claim_kind",
+                "verification_state",
+            ),
+            "Claim",
+        )
+        claim = cls(
+            claim_id=string_fields["claim_id"],
+            statement=string_fields["statement"],
+            depends_on=_require_string_list(
+                payload.get("depends_on"),
+                "Claim.depends_on",
+            ),
+            check_type=string_fields["check_type"],
+            importance=string_fields["importance"],
+            status=string_fields["status"],
+            claim_kind=string_fields["claim_kind"],
+            verification_state=string_fields["verification_state"],
+            schema_version=cls.SCHEMA_VERSION,
+        )
+        claim.validate()
+        return claim
+
 
 @dataclass
 class CandidateSolution:
+    SCHEMA_VERSION: ClassVar[str] = CORE_SCHEMA_VERSION
+
     candidate_id: str
     role: str
     method: str
@@ -76,9 +350,12 @@ class CandidateSolution:
     version: int = 1
     planned_method_family: str = ""
     is_method_duplicate: bool = False
+    contract_deviations: list[str] = field(default_factory=list)
+    schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": self.schema_version,
             "candidate_id": self.candidate_id,
             "role": self.role,
             "method": self.method,
@@ -93,11 +370,183 @@ class CandidateSolution:
             "version": self.version,
             "planned_method_family": self.planned_method_family,
             "is_method_duplicate": self.is_method_duplicate,
+            "contract_deviations": list(self.contract_deviations),
         }
+
+    def validate(self) -> None:
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise SchemaValidationError("invalid CandidateSolution schema version")
+        string_fields = (
+            self.candidate_id,
+            self.role,
+            self.method,
+            self.final_answer,
+            self.answer_type,
+            self.solution_text,
+            self.parse_status,
+            self.planned_method_family,
+        )
+        if any(not isinstance(value, str) for value in string_fields):
+            raise SchemaValidationError(
+                "CandidateSolution string field has invalid type"
+            )
+        if self.role not in {item.value for item in CandidateRole}:
+            raise SchemaValidationError(f"invalid candidate role: {self.role}")
+        if self.answer_type not in {item.value for item in AnswerType}:
+            raise SchemaValidationError(f"invalid candidate answer type: {self.answer_type}")
+        if not self.candidate_id or len(self.candidate_id) > 128:
+            raise SchemaValidationError("invalid candidate id")
+        if not isinstance(self.version, int) or isinstance(self.version, bool) or self.version < 1:
+            raise SchemaValidationError("invalid candidate version")
+        if len(self.method) > 256:
+            raise SchemaValidationError("candidate method is too long")
+        if len(self.final_answer) > 4096:
+            raise SchemaValidationError("candidate final answer is too long")
+        if len(self.solution_text) > 48000:
+            raise SchemaValidationError("candidate solution text is too long")
+        if not isinstance(self.claims, list) or any(
+            not isinstance(claim, Claim) for claim in self.claims
+        ):
+            raise SchemaValidationError(
+                "CandidateSolution.claims must be a list of Claim objects"
+            )
+        if len(self.claims) > MAX_CLAIMS:
+            raise SchemaValidationError(f"claim count exceeds {MAX_CLAIMS}")
+        for name, value in (
+            ("assumptions", self.assumptions),
+            ("theorems", self.theorems),
+            ("unresolved_obligations", self.unresolved_obligations),
+            ("contract_deviations", self.contract_deviations),
+        ):
+            _require_string_list(value, f"CandidateSolution.{name}")
+        if not isinstance(self.is_method_duplicate, bool):
+            raise SchemaValidationError(
+                "CandidateSolution.is_method_duplicate must be a boolean"
+            )
+        if sum(len(claim.statement) for claim in self.claims) > MAX_TOTAL_CLAIM_CHARS:
+            raise SchemaValidationError("total claim text is too long")
+        for claim in self.claims:
+            claim.validate()
+        self._validate_claim_graph()
+
+    def _validate_claim_graph(self) -> None:
+        claim_by_id: dict[str, Claim] = {}
+        for claim in self.claims:
+            if claim.claim_id in claim_by_id:
+                raise SchemaValidationError(f"duplicate claim id: {claim.claim_id}")
+            claim_by_id[claim.claim_id] = claim
+        for claim in self.claims:
+            for dependency in claim.depends_on:
+                if dependency not in claim_by_id:
+                    raise SchemaValidationError(
+                        f"unknown dependency {dependency} for claim {claim.claim_id}"
+                    )
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(claim_id: str) -> None:
+            if claim_id in visiting:
+                raise SchemaValidationError("claim dependency cycle")
+            if claim_id in visited:
+                return
+            visiting.add(claim_id)
+            for dependency in claim_by_id[claim_id].depends_on:
+                visit(dependency)
+            visiting.remove(claim_id)
+            visited.add(claim_id)
+
+        for claim_id in claim_by_id:
+            visit(claim_id)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "CandidateSolution":
+        if not isinstance(payload, dict):
+            raise SchemaValidationError("CandidateSolution payload must be an object")
+        _require_schema_version(payload, cls.SCHEMA_VERSION)
+        allowed = {
+            "schema_version",
+            "candidate_id",
+            "role",
+            "method",
+            "final_answer",
+            "answer_type",
+            "assumptions",
+            "theorems",
+            "claims",
+            "solution_text",
+            "unresolved_obligations",
+            "parse_status",
+            "version",
+            "planned_method_family",
+            "is_method_duplicate",
+            "contract_deviations",
+        }
+        _reject_unknown_fields(payload, allowed, "CandidateSolution")
+        strings = _require_string_fields(
+            payload,
+            (
+                "candidate_id",
+                "role",
+                "method",
+                "final_answer",
+                "answer_type",
+                "solution_text",
+                "parse_status",
+                "planned_method_family",
+            ),
+            "CandidateSolution",
+        )
+        raw_claims = payload.get("claims")
+        if not isinstance(raw_claims, list) or any(
+            not isinstance(item, dict) for item in raw_claims
+        ):
+            raise SchemaValidationError("CandidateSolution.claims must be objects")
+        version = payload.get("version")
+        duplicate = payload.get("is_method_duplicate")
+        if not isinstance(version, int) or isinstance(version, bool):
+            raise SchemaValidationError("CandidateSolution.version must be an integer")
+        if not isinstance(duplicate, bool):
+            raise SchemaValidationError(
+                "CandidateSolution.is_method_duplicate must be a boolean"
+            )
+        candidate = cls(
+            candidate_id=strings["candidate_id"],
+            role=strings["role"],
+            method=strings["method"],
+            final_answer=strings["final_answer"],
+            answer_type=strings["answer_type"],
+            assumptions=_require_string_list(
+                payload.get("assumptions"),
+                "CandidateSolution.assumptions",
+            ),
+            theorems=_require_string_list(
+                payload.get("theorems"),
+                "CandidateSolution.theorems",
+            ),
+            claims=[Claim.from_dict(item) for item in raw_claims],
+            solution_text=strings["solution_text"],
+            unresolved_obligations=_require_string_list(
+                payload.get("unresolved_obligations"),
+                "CandidateSolution.unresolved_obligations",
+            ),
+            parse_status=strings["parse_status"],
+            version=version,
+            planned_method_family=strings["planned_method_family"],
+            is_method_duplicate=duplicate,
+            contract_deviations=_require_string_list(
+                payload.get("contract_deviations"),
+                "CandidateSolution.contract_deviations",
+            ),
+            schema_version=cls.SCHEMA_VERSION,
+        )
+        candidate.validate()
+        return candidate
 
 
 @dataclass
 class RoutePlan:
+    SCHEMA_VERSION: ClassVar[str] = CORE_SCHEMA_VERSION
+
     primary_subject: str
     auxiliary_subject: str | None
     problem_type: str
@@ -111,9 +560,11 @@ class RoutePlan:
     use_lemma_loop: bool = False
     use_llm_finalizer: bool = False
     method_families: list[str] = field(default_factory=list)
+    schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": self.schema_version,
             "primary_subject": self.primary_subject,
             "auxiliary_subject": self.auxiliary_subject,
             "problem_type": self.problem_type,
@@ -129,9 +580,133 @@ class RoutePlan:
             "method_families": list(self.method_families),
         }
 
+    def validate(self) -> None:
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise SchemaValidationError("invalid RoutePlan schema version")
+        string_fields = (
+            self.primary_subject,
+            self.problem_type,
+            self.answer_type,
+            self.risk_level,
+        )
+        if any(not isinstance(value, str) for value in string_fields):
+            raise SchemaValidationError("RoutePlan string field has invalid type")
+        if self.auxiliary_subject is not None and not isinstance(
+            self.auxiliary_subject,
+            str,
+        ):
+            raise SchemaValidationError(
+                "RoutePlan.auxiliary_subject must be a string or null"
+            )
+        if self.problem_type not in {item.value for item in ProblemType}:
+            raise SchemaValidationError(f"invalid route problem type: {self.problem_type}")
+        if self.answer_type not in {item.value for item in AnswerType}:
+            raise SchemaValidationError(f"invalid route answer type: {self.answer_type}")
+        if self.risk_level not in {item.value for item in RiskLevel}:
+            raise SchemaValidationError(f"invalid route risk level: {self.risk_level}")
+        if (
+            type(self.candidate_count) is not int
+            or type(self.max_reasoning_rounds) is not int
+        ):
+            raise SchemaValidationError("RoutePlan counts must be integers")
+        if not 1 <= self.candidate_count <= 3:
+            raise SchemaValidationError("invalid route candidate count")
+        if not 1 <= self.max_reasoning_rounds <= 2:
+            raise SchemaValidationError("invalid route reasoning rounds")
+        for name, value in (
+            ("selected_skills", self.selected_skills),
+            ("selected_tools", self.selected_tools),
+            ("method_families", self.method_families),
+        ):
+            _require_string_list(value, f"RoutePlan.{name}")
+        for name, bool_value in (
+            ("use_rag", self.use_rag),
+            ("use_lemma_loop", self.use_lemma_loop),
+            ("use_llm_finalizer", self.use_llm_finalizer),
+        ):
+            if not isinstance(bool_value, bool):
+                raise SchemaValidationError(f"RoutePlan.{name} must be a boolean")
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "RoutePlan":
+        if not isinstance(payload, dict):
+            raise SchemaValidationError("RoutePlan payload must be an object")
+        _require_schema_version(payload, cls.SCHEMA_VERSION)
+        allowed = {
+            "schema_version",
+            "primary_subject",
+            "auxiliary_subject",
+            "problem_type",
+            "answer_type",
+            "risk_level",
+            "selected_skills",
+            "selected_tools",
+            "candidate_count",
+            "max_reasoning_rounds",
+            "use_rag",
+            "use_lemma_loop",
+            "use_llm_finalizer",
+            "method_families",
+        }
+        _reject_unknown_fields(payload, allowed, "RoutePlan")
+        strings = _require_string_fields(
+            payload,
+            (
+                "primary_subject",
+                "problem_type",
+                "answer_type",
+                "risk_level",
+            ),
+            "RoutePlan",
+        )
+        auxiliary = payload.get("auxiliary_subject")
+        if auxiliary is not None and not isinstance(auxiliary, str):
+            raise SchemaValidationError(
+                "RoutePlan.auxiliary_subject must be a string or null"
+            )
+        candidate_count = payload.get("candidate_count")
+        reasoning_rounds = payload.get("max_reasoning_rounds")
+        if type(candidate_count) is not int or type(reasoning_rounds) is not int:
+            raise SchemaValidationError("RoutePlan counts must be integers")
+        bool_names = ("use_rag", "use_lemma_loop", "use_llm_finalizer")
+        if any(not isinstance(payload.get(name), bool) for name in bool_names):
+            invalid = next(
+                name for name in bool_names if not isinstance(payload.get(name), bool)
+            )
+            raise SchemaValidationError(f"RoutePlan.{invalid} must be a boolean")
+        route = cls(
+            primary_subject=strings["primary_subject"],
+            auxiliary_subject=auxiliary,
+            problem_type=strings["problem_type"],
+            answer_type=strings["answer_type"],
+            risk_level=strings["risk_level"],
+            selected_skills=_require_string_list(
+                payload.get("selected_skills"),
+                "RoutePlan.selected_skills",
+            ),
+            selected_tools=_require_string_list(
+                payload.get("selected_tools"),
+                "RoutePlan.selected_tools",
+            ),
+            candidate_count=candidate_count,
+            max_reasoning_rounds=reasoning_rounds,
+            use_rag=payload["use_rag"],
+            use_lemma_loop=payload["use_lemma_loop"],
+            use_llm_finalizer=payload["use_llm_finalizer"],
+            method_families=_require_string_list(
+                payload.get("method_families"),
+                "RoutePlan.method_families",
+            ),
+            schema_version=cls.SCHEMA_VERSION,
+        )
+        route.validate()
+        return route
+
 
 @dataclass
 class EvidenceRecord:
+    SCHEMA_VERSION: ClassVar[str] = CORE_SCHEMA_VERSION
+
     evidence_id: str
     candidate_id: str
     claim_id: str | None
@@ -142,9 +717,11 @@ class EvidenceRecord:
     payload: dict[str, Any] = field(default_factory=dict)
     invocation: dict[str, Any] = field(default_factory=dict)
     capability: str = "none"
+    schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": self.schema_version,
             "evidence_id": self.evidence_id,
             "candidate_id": self.candidate_id,
             "claim_id": self.claim_id,
@@ -160,6 +737,8 @@ class EvidenceRecord:
 
 @dataclass
 class ProofObligation:
+    SCHEMA_VERSION: ClassVar[str] = CORE_SCHEMA_VERSION
+
     obligation_id: str
     kind: str
     description: str
@@ -167,9 +746,11 @@ class ProofObligation:
     status: str = "unresolved"
     source_claim_ids: list[str] = field(default_factory=list)
     satisfaction_evidence_ids: list[str] = field(default_factory=list)
+    schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": self.schema_version,
             "obligation_id": self.obligation_id,
             "kind": self.kind,
             "description": self.description,
@@ -182,6 +763,8 @@ class ProofObligation:
 
 @dataclass
 class LemmaCard:
+    SCHEMA_VERSION: ClassVar[str] = CORE_SCHEMA_VERSION
+
     lemma_id: str
     statement: str
     conditions: list[str]
@@ -191,9 +774,11 @@ class LemmaCard:
     evidence_ids: list[str]
     source_round: int
     scope: str = "current_problem"
+    schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": self.schema_version,
             "lemma_id": self.lemma_id,
             "statement": self.statement,
             "conditions": list(self.conditions),
@@ -208,6 +793,8 @@ class LemmaCard:
 
 @dataclass
 class RoundState:
+    SCHEMA_VERSION: ClassVar[str] = CORE_SCHEMA_VERSION
+
     round_id: int
     input_lemma_ids: list[str]
     candidate_lemma_ids: list[str]
@@ -217,9 +804,11 @@ class RoundState:
     unresolved_obligations: list[str]
     conflict_count: int
     progress_score: float
+    schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": self.schema_version,
             "round_id": self.round_id,
             "input_lemma_ids": list(self.input_lemma_ids),
             "candidate_lemma_ids": list(self.candidate_lemma_ids),
@@ -248,6 +837,32 @@ class MathSession:
     lemmas: list[LemmaCard] = field(default_factory=list)
     rounds: list[RoundState] = field(default_factory=list)
     trace_events: list[dict[str, Any]] = field(default_factory=list)
+    phase: RuntimePhase = RuntimePhase.CREATED
+    phase_history: list[dict[str, str]] = field(default_factory=list)
+
+    def transition(
+        self,
+        expected: RuntimePhase,
+        target: RuntimePhase,
+        *,
+        reason: str,
+    ) -> dict[str, str]:
+        if self.phase != expected:
+            raise InvalidRuntimeTransition(
+                f"expected phase {expected.value}, current phase is {self.phase.value}"
+            )
+        if not transition_allowed(expected, target):
+            raise InvalidRuntimeTransition(
+                f"transition {expected.value}->{target.value} is not allowed"
+            )
+        record = {
+            "from_phase": expected.value,
+            "to_phase": target.value,
+            "reason": str(reason),
+        }
+        self.phase = target
+        self.phase_history.append(record)
+        return dict(record)
 
     def to_dict(self) -> dict:
         return {
@@ -276,4 +891,6 @@ class MathSession:
             "lemmas": [lemma.to_dict() for lemma in self.lemmas],
             "rounds": [round_state.to_dict() for round_state in self.rounds],
             "trace_events": [dict(event) for event in self.trace_events],
+            "phase": self.phase.value,
+            "phase_history": [dict(item) for item in self.phase_history],
         }

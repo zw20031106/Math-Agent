@@ -992,14 +992,28 @@ S0 已按 C01–C04、C06–C07 的解决方案实施；C05 的公开入口配�
 - `pip check`：无损坏依赖；
 - `git diff --check`：通过。
 
-## 14. 下一步
+## 14. S1 实施状态
 
-下一开发阶段为 S1（C05/C08/C09/C10）：
+S1（C05/C08/C09/C10）已完成工程实现：
 
-1. 冻结版本化 Schema 与宿主字段所有权；
-2. 建立显式 Runtime 状态机；
-3. 统一 public/benchmark competition 配置入口；
-4. 增加配置类型、范围、未知键与 Feature 依赖校验；
-5. 记录配置、Prompt、Skill、RAG 和 Tool 指纹。
+1. ProblemIR、RoutePlan、Claim 与 CandidateSolution 已冻结版本化
+   Schema，并在 parser、router、solver 和 repair 边界统一校验；
+2. 模型返回中的宿主字段被覆盖并记录 contract deviation；
+3. Runtime 已建立显式成功、skip、失败和 fallback 状态转换；
+4. public 与 benchmark 已统一加载 `config/competition.json`，并使用相同
+   语义配置哈希；
+5. safe/balanced/competition 配置已完整展开，类型、范围、未知键和 Feature
+   依赖在启动期校验；
+6. Trace 与 benchmark 元数据已记录配置、Prompt、Skill、RAG 和 Tool 指纹；
+7. `candidate-unvalidated` 状态会由提交校验显式报警。
 
-在 S1 完成前，不冻结 competition 配置，也不启动真实 A0–A10 消融。
+详细实现和验收记录见
+`docs/S1_IMPLEMENTATION_STATUS_2026-07-23.md`。
+
+## 15. 下一步
+
+下一开发阶段为 S2（C11/C12/C13/C14）：Router 校准、派生字段一致性、
+Claim/tool/context 总预算、Deadline 全链路覆盖和 CallAllocationPlan。
+
+`config/competition.json` 仍保持 `candidate-unvalidated`；在真实重复消融前
+不得标记 frozen，也不启动最终 A0–A10 配置结论。

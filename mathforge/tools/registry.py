@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
+from mathforge.harness.fingerprints import (
+    content_tree_fingerprint,
+    semantic_fingerprint,
+)
 from mathforge.tools.formatting import answer_type_check, latex_syntax_check
 from mathforge.tools.linear_algebra import matrix_shape_check
 from mathforge.tools.numerical import density_normalization, numerical_residual, small_case_enumeration
@@ -206,6 +211,18 @@ class ToolRegistry:
 
     def names(self) -> list[str]:
         return sorted(self._definitions)
+
+    @property
+    def fingerprint(self) -> str:
+        return semantic_fingerprint(
+            {
+                "registry": self.mcp_schemas(),
+                "source_tree": content_tree_fingerprint(
+                    Path(__file__).resolve().parent,
+                    "*.py",
+                ),
+            }
+        )
 
     def get(self, name: str) -> ToolDefinition:
         try:

@@ -6,7 +6,7 @@ from time import perf_counter
 
 from mathforge.agents.registry import PromptContractLoader, SkillRegistry
 from mathforge.agents.router_planner import RouterPlanner
-from mathforge.config import HarnessConfig
+from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.fallback import FallbackSolver
 from mathforge.harness.fingerprints import request_fingerprint
@@ -14,6 +14,7 @@ from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.harness.orchestration import CandidateOrchestrator
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
 from mathforge.harness.session import create_session
+from mathforge.harness.state import RuntimePhase
 from mathforge.harness.trace import TraceBuilder
 from mathforge.output.answer_validator import AnswerValidator
 from mathforge.output.deterministic_formatter import DeterministicFormatter
@@ -51,7 +52,7 @@ class MathForgeHarness:
     """Thread-safe facade over the injected official model client."""
 
     def __init__(self, client: Any, config: HarnessConfig | None = None) -> None:
-        self._config = config or HarnessConfig.from_environment()
+        self._config = config or load_competition_config()
         gate = ModelCallGate(self._config.model_max_concurrency)
         self._provider = OfficialClientProvider(client, gate)
         self._fallback = FallbackSolver()
@@ -87,6 +88,16 @@ class MathForgeHarness:
         )
         self._verifier_agent = VerifierSkepticAgent(self._provider, self._contracts)
         self._proof_completion_gate = ProofCompletionGate()
+        self._provenance = {
+            "config_schema_version": self._config.schema_version,
+            "config_profile": self._config.profile,
+            "config_status": self._config.status,
+            "config_hash": self._config.fingerprint,
+            "prompt_hash": self._contracts.fingerprint,
+            "skill_hash": self._skills.fingerprint,
+            "rag_hash": self._retriever.fingerprint,
+            "tool_hash": self._tool_executor.fingerprint,
+        }
 
     def solve(self, problem: str, metadata: dict) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
@@ -111,11 +122,13 @@ class MathForgeHarness:
             "session_started",
             session_id=session.session_id,
             request_fingerprint=request_fingerprint(normalized_problem, fingerprint_nonce),
+            **self._provenance,
         )
         outcome = "fallback"
 
         try:
             session.problem_ir = self._problem_parser.parse(normalized_problem)
+            session.problem_ir.validate()
             blackboard = MemoryBlackboard(session.working_memory)
             if self._config.enable_memory:
                 blackboard.publish(
@@ -127,6 +140,13 @@ class MathForgeHarness:
                 "problem_parsed",
                 problem_type=session.problem_ir.problem_type,
                 answer_type=session.problem_ir.answer_type,
+            )
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.CREATED,
+                RuntimePhase.PARSED,
+                "problem_parsed",
             )
             router_context = None
             router_enabled = self._config.enable_router
@@ -269,6 +289,14 @@ class MathForgeHarness:
                 selected_skills=session.route_plan.selected_skills,
                 method_families=session.route_plan.method_families,
             )
+            session.route_plan.validate()
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.PARSED,
+                RuntimePhase.ROUTED,
+                "route_planned",
+            )
             solver_contexts = {
                 "PrimarySolver": self._build_role_context(
                     session,
@@ -284,6 +312,13 @@ class MathForgeHarness:
                     trace,
                     role="AlternativeSolver",
                 )
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.ROUTED,
+                RuntimePhase.CONTEXT_READY,
+                "solver_context_ready",
+            )
             fanout = self._candidate_orchestrator.fanout(
                 session.problem_ir,
                 session.route_plan,
@@ -299,12 +334,24 @@ class MathForgeHarness:
                 completed=[candidate.candidate_id for candidate in fanout.candidates],
                 failed=[failure.candidate_id for failure in fanout.failures],
                 failures=[failure.to_dict() for failure in fanout.failures],
+                contract_deviations={
+                    candidate.candidate_id: list(candidate.contract_deviations)
+                    for candidate in fanout.candidates
+                    if candidate.contract_deviations
+                },
             )
             if not fanout.candidates:
                 raise RuntimeError("all solver branches failed")
             if session.budget.must_finalize():
                 trace.add("deadline_finalize", stage="after_fanout")
                 raise RuntimeError("deterministic finalize reserve reached")
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.CONTEXT_READY,
+                RuntimePhase.CANDIDATES_READY,
+                "candidate_fanout_completed",
+            )
             ledger = EvidenceLedger(session.evidence)
             tool_results = []
             if self._config.enable_tools:
@@ -418,11 +465,29 @@ class MathForgeHarness:
             )
             if not viable:
                 raise RuntimeError("all candidates failed hard evidence")
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.CANDIDATES_READY,
+                RuntimePhase.EVIDENCE_READY,
+                "evidence_completed" if self._config.enable_evidence else "evidence_skipped",
+            )
             if self._config.enable_proof_obligations:
                 for item in viable:
                     session.proof_obligations[item.candidate_id] = self._obligation_engine.generate(
                         session.problem_ir, item
                     )
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.EVIDENCE_READY,
+                RuntimePhase.OBLIGATIONS_READY,
+                (
+                    "obligations_generated"
+                    if self._config.enable_proof_obligations
+                    else "obligations_skipped"
+                ),
+            )
             unresolved_required = [
                 obligation
                 for item in viable
@@ -464,6 +529,13 @@ class MathForgeHarness:
                     finding_count=len(verifier_result.findings),
                     reason=verifier_result.reason,
                 )
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.OBLIGATIONS_READY,
+                RuntimePhase.VERIFIED,
+                "verification_completed" if self._config.enable_verifier else "verification_skipped",
+            )
             if not session.budget.deadline.optional_work_allowed():
                 session.route_plan = replace(
                     session.route_plan,
@@ -495,6 +567,13 @@ class MathForgeHarness:
             session.lemmas.extend(lemma_result.lemmas)
             session.rounds.extend(lemma_result.rounds)
             session.candidates.extend(lemma_result.generated_candidates)
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.VERIFIED,
+                RuntimePhase.LEMMA_EXPANDED,
+                lemma_result.stop_reason,
+            )
             for expanded in lemma_result.generated_candidates:
                 if self._config.enable_tools:
                     expanded_result, _ = self._run_answer_type_check(
@@ -524,6 +603,13 @@ class MathForgeHarness:
                         item.candidate_id for item in lemma_result.generated_candidates
                     ],
                 )
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.LEMMA_EXPANDED,
+                RuntimePhase.REVERIFIED,
+                "expanded_candidates_reverified",
+            )
             if (
                 self._config.enable_proof_obligations
                 and session.problem_ir.problem_type in {"proof", "derivation"}
@@ -571,6 +657,13 @@ class MathForgeHarness:
                 ranking=[rank.candidate_id for rank in arbitration.ranks],
                 equivalence_clusters=arbitration.clusters,
             )
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.REVERIFIED,
+                RuntimePhase.ARBITRATED,
+                "candidate_selected",
+            )
             validation_errors = self._answer_validator.validate(candidate, session.problem_ir)
             trace.add(
                 "primary_completed",
@@ -582,6 +675,13 @@ class MathForgeHarness:
             final_response = self._formatter.format(candidate, session.problem_ir)
             if not final_response.strip():
                 raise ValueError("empty formatted response")
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.ARBITRATED,
+                RuntimePhase.FORMATTED,
+                "deterministic_format_completed",
+            )
             if (
                 self._config.enable_finalizer
                 and session.route_plan.use_llm_finalizer
@@ -626,6 +726,24 @@ class MathForgeHarness:
                     used_llm=False,
                     reason="soft_deadline",
                 )
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.FORMATTED,
+                RuntimePhase.FINALIZED,
+                (
+                    "llm_finalizer_considered"
+                    if self._config.enable_finalizer
+                    else "llm_finalizer_disabled"
+                ),
+            )
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.FINALIZED,
+                RuntimePhase.COMPLETED,
+                "solve_completed",
+            )
             trace.add(
                 "budget_summary",
                 model_calls=session.budget.used_calls,
@@ -634,6 +752,13 @@ class MathForgeHarness:
             )
             outcome = "primary"
         except Exception:  # The public contract requires a result on every path.
+            failed_phase = session.phase
+            transition = session.transition(
+                failed_phase,
+                RuntimePhase.FAILED,
+                reason="phase_failed",
+            )
+            trace.add("phase_transition", **transition)
             final_response = self._fallback.solve(normalized_problem)
             trace.add(
                 "budget_summary",
@@ -641,7 +766,17 @@ class MathForgeHarness:
                 estimated_tokens=session.budget.used_tokens,
                 outcome="fallback",
             )
-            trace.add("fallback_used", reason="primary_unavailable")
+            transition = session.transition(
+                RuntimePhase.FAILED,
+                RuntimePhase.FALLBACK_COMPLETED,
+                reason="fallback_completed",
+            )
+            trace.add("phase_transition", **transition)
+            trace.add(
+                "fallback_used",
+                reason="phase_failed",
+                failed_phase=failed_phase.value,
+            )
 
         return {
             "final_response": final_response,
@@ -650,8 +785,20 @@ class MathForgeHarness:
                 "model_calls": session.budget.used_calls,
                 "estimated_tokens": session.budget.used_tokens,
                 "outcome": outcome,
+                "final_phase": session.phase.value,
             },
         }
+
+    @staticmethod
+    def _transition(
+        session,
+        trace: TraceBuilder,
+        expected: RuntimePhase,
+        target: RuntimePhase,
+        reason: str,
+    ) -> None:
+        transition = session.transition(expected, target, reason=reason)
+        trace.add("phase_transition", **transition)
 
     def _build_role_context(
         self,

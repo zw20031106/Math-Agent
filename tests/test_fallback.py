@@ -8,7 +8,8 @@ def test_provider_failure_returns_non_empty_fallback() -> None:
     assert result["final_response"].strip()
     assert result["trace"][-1] == {
         "event": "fallback_used",
-        "reason": "primary_unavailable",
+        "reason": "phase_failed",
+        "failed_phase": "context_ready",
     }
 
 

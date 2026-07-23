@@ -258,7 +258,12 @@ class ClaimRepairService:
             version=original.version + 1,
             planned_method_family=original.planned_method_family,
             is_method_duplicate=original.is_method_duplicate,
+            contract_deviations=sorted(
+                set(original.contract_deviations)
+                | {f"repair:{item}" for item in patch.contract_deviations}
+            ),
         )
+        proposed.validate()
         return proposed, changed
 
     @staticmethod

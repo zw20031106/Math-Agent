@@ -1,14 +1,26 @@
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
-from dataclasses import fields
+from dataclasses import asdict, dataclass, fields, replace
+from hashlib import sha256
 import json
+import os
 from pathlib import Path
+from typing import Any, ClassVar
+
+
+CONFIG_SCHEMA_VERSION = "1.0"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+COMPETITION_CONFIG_PATH = REPO_ROOT / "config" / "competition.json"
+_METADATA_FIELDS = frozenset({"schema_version", "profile", "status"})
 
 
 @dataclass(frozen=True)
 class HarnessConfig:
+    SCHEMA_VERSION: ClassVar[str] = CONFIG_SCHEMA_VERSION
+
+    schema_version: str = CONFIG_SCHEMA_VERSION
+    profile: str = "custom"
+    status: str = "custom"
     model_max_concurrency: int = 4
     primary_temperature: float = 0.2
     primary_max_tokens: int = 4096
@@ -35,25 +47,179 @@ class HarnessConfig:
     enable_repair: bool = True
     enable_finalizer: bool = False
 
+    def __post_init__(self) -> None:
+        self.validate()
+
     @classmethod
-    def from_environment(cls) -> "HarnessConfig":
-        raw_concurrency = os.environ.get("MATHFORGE_MODEL_MAX_CONCURRENCY", "4")
-        try:
-            concurrency = max(1, int(raw_concurrency))
-        except ValueError:
-            concurrency = 4
-        use_mcp = os.environ.get("MATHFORGE_USE_MCP", "0").strip().lower() in {
-            "1",
-            "true",
-            "yes",
+    def setting_names(cls) -> set[str]:
+        return {item.name for item in fields(cls)} - _METADATA_FIELDS
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @property
+    def fingerprint(self) -> str:
+        canonical = json.dumps(
+            self.to_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return sha256(canonical).hexdigest()
+
+    def validate(self) -> None:
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported configuration schema version: {self.schema_version!r}"
+            )
+        if (
+            not isinstance(self.profile, str)
+            or not self.profile.strip()
+            or not isinstance(self.status, str)
+            or not self.status.strip()
+        ):
+            raise ValueError("configuration profile and status must be non-empty strings")
+
+        bool_fields = {
+            "use_mcp",
+            "enable_router",
+            "enable_skills",
+            "enable_alternatives",
+            "enable_tools",
+            "enable_evidence",
+            "enable_proof_obligations",
+            "enable_verifier",
+            "enable_memory",
+            "enable_lemma_loop",
+            "enable_rag",
+            "enable_repair",
+            "enable_finalizer",
         }
-        return cls(model_max_concurrency=concurrency, use_mcp=use_mcp)
+        for name in bool_fields:
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
+
+        integer_ranges = {
+            "model_max_concurrency": (1, 64),
+            "primary_max_tokens": (1, 65536),
+            "max_model_calls": (1, 64),
+            "skill_char_budget": (1, 200000),
+            "raw_context_max_chars": (256, 1000000),
+            "max_model_tokens": (1, 1000000),
+            "trace_max_chars": (256, 1000000),
+        }
+        for name, (minimum, maximum) in integer_ranges.items():
+            value = getattr(self, name)
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ValueError(
+                    f"{name} must be an integer in [{minimum}, {maximum}]"
+                )
+
+        if (
+            type(self.primary_temperature) not in {int, float}
+            or isinstance(self.primary_temperature, bool)
+            or not 0.0 <= float(self.primary_temperature) <= 2.0
+        ):
+            raise ValueError("primary_temperature must be a number in [0, 2]")
+
+        deadline_names = (
+            "soft_deadline_seconds",
+            "exploration_deadline_seconds",
+            "hard_deadline_seconds",
+            "deterministic_finalize_reserve_seconds",
+        )
+        for name in deadline_names:
+            value = getattr(self, name)
+            if type(value) not in {int, float} or float(value) <= 0:
+                raise ValueError(f"{name} must be a positive number")
+        if not (
+            self.soft_deadline_seconds
+            <= self.exploration_deadline_seconds
+            <= self.hard_deadline_seconds
+        ):
+            raise ValueError(
+                "deadlines must satisfy soft <= exploration <= hard"
+            )
+        if self.deterministic_finalize_reserve_seconds >= self.hard_deadline_seconds:
+            raise ValueError(
+                "deterministic_finalize_reserve_seconds must be below hard deadline"
+            )
+        if self.primary_max_tokens > self.max_model_tokens:
+            raise ValueError("primary_max_tokens must not exceed max_model_tokens")
+        if self.skill_char_budget > self.raw_context_max_chars:
+            raise ValueError("skill_char_budget must not exceed raw_context_max_chars")
+
+        dependencies = (
+            (
+                self.enable_verifier,
+                self.enable_evidence and self.enable_proof_obligations,
+                "enable_verifier requires enable_evidence and enable_proof_obligations",
+            ),
+            (
+                self.enable_repair,
+                self.enable_evidence and self.enable_tools,
+                "enable_repair requires enable_evidence and enable_tools",
+            ),
+            (
+                self.enable_lemma_loop,
+                self.enable_memory and self.enable_proof_obligations,
+                "enable_lemma_loop requires enable_memory and enable_proof_obligations",
+            ),
+            (
+                self.enable_rag,
+                self.enable_skills,
+                "enable_rag requires enable_skills",
+            ),
+            (
+                self.use_mcp,
+                self.enable_tools,
+                "use_mcp requires enable_tools",
+            ),
+        )
+        for enabled, satisfied, message in dependencies:
+            if enabled and not satisfied:
+                raise ValueError(message)
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "HarnessConfig":
+        if not isinstance(payload, dict):
+            raise ValueError("configuration must be a JSON object")
+        allowed = {item.name for item in fields(cls)}
+        unknown = set(payload) - allowed
+        if unknown:
+            raise ValueError(f"unknown configuration keys: {sorted(unknown)}")
+        for required in _METADATA_FIELDS:
+            if required not in payload:
+                raise ValueError(f"configuration is missing {required}")
+        return cls(**payload)
 
     @classmethod
     def from_json(cls, path: Path) -> "HarnessConfig":
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("configuration must be a JSON object")
-        allowed = {field.name for field in fields(cls)}
-        values = {key: value for key, value in payload.items() if key in allowed}
-        return cls(**values)
+        return cls.from_dict(payload)
+
+    @classmethod
+    def from_environment(
+        cls,
+        base: "HarnessConfig | None" = None,
+    ) -> "HarnessConfig":
+        configured = base or load_competition_config()
+        values: dict[str, Any] = {}
+        if "MATHFORGE_MODEL_MAX_CONCURRENCY" in os.environ:
+            raw = os.environ["MATHFORGE_MODEL_MAX_CONCURRENCY"]
+            try:
+                values["model_max_concurrency"] = int(raw)
+            except ValueError as error:
+                raise ValueError(
+                    "MATHFORGE_MODEL_MAX_CONCURRENCY must be an integer"
+                ) from error
+        if "MATHFORGE_USE_MCP" in os.environ:
+            raw = os.environ["MATHFORGE_USE_MCP"].strip().lower()
+            if raw not in {"0", "1", "false", "true"}:
+                raise ValueError("MATHFORGE_USE_MCP must be true or false")
+            values["use_mcp"] = raw in {"1", "true"}
+        return replace(configured, **values)
+
+
+def load_competition_config() -> HarnessConfig:
+    return HarnessConfig.from_json(COMPETITION_CONFIG_PATH)

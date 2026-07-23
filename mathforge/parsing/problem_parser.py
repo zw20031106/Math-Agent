@@ -35,7 +35,7 @@ class ProblemParser:
             risk_flags.append("unbalanced_latex")
         if problem_type in {"proof", "derivation"}:
             risk_flags.append("long_reasoning")
-        return ProblemIR(
+        parsed = ProblemIR(
             raw_problem=raw,
             normalized_problem=normalized,
             problem_type=problem_type,
@@ -47,6 +47,8 @@ class ProblemParser:
             options=options,
             risk_flags=risk_flags,
         )
+        parsed.validate()
+        return parsed
 
     @staticmethod
     def _problem_type(lowered: str, options: list[str]) -> str:

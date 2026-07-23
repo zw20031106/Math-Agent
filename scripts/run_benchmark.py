@@ -14,20 +14,29 @@ if str(ROOT) not in sys.path:
 
 from llm_client import InternChatClient  # noqa: E402
 from mathforge.benchmark import benchmark_record_to_dict, load_jsonl, run_benchmark  # noqa: E402
+from mathforge.agents.registry import PromptContractLoader, SkillRegistry  # noqa: E402
 from mathforge.config import HarnessConfig  # noqa: E402
+from mathforge.retrieval.retriever import Retriever  # noqa: E402
 from mathforge.runtime import MathForgeHarness  # noqa: E402
+from mathforge.tools.registry import ToolRegistry  # noqa: E402
 
 
-BENCHMARK_SCHEMA_VERSION = "2.1"
+BENCHMARK_SCHEMA_VERSION = "2.2"
 
 
 def build_benchmark_metadata(input_path: Path, config_path: Path) -> dict:
-    config_payload = json.loads(config_path.read_text(encoding="utf-8"))
+    config = HarnessConfig.from_json(config_path)
     return {
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
         "dataset_sha256": _file_sha256(input_path),
-        "config_sha256": _file_sha256(config_path),
-        "config_status": str(config_payload.get("status", "unspecified")),
+        "config_sha256": config.fingerprint,
+        "config_schema_version": config.schema_version,
+        "config_profile": config.profile,
+        "config_status": config.status,
+        "prompt_sha256": PromptContractLoader().fingerprint,
+        "skill_sha256": SkillRegistry().fingerprint,
+        "rag_sha256": Retriever().fingerprint,
+        "tool_sha256": ToolRegistry().fingerprint,
         "git_commit": _git_commit(),
     }
 

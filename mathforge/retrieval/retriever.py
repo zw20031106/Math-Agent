@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import sqlite3
 
+from mathforge.harness.fingerprints import file_fingerprint
 from mathforge.retrieval.schemas import KnowledgeCard, SearchHit
 
 
@@ -20,6 +21,10 @@ class Retriever:
     def __init__(self, database: Path | None = None, max_top_k: int = 5) -> None:
         self._database = database or Path(__file__).resolve().parents[2] / "data" / "math_knowledge.sqlite"
         self._max_top_k = max(1, max_top_k)
+
+    @property
+    def fingerprint(self) -> str:
+        return file_fingerprint(self._database)
 
     def retrieve(
         self,

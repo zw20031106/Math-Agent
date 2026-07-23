@@ -119,4 +119,6 @@ class SolverExecutor:
         candidate.planned_method_family = request.method_family
         if candidate.method.strip().lower() != request.method_family.strip().lower():
             candidate.parse_status = f"{candidate.parse_status}:method_contract_deviation"
+            candidate.contract_deviations.append("method:planned_method_family")
+        candidate.validate()
         return candidate

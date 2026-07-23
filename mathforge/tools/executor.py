@@ -37,6 +37,10 @@ class ToolExecutor:
     def default_timeout(self) -> float:
         return self._default_timeout
 
+    @property
+    def fingerprint(self) -> str:
+        return self._registry.fingerprint
+
     def execute(
         self,
         name: str,

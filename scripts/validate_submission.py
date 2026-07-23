@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.verify_baseline_files import verify  # noqa: E402
+from mathforge.config import load_competition_config  # noqa: E402
 from user_agent import ReasoningAgent  # noqa: E402
 
 
@@ -55,10 +56,22 @@ def validate(max_file_mb: float = 5.0) -> list[str]:
     return errors
 
 
+def validation_warnings() -> list[str]:
+    config = load_competition_config()
+    if config.status == "candidate-unvalidated":
+        return [
+            "WARNING: competition config is candidate-unvalidated; "
+            "benchmark evidence has not frozen it."
+        ]
+    return []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate a Math-Agent competition submission.")
     parser.add_argument("--max-file-mb", type=float, default=5.0)
     args = parser.parse_args()
+    for warning in validation_warnings():
+        print(warning)
     errors = validate(args.max_file_mb)
     if errors:
         print("\n".join(errors))

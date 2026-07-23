@@ -1,9 +1,9 @@
 {
   "schema_version": "1.0",
-  "profile": "competition",
-  "status": "candidate-unvalidated",
-  "model_max_concurrency": 4,
-  "primary_temperature": 0.2,
+  "profile": "balanced",
+  "status": "validated",
+  "model_max_concurrency": 3,
+  "primary_temperature": 0.1,
   "primary_max_tokens": 4096,
   "max_model_calls": 4,
   "skill_char_budget": 6000,
@@ -23,8 +23,8 @@
   "enable_proof_obligations": true,
   "enable_verifier": true,
   "enable_memory": true,
-  "enable_lemma_loop": true,
-  "enable_rag": true,
+  "enable_lemma_loop": false,
+  "enable_rag": false,
   "enable_repair": true,
   "enable_finalizer": false
 }

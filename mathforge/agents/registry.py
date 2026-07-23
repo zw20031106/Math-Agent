@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Iterable
 
 from mathforge.context.errors import ContextBudgetExceeded
+from mathforge.harness.fingerprints import content_tree_fingerprint
 
 
 FIXED_ROLES = (
@@ -61,6 +62,10 @@ class SkillRegistry:
     def __init__(self, root: Path | None = None) -> None:
         self._root = root or Path(__file__).resolve().parents[2] / "skills"
         self._skills = self._load()
+
+    @property
+    def fingerprint(self) -> str:
+        return content_tree_fingerprint(self._root)
 
     def _load(self) -> dict[str, SkillDefinition]:
         loaded: dict[str, SkillDefinition] = {}
@@ -131,6 +136,10 @@ class PromptContract:
 class PromptContractLoader:
     def __init__(self, root: Path | None = None) -> None:
         self._root = root or Path(__file__).resolve().parents[2] / "prompts"
+
+    @property
+    def fingerprint(self) -> str:
+        return content_tree_fingerprint(self._root)
 
     def load(self, role_directory: str) -> PromptContract:
         path = self._root / role_directory / "contract.md"
