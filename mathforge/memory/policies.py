@@ -1,17 +1,5 @@
 from __future__ import annotations
 
-
-PHYSICAL_BACKENDS = {
-    "working": "session",
-    "lemma": "session",
-    "evidence": "session",
-    "semantic": "static",
-    "procedural": "static",
-    "episodic": "experience",
-    "failure": "experience",
-    "raw": "session",
-}
-
 WRITE_PERMISSIONS = {
     "System": frozenset({"raw", "working", "lemma", "evidence"}),
     "RouterPlanner": frozenset({"working"}),
