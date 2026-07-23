@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 
-CONFIG_SCHEMA_VERSION = "1.0"
+CONFIG_SCHEMA_VERSION = "1.1"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPETITION_CONFIG_PATH = REPO_ROOT / "config" / "competition.json"
 _METADATA_FIELDS = frozenset({"schema_version", "profile", "status"})
@@ -33,7 +33,14 @@ class HarnessConfig:
     exploration_deadline_seconds: float = 780.0
     hard_deadline_seconds: float = 870.0
     deterministic_finalize_reserve_seconds: float = 5.0
+    model_call_start_margin_seconds: float = 10.0
     trace_max_chars: int = 12000
+    max_claims: int = 64
+    max_tool_calls: int = 32
+    max_isolated_tool_calls: int = 16
+    max_tool_seconds: float = 30.0
+    max_evidence_records: int = 256
+    max_prompt_chars_total: int = 200000
     enable_router: bool = True
     enable_skills: bool = True
     enable_alternatives: bool = True
@@ -107,6 +114,11 @@ class HarnessConfig:
             "raw_context_max_chars": (256, 1000000),
             "max_model_tokens": (1, 1000000),
             "trace_max_chars": (256, 1000000),
+            "max_claims": (1, 64),
+            "max_tool_calls": (1, 10000),
+            "max_isolated_tool_calls": (1, 10000),
+            "max_evidence_records": (1, 100000),
+            "max_prompt_chars_total": (256, 5000000),
         }
         for name, (minimum, maximum) in integer_ranges.items():
             value = getattr(self, name)
@@ -127,6 +139,7 @@ class HarnessConfig:
             "exploration_deadline_seconds",
             "hard_deadline_seconds",
             "deterministic_finalize_reserve_seconds",
+            "max_tool_seconds",
         )
         for name in deadline_names:
             value = getattr(self, name)
@@ -144,10 +157,35 @@ class HarnessConfig:
             raise ValueError(
                 "deterministic_finalize_reserve_seconds must be below hard deadline"
             )
+        if (
+            type(self.model_call_start_margin_seconds) not in {int, float}
+            or float(self.model_call_start_margin_seconds) < 0
+        ):
+            raise ValueError(
+                "model_call_start_margin_seconds must be a nonnegative number"
+            )
+        if (
+            self.deterministic_finalize_reserve_seconds
+            + self.model_call_start_margin_seconds
+            >= self.hard_deadline_seconds
+        ):
+            raise ValueError(
+                "model call start and finalize reserves must be below hard deadline"
+            )
         if self.primary_max_tokens > self.max_model_tokens:
             raise ValueError("primary_max_tokens must not exceed max_model_tokens")
         if self.skill_char_budget > self.raw_context_max_chars:
             raise ValueError("skill_char_budget must not exceed raw_context_max_chars")
+        if self.raw_context_max_chars > self.max_prompt_chars_total:
+            raise ValueError(
+                "raw_context_max_chars must not exceed max_prompt_chars_total"
+            )
+        if self.max_isolated_tool_calls > self.max_tool_calls:
+            raise ValueError(
+                "max_isolated_tool_calls must not exceed max_tool_calls"
+            )
+        if self.enable_verifier and self.max_model_calls < 2:
+            raise ValueError("enable_verifier requires at least two model calls")
 
         dependencies = (
             (

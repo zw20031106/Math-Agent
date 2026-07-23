@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from mathforge.harness.budget import CallBudget
 from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProofObligation
 from mathforge.tools.executor import ToolExecutor
 from mathforge.verification.equivalence import equivalence_clusters
@@ -48,10 +49,11 @@ class ArbitrationPolicy:
         obligations: dict[str, list[ProofObligation]],
         *,
         llm_arbiter: Callable[[list[CandidateSolution]], str] | None = None,
+        budget: CallBudget | None = None,
     ) -> ArbitrationResult:
         if not candidates:
             raise ValueError("at least one candidate is required")
-        clusters = equivalence_clusters(candidates, self._tools)
+        clusters = equivalence_clusters(candidates, self._tools, budget)
         candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
         cluster_by_id = {
             candidate_id: [candidate_by_id[item] for item in cluster]

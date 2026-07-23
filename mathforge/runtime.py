@@ -7,11 +7,13 @@ from time import perf_counter
 from mathforge.agents.registry import PromptContractLoader, SkillRegistry
 from mathforge.agents.router_planner import RouterPlanner
 from mathforge.config import HarnessConfig, load_competition_config
+from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.budget import CallBudget
+from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.fallback import FallbackSolver
 from mathforge.harness.fingerprints import request_fingerprint
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
-from mathforge.harness.orchestration import CandidateOrchestrator
+from mathforge.harness.orchestration import BranchFailure, CandidateOrchestrator
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
 from mathforge.harness.session import create_session
 from mathforge.harness.state import RuntimePhase
@@ -114,6 +116,15 @@ class MathForgeHarness:
                 deterministic_finalize_reserve_seconds=(
                     self._config.deterministic_finalize_reserve_seconds
                 ),
+                model_call_start_margin_seconds=(
+                    self._config.model_call_start_margin_seconds
+                ),
+                max_claims=self._config.max_claims,
+                max_tool_calls=self._config.max_tool_calls,
+                max_isolated_tool_calls=self._config.max_isolated_tool_calls,
+                max_tool_seconds=self._config.max_tool_seconds,
+                max_evidence_records=self._config.max_evidence_records,
+                max_prompt_chars_total=self._config.max_prompt_chars_total,
             ),
         )
         trace = TraceBuilder(session.trace_events, max_chars=self._config.trace_max_chars)
@@ -127,6 +138,7 @@ class MathForgeHarness:
         outcome = "fallback"
 
         try:
+            session.budget.ensure_stage("problem_parser")
             session.problem_ir = self._problem_parser.parse(normalized_problem)
             session.problem_ir.validate()
             blackboard = MemoryBlackboard(session.working_memory)
@@ -150,6 +162,18 @@ class MathForgeHarness:
             )
             router_context = None
             router_enabled = self._config.enable_router
+            potential_verifier = (
+                self._config.enable_verifier
+                and self._config.enable_evidence
+                and self._config.enable_proof_obligations
+            )
+            router_unreachable = (
+                router_enabled
+                and self._config.max_model_calls - session.budget.used_calls
+                <= 1 + int(potential_verifier)
+            )
+            if router_unreachable:
+                router_enabled = False
             try:
                 router_context = self._build_role_context(
                     session,
@@ -157,7 +181,7 @@ class MathForgeHarness:
                     trace,
                     role="RouterPlanner",
                 )
-            except ContextBudgetExceeded:
+            except (ContextBudgetExceeded, BudgetExceeded):
                 router_enabled = False
             session.route_plan = self._router.plan(
                 session.problem_ir,
@@ -172,7 +196,12 @@ class MathForgeHarness:
                     else None
                 ),
                 consume_call=(
-                    (lambda: session.budget.consume(optional=True))
+                    (
+                        lambda: session.budget.consume(
+                            stage="router",
+                            optional=True,
+                        )
+                    )
                     if router_enabled
                     else None
                 ),
@@ -180,26 +209,12 @@ class MathForgeHarness:
                     session.budget.record_tokens if router_enabled else None
                 ),
                 context_view=router_context,
+                record_prompt_chars=(
+                    session.budget.record_prompt_chars if router_enabled else None
+                ),
             )
             if not self._config.enable_alternatives:
                 session.route_plan = replace(session.route_plan, candidate_count=1)
-            if (
-                self._config.enable_verifier
-                and self._config.enable_evidence
-                and self._config.enable_proof_obligations
-                and session.problem_ir.problem_type in {"proof", "derivation"}
-            ):
-                candidate_capacity = max(
-                    1,
-                    self._config.max_model_calls - session.budget.used_calls - 1,
-                )
-                session.route_plan = replace(
-                    session.route_plan,
-                    candidate_count=min(
-                        session.route_plan.candidate_count,
-                        candidate_capacity,
-                    ),
-                )
             if not self._config.enable_lemma_loop:
                 session.route_plan = replace(session.route_plan, use_lemma_loop=False)
             if not self._config.enable_rag:
@@ -229,6 +244,45 @@ class MathForgeHarness:
                     use_lemma_loop=False,
                 )
                 trace.add("deadline_finalize", stage="before_fanout")
+            verifier_required = (
+                potential_verifier
+                and session.route_plan.risk_level in {"medium", "high"}
+            )
+            allocation = CallAllocationPlan.build(
+                max_calls=self._config.max_model_calls,
+                router_calls=session.budget.used_calls,
+                candidate_count=session.route_plan.candidate_count,
+                verifier_required=verifier_required,
+                repair_requested=(
+                    self._config.enable_repair
+                    and self._config.enable_evidence
+                    and session.budget.deadline.optional_work_allowed()
+                ),
+                lemma_requested=(
+                    self._config.enable_lemma_loop
+                    and session.route_plan.use_lemma_loop
+                ),
+                finalizer_requested=(
+                    self._config.enable_finalizer
+                    and session.route_plan.use_llm_finalizer
+                ),
+            )
+            session.budget.set_allocation_plan(allocation)
+            unreachable = list(allocation.unreachable_by_budget)
+            if router_unreachable:
+                unreachable.insert(0, "router")
+            session.route_plan = replace(
+                session.route_plan,
+                candidate_count=1 + allocation.alternatives,
+                use_lemma_loop=(
+                    session.route_plan.use_lemma_loop
+                    and allocation.lemma_reserve > 0
+                ),
+                use_llm_finalizer=(
+                    session.route_plan.use_llm_finalizer
+                    and allocation.finalizer_reserve > 0
+                ),
+            )
             if self._config.enable_memory:
                 blackboard.publish(
                     "System",
@@ -247,12 +301,16 @@ class MathForgeHarness:
                 session.route_plan.use_rag
                 and session.budget.deadline.optional_work_allowed()
             ):
+                session.budget.ensure_stage("rag", optional=True)
                 retrieval_hits = self._retriever.search(
                     session.problem_ir.normalized_problem,
                     subject=session.route_plan.primary_subject,
                     role="PrimarySolver",
                     top_k=3,
                 )
+                if session.budget.must_finalize():
+                    retrieval_hits = []
+                    trace.add("deadline_finalize", stage="after_rag")
                 cards = [hit.card for hit in retrieval_hits]
                 if cards:
                     rag_context = "\n\n".join(
@@ -285,9 +343,21 @@ class MathForgeHarness:
             trace.add(
                 "route_planned",
                 primary_subject=session.route_plan.primary_subject,
+                auxiliary_subject=session.route_plan.auxiliary_subject,
                 risk_level=session.route_plan.risk_level,
+                routing_confidence=session.route_plan.routing_confidence,
+                ambiguity_margin=session.route_plan.ambiguity_margin,
+                complexity_flags=session.route_plan.complexity_flags,
+                subject_candidates=session.problem_ir.subject_candidates,
                 selected_skills=session.route_plan.selected_skills,
                 method_families=session.route_plan.method_families,
+            )
+            trace.add(
+                "call_allocation_planned",
+                **{
+                    **allocation.to_dict(),
+                    "unreachable_by_budget": unreachable,
+                },
             )
             session.route_plan.validate()
             self._transition(
@@ -328,6 +398,21 @@ class MathForgeHarness:
                 max_tokens=self._config.primary_max_tokens,
                 context_views=solver_contexts,
             )
+            bounded_candidates = []
+            for candidate in fanout.candidates:
+                try:
+                    session.budget.record_claims(len(candidate.claims))
+                except BudgetExceeded:
+                    fanout.failures.append(
+                        BranchFailure(
+                            candidate.candidate_id,
+                            "claim_budget_exhausted",
+                        )
+                    )
+                else:
+                    bounded_candidates.append(candidate)
+            fanout.candidates = bounded_candidates
+            fanout.failures.sort(key=lambda item: item.candidate_id)
             session.candidates.extend(fanout.candidates)
             trace.add(
                 "candidate_fanout_completed",
@@ -352,7 +437,7 @@ class MathForgeHarness:
                 RuntimePhase.CANDIDATES_READY,
                 "candidate_fanout_completed",
             )
-            ledger = EvidenceLedger(session.evidence)
+            ledger = EvidenceLedger(session.evidence, session.budget)
             tool_results = []
             if self._config.enable_tools:
                 for item in fanout.candidates:
@@ -373,6 +458,7 @@ class MathForgeHarness:
                             ledger,
                             domains=session.problem_ir.domains,
                             assumptions=session.problem_ir.assumptions,
+                            budget=session.budget,
                         )
                         tool_results.extend(
                             {
@@ -401,6 +487,7 @@ class MathForgeHarness:
             if (
                 self._config.enable_repair
                 and self._config.enable_evidence
+                and allocation.repair_reserve > 0
                 and not session.budget.deadline.optional_work_allowed()
             ):
                 trace.add(
@@ -411,6 +498,7 @@ class MathForgeHarness:
             if (
                 self._config.enable_repair
                 and self._config.enable_evidence
+                and allocation.repair_reserve > 0
                 and session.budget.deadline.optional_work_allowed()
             ):
                 repair_service = ClaimRepairService()
@@ -649,6 +737,7 @@ class MathForgeHarness:
                 viable,
                 session.evidence,
                 session.proof_obligations,
+                budget=session.budget,
             )
             candidate = arbitration.selected
             trace.add(
@@ -748,6 +837,10 @@ class MathForgeHarness:
                 "budget_summary",
                 model_calls=session.budget.used_calls,
                 estimated_tokens=session.budget.used_tokens,
+                claims=session.budget.used_claims,
+                tool_calls=session.budget.used_tool_calls,
+                evidence_records=session.budget.used_evidence_records,
+                prompt_chars=session.budget.used_prompt_chars,
                 outcome="primary",
             )
             outcome = "primary"
@@ -764,6 +857,10 @@ class MathForgeHarness:
                 "budget_summary",
                 model_calls=session.budget.used_calls,
                 estimated_tokens=session.budget.used_tokens,
+                claims=session.budget.used_claims,
+                tool_calls=session.budget.used_tool_calls,
+                evidence_records=session.budget.used_evidence_records,
+                prompt_chars=session.budget.used_prompt_chars,
                 outcome="fallback",
             )
             transition = session.transition(
@@ -784,6 +881,12 @@ class MathForgeHarness:
             "run_metrics": {
                 "model_calls": session.budget.used_calls,
                 "estimated_tokens": session.budget.used_tokens,
+                "claims": session.budget.used_claims,
+                "tool_calls": session.budget.used_tool_calls,
+                "isolated_tool_calls": session.budget.used_isolated_tool_calls,
+                "tool_seconds": round(session.budget.used_tool_seconds, 6),
+                "evidence_records": session.budget.used_evidence_records,
+                "prompt_chars": session.budget.used_prompt_chars,
                 "outcome": outcome,
                 "final_phase": session.phase.value,
             },
@@ -812,6 +915,7 @@ class MathForgeHarness:
         focus_claim_ids: list[str] | None = None,
         final_answer: str = "",
     ):
+        session.budget.ensure_stage("context_compression")
         role_directory = _ROLE_CONTRACT_DIRECTORIES[role]
         contract_budget = self._contracts.load(role_directory).max_context_chars
         view_budget = min(
@@ -898,9 +1002,21 @@ class MathForgeHarness:
             "answer": candidate.final_answer,
             "answer_type": session.problem_ir.answer_type,
         }
+        timeout = session.budget.begin_tool_call(
+            isolated=self._tool_executor.is_isolated("answer_type_check"),
+            default_timeout=self._tool_executor.default_timeout,
+        )
         started = perf_counter()
-        result = self._tool_executor.execute("answer_type_check", arguments)
-        duration_ms = (perf_counter() - started) * 1000
+        try:
+            result = self._tool_executor.execute(
+                "answer_type_check",
+                arguments,
+                timeout=timeout,
+            )
+        finally:
+            duration_seconds = perf_counter() - started
+            session.budget.finish_tool_call(duration_seconds)
+        duration_ms = duration_seconds * 1000
         records = []
         if self._config.enable_evidence:
             records.append(
@@ -916,7 +1032,7 @@ class MathForgeHarness:
                     ),
                     domains=session.problem_ir.domains,
                     duration_ms=duration_ms,
-                    timeout_seconds=self._tool_executor.default_timeout,
+                    timeout_seconds=timeout,
                 )
             )
         return result, records
@@ -936,6 +1052,7 @@ class MathForgeHarness:
                 only_claim_ids=affected_claim_ids,
                 domains=session.problem_ir.domains,
                 assumptions=session.problem_ir.assumptions,
+                budget=session.budget,
             )
         )
         return records
@@ -984,6 +1101,7 @@ class MathForgeHarness:
                 ledger,
                 domains=session.problem_ir.domains,
                 assumptions=session.problem_ir.assumptions,
+                budget=session.budget,
             )
         return candidate
 

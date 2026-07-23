@@ -68,7 +68,7 @@ class VerifierSkepticAgent:
     ) -> BatchVerificationResult:
         payload = self._review_payload(problem, candidates, obligations)
         try:
-            budget.consume()
+            budget.consume(stage="verifier")
             visible_payload = (
                 json.dumps(
                     self._review_payload_from_view(context_view),
@@ -85,16 +85,20 @@ class VerifierSkepticAgent:
                 "\"status\":\"pass|fail|unknown\",\"description\":\"...\"}]}.\n\n"
                 f"Batch:\n{visible_payload}"
             )
-            response = self._provider.chat(
-                messages=self._contracts.messages(
-                    "verifier_skeptic",
-                    user,
-                    (
-                        "Challenge the supplied claims and required proof obligations. "
-                        "Return JSON only. A pass must name both a real claim_id and one or more "
-                        "obligation_ids supported by that claim. Unknown is not pass."
-                    ),
+            messages = self._contracts.messages(
+                "verifier_skeptic",
+                user,
+                (
+                    "Challenge the supplied claims and required proof obligations. "
+                    "Return JSON only. A pass must name both a real claim_id and one or more "
+                    "obligation_ids supported by that claim. Unknown is not pass."
                 ),
+            )
+            budget.record_prompt_chars(
+                sum(len(message["content"]) for message in messages)
+            )
+            response = self._provider.chat(
+                messages=messages,
                 temperature=0.0,
                 max_tokens=max_tokens,
                 deadline=budget.deadline,

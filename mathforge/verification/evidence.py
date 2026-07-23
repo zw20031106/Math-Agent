@@ -6,6 +6,8 @@ import re
 from time import perf_counter
 from uuid import uuid4
 
+from mathforge.harness.budget import CallBudget
+from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.schemas import EvidenceRecord
 from mathforge.tools.registry import ToolResult
 from mathforge.tools.executor import ToolExecutor
@@ -18,8 +20,17 @@ from mathforge.verification.capabilities import (
 
 
 class EvidenceLedger:
-    def __init__(self, records: list[EvidenceRecord] | None = None) -> None:
+    def __init__(
+        self,
+        records: list[EvidenceRecord] | None = None,
+        budget: CallBudget | None = None,
+    ) -> None:
         self._records = records if records is not None else []
+        self._budget = budget
+
+    def _reserve_record(self) -> None:
+        if self._budget is not None:
+            self._budget.record_evidence()
 
     @property
     def records(self) -> list[EvidenceRecord]:
@@ -37,6 +48,7 @@ class EvidenceLedger:
         duration_ms: float | None = None,
         timeout_seconds: float | None = None,
     ) -> EvidenceRecord:
+        self._reserve_record()
         invocation = _tool_invocation(
             result,
             arguments=arguments,
@@ -69,6 +81,7 @@ class EvidenceLedger:
         status: str,
         description: str,
     ) -> EvidenceRecord:
+        self._reserve_record()
         record = EvidenceRecord(
             evidence_id=f"ev-{uuid4().hex[:12]}",
             candidate_id=candidate_id,
@@ -94,6 +107,7 @@ class EvidenceLedger:
         claim_id: str,
         check_suggestion: str,
     ) -> EvidenceRecord:
+        self._reserve_record()
         record = EvidenceRecord(
             evidence_id=f"ev-{uuid4().hex[:12]}",
             candidate_id=candidate_id,
@@ -133,6 +147,7 @@ class ClaimEvidenceVerifier:
         only_claim_ids: list[str] | None = None,
         domains: dict[str, str] | None = None,
         assumptions: list[str] | None = None,
+        budget: CallBudget | None = None,
     ) -> list[EvidenceRecord]:
         allowed = set(only_claim_ids) if only_claim_ids is not None else None
         effective_assumptions = list(
@@ -146,13 +161,15 @@ class ClaimEvidenceVerifier:
             if tool_name is None:
                 claim.verification_state = ClaimVerificationState.UNKNOWN.value
                 if claim.check_type.strip().lower() != "reasoning":
-                    records.append(
-                        ledger.record_unknown_check(
+                    try:
+                        record = ledger.record_unknown_check(
                             candidate_id=candidate.candidate_id,
                             claim_id=claim.claim_id,
                             check_suggestion=claim.check_type,
                         )
-                    )
+                    except BudgetExceeded:
+                        break
+                    records.append(record)
                 continue
             arguments = self._arguments(
                 candidate,
@@ -164,19 +181,39 @@ class ClaimEvidenceVerifier:
             if arguments is None:
                 claim.verification_state = ClaimVerificationState.UNKNOWN.value
                 continue
+            timeout = self._tools.default_timeout
+            if budget is not None:
+                try:
+                    timeout = budget.begin_tool_call(
+                        isolated=self._tools.is_isolated(tool_name),
+                        default_timeout=self._tools.default_timeout,
+                    )
+                except BudgetExceeded:
+                    break
             started = perf_counter()
-            result = self._tools.execute(tool_name, arguments)
-            duration_ms = (perf_counter() - started) * 1000
-            record = ledger.record_tool_result(
-                candidate_id=candidate.candidate_id,
-                claim_id=claim.claim_id,
-                result=result,
-                arguments=arguments,
-                assumptions=effective_assumptions,
-                domains=domains,
-                duration_ms=duration_ms,
-                timeout_seconds=self._tools.default_timeout,
-            )
+            try:
+                result = self._tools.execute(
+                    tool_name,
+                    arguments,
+                    timeout=timeout,
+                )
+            finally:
+                duration_seconds = perf_counter() - started
+                if budget is not None:
+                    budget.finish_tool_call(duration_seconds)
+            try:
+                record = ledger.record_tool_result(
+                    candidate_id=candidate.candidate_id,
+                    claim_id=claim.claim_id,
+                    result=result,
+                    arguments=arguments,
+                    assumptions=effective_assumptions,
+                    domains=domains,
+                    duration_ms=duration_seconds * 1000,
+                    timeout_seconds=timeout,
+                )
+            except BudgetExceeded:
+                break
             records.append(record)
             if result.status == "pass":
                 claim.verification_state = result.claim_state

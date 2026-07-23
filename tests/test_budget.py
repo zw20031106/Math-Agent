@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import BudgetExceeded
 
@@ -30,3 +31,58 @@ def test_deadline_order_and_exploration_cutoff(monkeypatch):
     assert not budget.must_finalize()
     monkeypatch.setattr(budget.deadline, "elapsed_seconds", lambda: 2.75)
     assert budget.must_finalize()
+
+
+def test_session_resource_budgets_are_shared_and_bounded():
+    budget = CallBudget(
+        2,
+        max_claims=3,
+        max_tool_calls=2,
+        max_isolated_tool_calls=1,
+        max_tool_seconds=0.1,
+        max_evidence_records=2,
+        max_prompt_chars_total=10,
+    )
+    budget.record_claims(3)
+    with pytest.raises(BudgetExceeded, match="claim"):
+        budget.record_claims(1)
+
+    budget.record_prompt_chars(10)
+    with pytest.raises(BudgetExceeded, match="prompt"):
+        budget.record_prompt_chars(1)
+
+    timeout = budget.begin_tool_call(isolated=True, default_timeout=3.0)
+    assert 0 < timeout <= 0.1
+    budget.finish_tool_call(0.08)
+    with pytest.raises(BudgetExceeded, match="isolated"):
+        budget.begin_tool_call(isolated=True, default_timeout=3.0)
+
+    budget.record_evidence(2)
+    with pytest.raises(BudgetExceeded, match="evidence"):
+        budget.record_evidence(1)
+
+
+def test_call_allocation_protects_required_verifier_from_optional_stages():
+    plan = CallAllocationPlan.build(
+        max_calls=3,
+        router_calls=0,
+        candidate_count=3,
+        verifier_required=True,
+        repair_requested=True,
+        lemma_requested=True,
+        finalizer_requested=False,
+    )
+    assert plan.primary == 1
+    assert plan.alternatives == 1
+    assert plan.verifier == 1
+    assert plan.repair_reserve == 0
+    assert {"repair", "lemma"} <= set(plan.unreachable_by_budget)
+
+    budget = CallBudget(3)
+    budget.set_allocation_plan(plan)
+    budget.consume(stage="primary")
+    budget.consume(stage="alternative", optional=True)
+    with pytest.raises(BudgetExceeded, match="repair"):
+        budget.consume(stage="repair", optional=True)
+    budget.consume(stage="verifier")
+    assert budget.used_calls == 3

@@ -3,6 +3,7 @@ JUDGE_EVENTS = frozenset(
         "session_started",
         "problem_parsed",
         "route_planned",
+        "call_allocation_planned",
         "retrieval_completed",
         "candidate_fanout_completed",
         "hard_evidence_gate",

@@ -164,6 +164,78 @@ def test_runtime_reserves_one_call_for_verifier_after_router():
     assert budget["model_calls"] == 4
 
 
+class RepairPressureProofClient:
+    def __init__(self) -> None:
+        self.roles: list[str] = []
+
+    def chat(self, *, messages, temperature, max_tokens):
+        del temperature, max_tokens
+        role = messages[0]["content"]
+        self.roles.append(role)
+        if role.startswith("You are VerifierSkeptic"):
+            batch = json.loads(messages[-1]["content"].split("Batch:\n", 1)[1])
+            findings = [
+                {
+                    "candidate_id": candidate["candidate_id"],
+                    "claim_id": obligation["kind"],
+                    "obligation_ids": [obligation["obligation_id"]],
+                    "status": "pass",
+                }
+                for candidate in batch["candidates"]
+                for obligation in candidate["obligations"]
+            ]
+            return json.dumps({"findings": findings})
+        if role.startswith("You are PrimarySolver"):
+            claims = [
+                {
+                    "claim_id": "failed",
+                    "statement": "x = x + 1",
+                    "check_type": "symbolic_equivalence",
+                }
+            ]
+        else:
+            claims = [
+                {
+                    "claim_id": kind,
+                    "statement": f"{kind}: supported",
+                    "check_type": kind,
+                }
+                for kind in ("definition", "sufficiency", "boundary")
+            ]
+        return json.dumps(
+            {
+                "method": "direct",
+                "solution_text": "Complete alternative proof.",
+                "final_answer": "QED",
+                "claims": claims,
+            }
+        )
+
+
+def test_optional_repair_cannot_consume_required_verifier_call():
+    client = RepairPressureProofClient()
+    config = replace(
+        _proof_config(),
+        max_model_calls=3,
+        model_max_concurrency=2,
+        enable_alternatives=True,
+        enable_tools=True,
+        enable_repair=True,
+    )
+    result = MathForgeHarness(client, config).solve("Prove that x equals x", {})
+
+    assert any(role.startswith("You are AlternativeSolver") for role in client.roles)
+    assert any(role.startswith("You are VerifierSkeptic") for role in client.roles)
+    assert not any(role.startswith("You are RepairAgent") for role in client.roles)
+    allocation = next(
+        event for event in result["trace"] if event["event"] == "call_allocation_planned"
+    )
+    assert allocation["verifier"] == 1
+    assert allocation["repair_reserve"] == 0
+    assert "repair" in allocation["unreachable_by_budget"]
+    assert result["run_metrics"]["model_calls"] == 3
+
+
 class SyntaxOnlyProofClient:
     def chat(self, *, messages, temperature, max_tokens):
         del messages, temperature, max_tokens

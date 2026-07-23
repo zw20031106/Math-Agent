@@ -1010,10 +1010,32 @@ S1（C05/C08/C09/C10）已完成工程实现：
 详细实现和验收记录见
 `docs/S1_IMPLEMENTATION_STATUS_2026-07-23.md`。
 
-## 15. 下一步
+## 15. S2 实施状态
 
-下一开发阶段为 S2（C11/C12/C13/C14）：Router 校准、派生字段一致性、
-Claim/tool/context 总预算、Deadline 全链路覆盖和 CallAllocationPlan。
+S2（C11/C12/C13/C14）已完成工程实现：
+
+1. Router 已分离 confidence、ambiguity margin 和 complexity，并持久化
+   `ProblemIR.subject_candidates`；
+2. 同分或近同分高置信领域会保留 auxiliary；
+3. 最终 risk 通过唯一纯函数重算 candidate、round、RAG、Lemma 和
+   Finalizer 派生字段；
+4. 新增 7 条人工标注路由校准集；
+5. 配置 Schema 升级至 1.1，并完整加入 Claim、Tool、隔离 Tool、Tool
+   秒数、Evidence 和 Prompt 总预算；
+6. Parser、RAG、Context、模型、Direct/MCP/隔离 Tool 与仲裁等价检查共享
+   Deadline；
+7. Runtime 在路由后建立 CallAllocationPlan，必选 Verifier 配额不会被
+   较早的可选 Repair 抢占；
+8. Feature 容量不可达时，Trace 记录 `unreachable_by_budget`。
+
+详细实现和验收记录见
+`docs/S2_IMPLEMENTATION_STATUS_2026-07-23.md`。
+
+## 16. 下一步
+
+下一开发阶段为 S3（C15–C19、C23）：Lemma-only 第二轮上下文、
+expanded candidate 全链路重验、namespaced ClaimGraph、Repair 依赖变更
+闭包、assumptions-aware 等价和结构化方法独立性。
 
 `config/competition.json` 仍保持 `candidate-unvalidated`；在真实重复消融前
 不得标记 frozen，也不启动最终 A0–A10 配置结论。

@@ -43,7 +43,7 @@ class LLMFinalizer:
         context_view: RoleContextView | None = None,
     ) -> FinalizationResult:
         try:
-            budget.consume(optional=True)
+            budget.consume(stage="finalizer", optional=True)
             selected = (
                 f"Authorized finalizer context:\n{context_view.to_prompt_json()}"
                 if context_view is not None
@@ -53,15 +53,19 @@ class LLMFinalizer:
                 f"Problem:\n{problem.normalized_problem}\n\n{selected}\n\n"
                 f"Exact final answer (must not change): {candidate.final_answer}"
             )
-            response = self._provider.chat(
-                messages=self._contracts.messages(
-                    "finalizer",
-                    user,
-                    (
-                        "Improve exposition only. Do not introduce new conclusions or "
-                        "assumptions. Preserve the exact final answer. Return CandidateSolution JSON."
-                    ),
+            messages = self._contracts.messages(
+                "finalizer",
+                user,
+                (
+                    "Improve exposition only. Do not introduce new conclusions or "
+                    "assumptions. Preserve the exact final answer. Return CandidateSolution JSON."
                 ),
+            )
+            budget.record_prompt_chars(
+                sum(len(message["content"]) for message in messages)
+            )
+            response = self._provider.chat(
+                messages=messages,
                 temperature=0.0,
                 max_tokens=max_tokens,
                 deadline=budget.deadline,
@@ -69,6 +73,7 @@ class LLMFinalizer:
             if budget.deadline.must_finalize():
                 return FinalizationResult(deterministic_text, False, "finalize_cutoff")
             budget.record_tokens(max(1, len(response) // 4))
+            budget.ensure_stage("solution_parser")
             finalized = self._parser.parse(
                 response,
                 candidate_id=f"{candidate.candidate_id}-final",

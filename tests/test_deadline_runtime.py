@@ -53,6 +53,7 @@ def _short_budget(max_calls: int = 2) -> CallBudget:
         exploration_deadline_seconds=0.06,
         hard_deadline_seconds=0.1,
         deterministic_finalize_reserve_seconds=0.02,
+        model_call_start_margin_seconds=0.0,
     )
 
 
@@ -64,6 +65,7 @@ def _short_config() -> HarnessConfig:
         exploration_deadline_seconds=0.06,
         hard_deadline_seconds=0.1,
         deterministic_finalize_reserve_seconds=0.02,
+        model_call_start_margin_seconds=0.0,
         enable_router=False,
         enable_skills=False,
         enable_alternatives=True,
@@ -100,6 +102,22 @@ def test_deadline_controller_reserves_finalize_time_and_closes_optional_work():
     budget.deadline._started_at -= 0.031
     with pytest.raises(BudgetExceeded):
         budget.consume(optional=True)
+
+
+def test_model_start_margin_blocks_new_calls_but_allows_local_finalization():
+    now = [0.0]
+    deadline = DeadlineController(
+        soft_deadline_seconds=1.0,
+        exploration_deadline_seconds=1.0,
+        hard_deadline_seconds=1.0,
+        deterministic_finalize_reserve_seconds=0.1,
+        model_call_start_margin_seconds=0.2,
+        clock=lambda: now[0],
+    )
+    now[0] = 0.71
+    assert deadline.can_start_stage()
+    assert not deadline.can_start_model_call()
+    assert not deadline.must_finalize()
 
 
 def test_fanout_returns_without_waiting_for_slow_unfinished_branches():

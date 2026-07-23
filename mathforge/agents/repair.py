@@ -41,7 +41,7 @@ class RepairAgent:
             if record.candidate_id == candidate.candidate_id
             and record.claim_id in affected_claim_ids
         ]
-        budget.consume(optional=True)
+        budget.consume(stage="repair", optional=True)
         user = (
             f"Problem:\n{problem.normalized_problem}\n\n"
             + (
@@ -53,15 +53,19 @@ class RepairAgent:
                 )
             )
         )
-        response = self._provider.chat(
-            messages=self._contracts.messages(
-                "repair",
-                user,
-                (
-                    "Repair only the supplied failed claim impact closure. "
-                    "Return CandidateSolution JSON with replacement claims."
-                ),
+        messages = self._contracts.messages(
+            "repair",
+            user,
+            (
+                "Repair only the supplied failed claim impact closure. "
+                "Return CandidateSolution JSON with replacement claims."
             ),
+        )
+        budget.record_prompt_chars(
+            sum(len(message["content"]) for message in messages)
+        )
+        response = self._provider.chat(
+            messages=messages,
             temperature=0.1,
             max_tokens=max_tokens,
             deadline=budget.deadline,
@@ -69,6 +73,7 @@ class RepairAgent:
         if budget.deadline.must_finalize():
             raise RuntimeError("repair response arrived after finalize cutoff")
         budget.record_tokens(max(1, len(response) // 4))
+        budget.ensure_stage("solution_parser")
         return self._parser.parse(
             response,
             candidate_id=f"{candidate.candidate_id}-v{candidate.version + 1}",

@@ -5,7 +5,12 @@ import json
 import re
 from typing import Any
 
-from mathforge.harness.schemas import CandidateSolution, Claim
+from mathforge.harness.schemas import (
+    MAX_CLAIMS,
+    CandidateSolution,
+    Claim,
+    SchemaValidationError,
+)
 from mathforge.verification.capabilities import derive_claim_kind
 
 
@@ -104,6 +109,8 @@ class SolutionParser:
         if not isinstance(raw_claims, list):
             deviations.append("claims:type")
             raw_claims = []
+        if len(raw_claims) > MAX_CLAIMS:
+            raise SchemaValidationError(f"claim count exceeds {MAX_CLAIMS}")
         for index, item in enumerate(raw_claims):
             prefix = f"claims[{index}]"
             if not isinstance(item, dict):

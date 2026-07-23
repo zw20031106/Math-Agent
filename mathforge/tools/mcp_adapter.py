@@ -14,7 +14,13 @@ class StdioMCPAdapter:
         self._timeout = timeout
         self._repo_root = Path(__file__).resolve().parents[2]
 
-    def execute(self, name: str, arguments: dict[str, Any]) -> ToolResult:
+    def execute(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> ToolResult:
         request = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -28,7 +34,11 @@ class StdioMCPAdapter:
             text=True,
             encoding="utf-8",
             cwd=self._repo_root,
-            timeout=self._timeout,
+            timeout=(
+                self._timeout
+                if timeout is None
+                else min(self._timeout, max(0.001, timeout))
+            ),
             check=False,
         )
         if completed.returncode != 0:

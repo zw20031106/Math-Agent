@@ -1,0 +1,44 @@
+[
+  {
+    "problem": "Solve the polynomial equation x^2 - 1 = 0.",
+    "primary_subject": "algebra",
+    "auxiliary_subject": null,
+    "risk_level": "low"
+  },
+  {
+    "problem": "Find the eigenvalue of this matrix.",
+    "primary_subject": "linear-algebra",
+    "auxiliary_subject": null,
+    "risk_level": "low"
+  },
+  {
+    "problem": "Use probability and random variables with a matrix and eigenvalue.",
+    "primary_subject": "linear-algebra",
+    "auxiliary_subject": "probability",
+    "risk_level": "medium"
+  },
+  {
+    "problem": "Evaluate the integral using a derivative identity.",
+    "primary_subject": "calculus",
+    "auxiliary_subject": null,
+    "risk_level": "low"
+  },
+  {
+    "problem": "Determine whether this prime satisfies the modulo condition.",
+    "primary_subject": "number-theory",
+    "auxiliary_subject": null,
+    "risk_level": "low"
+  },
+  {
+    "problem": "Solve the graph recurrence by counting its configurations.",
+    "primary_subject": "discrete-math",
+    "auxiliary_subject": "combinatorics",
+    "risk_level": "medium"
+  },
+  {
+    "problem": "Prove that there exists a unique prime with the stated property.",
+    "primary_subject": "number-theory",
+    "auxiliary_subject": null,
+    "risk_level": "high"
+  }
+]

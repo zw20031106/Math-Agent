@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from mathforge.agents.registry import PromptContractLoader, SkillRegistry
-from mathforge.agents.router_planner import RouterPlanner
+from mathforge.agents.router_planner import (
+    RouterPlanner,
+    RouterRuleEngine,
+    derive_route_policy,
+)
 from mathforge.parsing.problem_parser import ProblemParser
 
 
@@ -52,6 +57,58 @@ def test_ambiguous_router_records_response_tokens():
         record_tokens=recorded_tokens.append,
     )
     assert recorded_tokens == [2]
+
+
+def test_equal_high_confidence_domains_produce_auxiliary_and_medium_risk():
+    problem = ProblemParser().parse(
+        "Use probability and random variables with a matrix and eigenvalue."
+    )
+    plan = RouterRuleEngine().plan(problem)
+
+    assert plan.primary_subject == "linear-algebra"
+    assert plan.auxiliary_subject == "probability"
+    assert plan.risk_level == "medium"
+    assert problem.subject_candidates[:2] == [
+        ("linear-algebra", 0.88),
+        ("probability", 0.88),
+    ]
+
+
+def test_final_risk_recomputes_every_derived_route_field():
+    policy = derive_route_policy("high", "calculation")
+    assert policy.candidate_count == 3
+    assert policy.max_reasoning_rounds == 2
+    assert policy.use_rag is True
+    assert policy.use_lemma_loop is True
+
+    problem = ProblemParser().parse("solve this problem")
+    plan = RouterPlanner().plan(
+        problem,
+        llm_chat=lambda **_: (
+            '{"primary_subject":"general-math","risk_level":"high"}'
+        ),
+        consume_call=lambda: None,
+    )
+    assert plan.risk_level == "high"
+    assert plan.candidate_count == policy.candidate_count
+    assert plan.max_reasoning_rounds == policy.max_reasoning_rounds
+    assert plan.use_rag == policy.use_rag
+    assert plan.use_lemma_loop == policy.use_lemma_loop
+
+
+def test_router_matches_the_manually_labeled_calibration_set():
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "data"
+        / "router_calibration.json"
+    )
+    cases = json.loads(path.read_text(encoding="utf-8"))
+    router = RouterRuleEngine()
+    for case in cases:
+        plan = router.plan(ProblemParser().parse(case["problem"]))
+        assert plan.primary_subject == case["primary_subject"]
+        assert plan.auxiliary_subject == case["auxiliary_subject"]
+        assert plan.risk_level == case["risk_level"]
 
 
 def test_all_prompt_contracts_are_statically_valid():

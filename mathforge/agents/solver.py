@@ -98,9 +98,19 @@ class SolverExecutor:
         max_tokens: int,
         optional: bool = False,
     ) -> CandidateSolution:
-        budget.consume(optional=optional)
+        if request.candidate_id.startswith("lemma-round-"):
+            stage = "lemma"
+        elif solver.role == "PrimarySolver":
+            stage = "primary"
+        else:
+            stage = "alternative"
+        budget.consume(stage=stage, optional=optional)
+        messages = solver.build_messages(request)
+        budget.record_prompt_chars(
+            sum(len(message["content"]) for message in messages)
+        )
         response = self._provider.chat(
-            messages=solver.build_messages(request),
+            messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             deadline=budget.deadline,
@@ -110,6 +120,7 @@ class SolverExecutor:
         if budget.deadline.must_finalize():
             raise BudgetExceeded("solver response arrived after finalize cutoff")
         budget.record_tokens(max(1, len(response) // 4))
+        budget.ensure_stage("solution_parser")
         candidate = self._parser.parse(
             response,
             candidate_id=request.candidate_id,

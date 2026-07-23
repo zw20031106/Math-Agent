@@ -50,6 +50,10 @@ def test_config_rejects_unknown_keys_string_booleans_and_ranges():
         HarnessConfig.from_dict({**valid, "enable_tools": "false"})
     with pytest.raises(ValueError, match="max_model_calls"):
         HarnessConfig.from_dict({**valid, "max_model_calls": 0})
+    with pytest.raises(ValueError, match="max_claims"):
+        HarnessConfig.from_dict({**valid, "max_claims": 0})
+    with pytest.raises(ValueError, match="max_tool_seconds"):
+        HarnessConfig.from_dict({**valid, "max_tool_seconds": 0})
 
 
 @pytest.mark.parametrize(
@@ -59,6 +63,7 @@ def test_config_rejects_unknown_keys_string_booleans_and_ranges():
             "enable_verifier": True,
             "enable_evidence": False,
             "enable_proof_obligations": True,
+            "max_model_calls": 2,
         },
         {
             "enable_repair": True,
@@ -77,6 +82,16 @@ def test_config_rejects_unknown_keys_string_booleans_and_ranges():
 def test_invalid_feature_dependencies_fail_at_construction(overrides):
     with pytest.raises(ValueError, match="requires"):
         _minimal_config(**overrides)
+
+
+def test_required_verifier_must_be_reachable_by_model_call_budget():
+    with pytest.raises(ValueError, match="at least two model calls"):
+        _minimal_config(
+            enable_verifier=True,
+            enable_evidence=True,
+            enable_proof_obligations=True,
+            max_model_calls=1,
+        )
 
 
 def test_named_profiles_are_versioned_and_fully_expanded():

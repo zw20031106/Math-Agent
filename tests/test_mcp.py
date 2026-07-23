@@ -36,7 +36,8 @@ def test_direct_and_stdio_mcp_results_are_equal():
 
 
 class FailingAdapter:
-    def execute(self, name, arguments):
+    def execute(self, name, arguments, *, timeout=None):
+        del timeout
         raise RuntimeError("offline")
 
 

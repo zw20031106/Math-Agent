@@ -162,9 +162,9 @@ def test_candidate_schema_round_trips_with_explicit_version():
 def test_problem_and_route_contracts_round_trip_without_loose_dicts():
     problem = ProblemParser().parse("Solve x + 1 = 2")
     problem.validate()
-    restored_problem = ProblemIR.from_dict(problem.to_dict())
-    route = RouterRuleEngine().plan(restored_problem)
+    route = RouterRuleEngine().plan(problem)
     route.validate()
+    restored_problem = ProblemIR.from_dict(problem.to_dict())
     restored_route = RoutePlan.from_dict(route.to_dict())
 
     assert restored_problem.to_dict() == problem.to_dict()

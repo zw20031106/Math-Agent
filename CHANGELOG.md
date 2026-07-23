@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### S2
+
+- Separated Router confidence, ambiguity margin, and complexity signals; close
+  high-confidence domains now retain an auxiliary route and populate
+  `ProblemIR.subject_candidates`.
+- Added one pure risk-policy derivation for candidate count, reasoning rounds,
+  RAG, lemma-loop, and finalizer fields, plus a manually labeled routing
+  calibration set.
+- Added per-session Claim, Tool, isolated Tool, Tool-time, Evidence, and total
+  Prompt-character budgets with usage in run metrics and terminal summaries.
+- Extended the shared Deadline across parser, RAG, context compression, Direct
+  tools, isolated tools, MCP, and arbitration equivalence checks; model starts
+  now preserve a configurable worst-case margin.
+- Added an explicit CallAllocationPlan for Router, Primary, Alternatives,
+  Verifier, Repair, Lemma, and Finalizer calls. Required Verifier capacity can
+  no longer be consumed by an earlier optional Repair.
+
 ### S1
 
 - Added versioned, validated ProblemIR, RoutePlan, Claim, and

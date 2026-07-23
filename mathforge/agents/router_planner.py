@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from mathforge.agents.registry import PromptContractLoader
@@ -45,6 +45,36 @@ _METHOD_FAMILIES: dict[str, tuple[str, str, str]] = {
 }
 
 
+@dataclass(frozen=True)
+class RoutePolicy:
+    candidate_count: int
+    max_reasoning_rounds: int
+    use_rag: bool
+    use_lemma_loop: bool
+    use_llm_finalizer: bool
+
+
+@dataclass(frozen=True)
+class RouteAnalysis:
+    subject_candidates: list[tuple[str, float]]
+    confidence: float
+    ambiguity_margin: float
+    complexity_flags: list[str]
+    risk_level: str
+
+
+def derive_route_policy(risk_level: str, problem_type: str) -> RoutePolicy:
+    if risk_level not in {"low", "medium", "high"}:
+        raise ValueError(f"unsupported risk level: {risk_level}")
+    return RoutePolicy(
+        candidate_count={"low": 1, "medium": 2, "high": 3}[risk_level],
+        max_reasoning_rounds=2 if risk_level == "high" else 1,
+        use_rag=risk_level in {"medium", "high"},
+        use_lemma_loop=risk_level == "high",
+        use_llm_finalizer=problem_type in {"proof", "explanation"},
+    )
+
+
 def method_families_for(subject: str, problem_type: str) -> list[str]:
     families = list(_METHOD_FAMILIES.get(subject, _METHOD_FAMILIES["general-math"]))
     if problem_type == "proof" and "contradiction" not in " ".join(families):
@@ -59,17 +89,45 @@ class RouterRuleEngine:
         for subject, keywords in _SUBJECT_KEYWORDS.items():
             hits = sum(keyword in lowered for keyword in keywords)
             if hits:
-                scores.append((subject, min(0.95, 0.72 + 0.08 * hits)))
+                scores.append((subject, round(min(0.95, 0.72 + 0.08 * hits), 2)))
         return sorted(scores, key=lambda item: (-item[1], item[0])) or [("general-math", 0.4)]
 
-    def plan(self, problem: ProblemIR) -> RoutePlan:
+    def analyze(self, problem: ProblemIR) -> RouteAnalysis:
         ranked = self.rank(problem)
+        confidence = ranked[0][1]
+        ambiguity_margin = (
+            round(confidence - ranked[1][1], 4) if len(ranked) > 1 else 1.0
+        )
+        complexity_flags = self._complexity_flags(
+            problem,
+            mixed_domain=len(ranked) > 1 and ambiguity_margin <= 0.12,
+        )
+        if "long_reasoning" in problem.risk_flags or len(complexity_flags) >= 3:
+            risk = "high"
+        elif complexity_flags or confidence < 0.75:
+            risk = "medium"
+        else:
+            risk = "low"
+        return RouteAnalysis(
+            subject_candidates=ranked,
+            confidence=confidence,
+            ambiguity_margin=ambiguity_margin,
+            complexity_flags=complexity_flags,
+            risk_level=risk,
+        )
+
+    def plan(self, problem: ProblemIR) -> RoutePlan:
+        analysis = self.analyze(problem)
+        ranked = analysis.subject_candidates
+        problem.subject_candidates = list(ranked)
+        problem.validate()
         primary, top_score = ranked[0]
         auxiliary = None
-        if len(ranked) > 1 and top_score < 0.75 and top_score - ranked[1][1] < 0.15:
+        if len(ranked) > 1 and analysis.ambiguity_margin <= 0.12:
             auxiliary = ranked[1][0]
-        risk = "high" if "long_reasoning" in problem.risk_flags else "medium" if top_score < 0.75 else "low"
-        candidate_count = {"low": 1, "medium": 2, "high": 3}[risk]
+        del top_score
+        risk = analysis.risk_level
+        policy = derive_route_policy(risk, problem.problem_type)
         skills = [primary]
         if auxiliary:
             skills.append(auxiliary)
@@ -85,15 +143,64 @@ class RouterRuleEngine:
             risk_level=risk,
             selected_skills=skills,
             selected_tools=tools,
-            candidate_count=candidate_count,
-            max_reasoning_rounds=2 if risk == "high" else 1,
-            use_rag=risk in {"medium", "high"},
-            use_lemma_loop=risk == "high",
-            use_llm_finalizer=problem.problem_type in {"proof", "explanation"},
+            candidate_count=policy.candidate_count,
+            max_reasoning_rounds=policy.max_reasoning_rounds,
+            use_rag=policy.use_rag,
+            use_lemma_loop=policy.use_lemma_loop,
+            use_llm_finalizer=policy.use_llm_finalizer,
             method_families=method_families_for(primary, problem.problem_type),
+            routing_confidence=analysis.confidence,
+            ambiguity_margin=analysis.ambiguity_margin,
+            complexity_flags=analysis.complexity_flags,
         )
         plan.validate()
         return plan
+
+    @staticmethod
+    def _complexity_flags(
+        problem: ProblemIR,
+        *,
+        mixed_domain: bool,
+    ) -> list[str]:
+        lowered = problem.normalized_problem.lower()
+        flags: list[str] = []
+        if len(problem.normalized_problem) >= 600:
+            flags.append("long_problem")
+        if len(problem.assumptions) >= 3:
+            flags.append("many_conditions")
+        if len(problem.symbols) >= 6:
+            flags.append("many_symbols")
+        if any(marker in lowered for marker in ("piecewise", "absolute value", "|x|")):
+            flags.append("piecewise_or_absolute")
+        if any(
+            marker in lowered
+            for marker in (
+                "if and only if",
+                "iff",
+                "converse",
+                "necessary and sufficient",
+                "interchange",
+            )
+        ):
+            flags.append("theorem_direction_or_interchange")
+        if (
+            any(marker in lowered for marker in ("exist", "there is"))
+            and any(marker in lowered for marker in ("unique", "uniqueness"))
+        ):
+            flags.append("existence_and_uniqueness")
+        if any(
+            marker in lowered
+            for marker in ("ill-conditioned", "near singular", "unstable numerical")
+        ):
+            flags.append("ill_conditioned_numerics")
+        if mixed_domain:
+            flags.append("mixed_domain")
+        if problem.problem_type in {"proof", "derivation"} or any(
+            marker in lowered
+            for marker in ("induction", "lemma", "case analysis", "contradiction")
+        ):
+            flags.append("proof_depth")
+        return flags
 
 
 class RouterPlanner:
@@ -113,9 +220,10 @@ class RouterPlanner:
         consume_call: Callable[[], None] | None = None,
         record_tokens: Callable[[int], None] | None = None,
         context_view: RoleContextView | None = None,
+        record_prompt_chars: Callable[[int], None] | None = None,
     ) -> RoutePlan:
         rule_plan = self._rules.plan(problem)
-        top_score = self._rules.rank(problem)[0][1]
+        top_score = rule_plan.routing_confidence
         if top_score >= 0.75 or llm_chat is None or consume_call is None:
             return rule_plan
         try:
@@ -131,12 +239,17 @@ class RouterPlanner:
                 '"risk_level":"low|medium|high","method_families":["...","...","..."]}.'
                 f"{context}"
             )
+            messages = self._contracts.messages(
+                "router_planner",
+                user,
+                "Classify the math domain and return JSON only.",
+            )
+            if record_prompt_chars is not None:
+                record_prompt_chars(
+                    sum(len(message["content"]) for message in messages)
+                )
             response = llm_chat(
-                messages=self._contracts.messages(
-                    "router_planner",
-                    user,
-                    "Classify the math domain and return JSON only.",
-                ),
+                messages=messages,
                 temperature=0.0,
                 max_tokens=256,
             )
@@ -153,6 +266,10 @@ class RouterPlanner:
             risk = str(payload.get("risk_level", rule_plan.risk_level))
             if risk not in {"low", "medium", "high"}:
                 risk = rule_plan.risk_level
+            risk_order = {"low": 0, "medium": 1, "high": 2}
+            if risk_order[risk] < risk_order[rule_plan.risk_level]:
+                risk = rule_plan.risk_level
+            policy = derive_route_policy(risk, problem.problem_type)
             selected = [primary] + ([auxiliary] if auxiliary else [])
             selected.append("proof-obligation" if problem.problem_type == "proof" else "answer-normalization")
             planned = replace(
@@ -161,7 +278,11 @@ class RouterPlanner:
                 auxiliary_subject=auxiliary,
                 risk_level=risk,
                 selected_skills=selected,
-                candidate_count={"low": 1, "medium": 2, "high": 3}[risk],
+                candidate_count=policy.candidate_count,
+                max_reasoning_rounds=policy.max_reasoning_rounds,
+                use_rag=policy.use_rag,
+                use_lemma_loop=policy.use_lemma_loop,
+                use_llm_finalizer=policy.use_llm_finalizer,
                 method_families=method_families_for(primary, problem.problem_type),
             )
             planned.validate()

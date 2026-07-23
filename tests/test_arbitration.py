@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from mathforge.harness.budget import CallBudget
 from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProofObligation
 from mathforge.verification.arbitration import ArbitrationPolicy
 
@@ -58,3 +59,22 @@ def test_distinct_actual_methods_can_contribute_one_agreement():
     second.method = "factorization-invariant"
     result = ArbitrationPolicy().select([first, second], [], {})
     assert [rank.independent_agreement for rank in result.ranks] == [1, 1]
+
+
+def test_arbitration_equivalence_checks_share_the_session_tool_budget():
+    budget = CallBudget(
+        1,
+        max_tool_calls=1,
+        max_isolated_tool_calls=1,
+    )
+    ArbitrationPolicy().select(
+        [
+            _candidate("first", "x"),
+            _candidate("second", "y"),
+            _candidate("third", "z"),
+        ],
+        [],
+        {},
+        budget=budget,
+    )
+    assert budget.used_tool_calls == 1

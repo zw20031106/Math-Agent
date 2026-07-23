@@ -11,7 +11,13 @@ from typing import Protocol
 
 
 class MCPAdapter(Protocol):
-    def execute(self, name: str, arguments: dict[str, Any]) -> ToolResult: ...
+    def execute(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> ToolResult: ...
 
 
 class ToolExecutor:
@@ -41,6 +47,9 @@ class ToolExecutor:
     def fingerprint(self) -> str:
         return self._registry.fingerprint
 
+    def is_isolated(self, name: str) -> bool:
+        return self._use_mcp or self._registry.get(name).isolated
+
     def execute(
         self,
         name: str,
@@ -50,7 +59,23 @@ class ToolExecutor:
     ) -> ToolResult:
         if self._use_mcp and self._mcp_adapter is not None:
             try:
-                return self._mcp_adapter.execute(name, dict(arguments))
+                return self._mcp_adapter.execute(
+                    name,
+                    dict(arguments),
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                definition = self._registry.get(name)
+                return ToolResult(
+                    name,
+                    "unknown",
+                    "soft",
+                    "tool timed out",
+                    {},
+                    definition.version,
+                    definition.capability,
+                    definition.claim_state,
+                )
             except Exception as adapter_error:
                 del adapter_error
         try:

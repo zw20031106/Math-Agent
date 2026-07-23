@@ -13,7 +13,7 @@ from mathforge.harness.state import (
 )
 
 
-CORE_SCHEMA_VERSION = "1.0"
+CORE_SCHEMA_VERSION = "1.1"
 MAX_CLAIMS = 64
 MAX_CLAIM_STATEMENT_CHARS = 4000
 MAX_TOTAL_CLAIM_CHARS = 24000
@@ -560,6 +560,9 @@ class RoutePlan:
     use_lemma_loop: bool = False
     use_llm_finalizer: bool = False
     method_families: list[str] = field(default_factory=list)
+    routing_confidence: float = 0.0
+    ambiguity_margin: float = 1.0
+    complexity_flags: list[str] = field(default_factory=list)
     schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -578,6 +581,9 @@ class RoutePlan:
             "use_lemma_loop": self.use_lemma_loop,
             "use_llm_finalizer": self.use_llm_finalizer,
             "method_families": list(self.method_families),
+            "routing_confidence": self.routing_confidence,
+            "ambiguity_margin": self.ambiguity_margin,
+            "complexity_flags": list(self.complexity_flags),
         }
 
     def validate(self) -> None:
@@ -617,8 +623,18 @@ class RoutePlan:
             ("selected_skills", self.selected_skills),
             ("selected_tools", self.selected_tools),
             ("method_families", self.method_families),
+            ("complexity_flags", self.complexity_flags),
         ):
             _require_string_list(value, f"RoutePlan.{name}")
+        for name, numeric_value in (
+            ("routing_confidence", self.routing_confidence),
+            ("ambiguity_margin", self.ambiguity_margin),
+        ):
+            if (
+                type(numeric_value) not in {int, float}
+                or not 0.0 <= float(numeric_value) <= 1.0
+            ):
+                raise SchemaValidationError(f"RoutePlan.{name} must be in [0, 1]")
         for name, bool_value in (
             ("use_rag", self.use_rag),
             ("use_lemma_loop", self.use_lemma_loop),
@@ -647,6 +663,9 @@ class RoutePlan:
             "use_lemma_loop",
             "use_llm_finalizer",
             "method_families",
+            "routing_confidence",
+            "ambiguity_margin",
+            "complexity_flags",
         }
         _reject_unknown_fields(payload, allowed, "RoutePlan")
         strings = _require_string_fields(
@@ -674,6 +693,14 @@ class RoutePlan:
                 name for name in bool_names if not isinstance(payload.get(name), bool)
             )
             raise SchemaValidationError(f"RoutePlan.{invalid} must be a boolean")
+        numeric_names = ("routing_confidence", "ambiguity_margin")
+        if any(type(payload.get(name)) not in {int, float} for name in numeric_names):
+            invalid = next(
+                name
+                for name in numeric_names
+                if type(payload.get(name)) not in {int, float}
+            )
+            raise SchemaValidationError(f"RoutePlan.{invalid} must be numeric")
         route = cls(
             primary_subject=strings["primary_subject"],
             auxiliary_subject=auxiliary,
@@ -696,6 +723,12 @@ class RoutePlan:
             method_families=_require_string_list(
                 payload.get("method_families"),
                 "RoutePlan.method_families",
+            ),
+            routing_confidence=float(payload["routing_confidence"]),
+            ambiguity_margin=float(payload["ambiguity_margin"]),
+            complexity_flags=_require_string_list(
+                payload.get("complexity_flags"),
+                "RoutePlan.complexity_flags",
             ),
             schema_version=cls.SCHEMA_VERSION,
         )
