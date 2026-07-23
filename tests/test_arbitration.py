@@ -52,13 +52,13 @@ def test_same_method_same_answer_has_zero_independent_agreement():
     assert [rank.independent_agreement for rank in result.ranks] == [0, 0]
 
 
-def test_distinct_actual_methods_can_contribute_one_agreement():
+def test_distinct_free_text_method_labels_do_not_fake_independent_agreement():
     first = _candidate("first", "7", "PrimarySolver")
     second = _candidate("second", "7", "AlternativeSolver")
     first.method = "substitution-elimination"
     second.method = "factorization-invariant"
     result = ArbitrationPolicy().select([first, second], [], {})
-    assert [rank.independent_agreement for rank in result.ranks] == [1, 1]
+    assert [rank.independent_agreement for rank in result.ranks] == [0, 0]
 
 
 def test_arbitration_equivalence_checks_share_the_session_tool_budget():

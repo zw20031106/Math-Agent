@@ -13,8 +13,9 @@ from mathforge.harness.state import (
 )
 
 
-CORE_SCHEMA_VERSION = "1.1"
+CORE_SCHEMA_VERSION = "1.2"
 MAX_CLAIMS = 64
+MAX_METHOD_STEPS = 64
 MAX_CLAIM_STATEMENT_CHARS = 4000
 MAX_TOTAL_CLAIM_CHARS = 24000
 _CLAIM_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
@@ -55,6 +56,113 @@ class RiskLevel(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+class MethodFamily(str, Enum):
+    SUBSTITUTION_ELIMINATION = "substitution-elimination"
+    FACTORIZATION_INVARIANT = "factorization-invariant"
+    STRUCTURAL_TRANSFORM = "structural-transform"
+    SYNTHETIC_GEOMETRY = "synthetic-geometry"
+    COORDINATE_GEOMETRY = "coordinate-geometry"
+    VECTOR_TRANSFORMATION = "vector-transformation"
+    CONGRUENCE = "congruence"
+    VALUATION_FACTORIZATION = "valuation-factorization"
+    DESCENT_EXTREMAL = "descent-extremal"
+    BIJECTION_COUNTING = "bijection-counting"
+    RECURRENCE_GENERATING = "recurrence-generating"
+    INVARIANT_EXTREMAL = "invariant-extremal"
+    CONDITIONING = "conditioning"
+    INDICATOR_LINEARITY = "indicator-linearity"
+    DISTRIBUTION_TRANSFORM = "distribution-transform"
+    DIRECT_ANALYTIC = "direct-analytic"
+    CHANGE_OF_VARIABLE = "change-of-variable"
+    ESTIMATE_LIMIT = "estimate-limit"
+    ROW_SPACE = "row-space"
+    SPECTRAL = "spectral"
+    LINEAR_MAP_INVARIANT = "linear-map-invariant"
+    CALCULUS_STATIONARITY = "calculus-stationarity"
+    CONVEXITY_INEQUALITY = "convexity-inequality"
+    DUALITY_TRANSFORM = "duality-transform"
+    DIRECT_DEDUCTION = "direct-deduction"
+    CONTRADICTION = "contradiction"
+    MODEL_COUNTEREXAMPLE = "model-counterexample"
+    CONSTRUCTIVE_COMPUTATION = "constructive-computation"
+    CONTRADICTION_EXTREMAL = "contradiction-extremal"
+    CONTRADICTION_OR_EXTREMAL = "contradiction-or-extremal"
+    LEMMA_GUIDED = "lemma-guided"
+
+
+class MethodStepKind(str, Enum):
+    DEFINITION = "definition"
+    TRANSFORMATION = "transformation"
+    THEOREM_APPLICATION = "theorem_application"
+    CONSTRUCTION = "construction"
+    CASE_SPLIT = "case_split"
+    CONTRADICTION = "contradiction"
+    COMPUTATION = "computation"
+    CONCLUSION = "conclusion"
+    OTHER = "other"
+
+
+@dataclass(frozen=True)
+class MethodStep:
+    SCHEMA_VERSION: ClassVar[str] = CORE_SCHEMA_VERSION
+
+    step_id: str
+    kind: str
+    claim_ids: list[str] = field(default_factory=list)
+    theorem: str = ""
+    schema_version: str = CORE_SCHEMA_VERSION
+
+    def validate(self) -> None:
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise SchemaValidationError("invalid MethodStep schema version")
+        if not _CLAIM_ID.fullmatch(self.step_id):
+            raise SchemaValidationError(f"invalid method step id: {self.step_id!r}")
+        if self.kind not in {item.value for item in MethodStepKind}:
+            raise SchemaValidationError(f"invalid method step kind: {self.kind}")
+        _require_string_list(self.claim_ids, "MethodStep.claim_ids")
+        if any(not _CLAIM_ID.fullmatch(value) for value in self.claim_ids):
+            raise SchemaValidationError(f"invalid method step claim reference: {self.step_id}")
+        if not isinstance(self.theorem, str) or len(self.theorem) > 256:
+            raise SchemaValidationError("invalid method step theorem")
+
+    def to_dict(self) -> dict:
+        return {
+            "schema_version": self.schema_version,
+            "step_id": self.step_id,
+            "kind": self.kind,
+            "claim_ids": list(self.claim_ids),
+            "theorem": self.theorem,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "MethodStep":
+        if not isinstance(payload, dict):
+            raise SchemaValidationError("MethodStep payload must be an object")
+        _require_schema_version(payload, cls.SCHEMA_VERSION)
+        _reject_unknown_fields(
+            payload,
+            {"schema_version", "step_id", "kind", "claim_ids", "theorem"},
+            "MethodStep",
+        )
+        strings = _require_string_fields(
+            payload,
+            ("step_id", "kind", "theorem"),
+            "MethodStep",
+        )
+        step = cls(
+            step_id=strings["step_id"],
+            kind=strings["kind"],
+            claim_ids=_require_string_list(
+                payload.get("claim_ids"),
+                "MethodStep.claim_ids",
+            ),
+            theorem=strings["theorem"],
+            schema_version=cls.SCHEMA_VERSION,
+        )
+        step.validate()
+        return step
 
 
 def _require_schema_version(payload: dict[str, Any], expected: str) -> None:
@@ -351,6 +459,7 @@ class CandidateSolution:
     planned_method_family: str = ""
     is_method_duplicate: bool = False
     contract_deviations: list[str] = field(default_factory=list)
+    method_steps: list[MethodStep] = field(default_factory=list)
     schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -371,6 +480,7 @@ class CandidateSolution:
             "planned_method_family": self.planned_method_family,
             "is_method_duplicate": self.is_method_duplicate,
             "contract_deviations": list(self.contract_deviations),
+            "method_steps": [step.to_dict() for step in self.method_steps],
         }
 
     def validate(self) -> None:
@@ -394,7 +504,11 @@ class CandidateSolution:
             raise SchemaValidationError(f"invalid candidate role: {self.role}")
         if self.answer_type not in {item.value for item in AnswerType}:
             raise SchemaValidationError(f"invalid candidate answer type: {self.answer_type}")
-        if not self.candidate_id or len(self.candidate_id) > 128:
+        if (
+            not self.candidate_id
+            or len(self.candidate_id) > 128
+            or "::" in self.candidate_id
+        ):
             raise SchemaValidationError("invalid candidate id")
         if not isinstance(self.version, int) or isinstance(self.version, bool) or self.version < 1:
             raise SchemaValidationError("invalid candidate version")
@@ -423,11 +537,26 @@ class CandidateSolution:
             raise SchemaValidationError(
                 "CandidateSolution.is_method_duplicate must be a boolean"
             )
+        if self.planned_method_family and self.planned_method_family not in {
+            item.value for item in MethodFamily
+        }:
+            raise SchemaValidationError(
+                f"invalid planned method family: {self.planned_method_family}"
+            )
+        if (
+            not isinstance(self.method_steps, list)
+            or len(self.method_steps) > MAX_METHOD_STEPS
+            or any(not isinstance(step, MethodStep) for step in self.method_steps)
+        ):
+            raise SchemaValidationError(
+                "CandidateSolution.method_steps must be a bounded MethodStep list"
+            )
         if sum(len(claim.statement) for claim in self.claims) > MAX_TOTAL_CLAIM_CHARS:
             raise SchemaValidationError("total claim text is too long")
         for claim in self.claims:
             claim.validate()
         self._validate_claim_graph()
+        self._validate_method_steps()
 
     def _validate_claim_graph(self) -> None:
         claim_by_id: dict[str, Claim] = {}
@@ -458,6 +587,20 @@ class CandidateSolution:
         for claim_id in claim_by_id:
             visit(claim_id)
 
+    def _validate_method_steps(self) -> None:
+        claim_ids = {claim.claim_id for claim in self.claims}
+        step_ids: set[str] = set()
+        for step in self.method_steps:
+            step.validate()
+            if step.step_id in step_ids:
+                raise SchemaValidationError(f"duplicate method step id: {step.step_id}")
+            step_ids.add(step.step_id)
+            unknown = set(step.claim_ids) - claim_ids
+            if unknown:
+                raise SchemaValidationError(
+                    f"unknown method step claim references: {sorted(unknown)}"
+                )
+
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "CandidateSolution":
         if not isinstance(payload, dict):
@@ -480,6 +623,7 @@ class CandidateSolution:
             "planned_method_family",
             "is_method_duplicate",
             "contract_deviations",
+            "method_steps",
         }
         _reject_unknown_fields(payload, allowed, "CandidateSolution")
         strings = _require_string_fields(
@@ -501,6 +645,13 @@ class CandidateSolution:
             not isinstance(item, dict) for item in raw_claims
         ):
             raise SchemaValidationError("CandidateSolution.claims must be objects")
+        raw_method_steps = payload.get("method_steps")
+        if not isinstance(raw_method_steps, list) or any(
+            not isinstance(item, dict) for item in raw_method_steps
+        ):
+            raise SchemaValidationError(
+                "CandidateSolution.method_steps must be objects"
+            )
         version = payload.get("version")
         duplicate = payload.get("is_method_duplicate")
         if not isinstance(version, int) or isinstance(version, bool):
@@ -537,6 +688,9 @@ class CandidateSolution:
                 payload.get("contract_deviations"),
                 "CandidateSolution.contract_deviations",
             ),
+            method_steps=[
+                MethodStep.from_dict(item) for item in raw_method_steps
+            ],
             schema_version=cls.SCHEMA_VERSION,
         )
         candidate.validate()
@@ -626,6 +780,14 @@ class RoutePlan:
             ("complexity_flags", self.complexity_flags),
         ):
             _require_string_list(value, f"RoutePlan.{name}")
+        invalid_method_families = sorted(
+            set(self.method_families)
+            - {item.value for item in MethodFamily}
+        )
+        if invalid_method_families:
+            raise SchemaValidationError(
+                f"invalid route method families: {invalid_method_families}"
+            )
         for name, numeric_value in (
             ("routing_confidence", self.routing_confidence),
             ("ambiguity_margin", self.ambiguity_margin),
@@ -750,6 +912,7 @@ class EvidenceRecord:
     payload: dict[str, Any] = field(default_factory=dict)
     invocation: dict[str, Any] = field(default_factory=dict)
     capability: str = "none"
+    transaction_status: str = "active"
     schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -765,6 +928,7 @@ class EvidenceRecord:
             "payload": dict(self.payload),
             "invocation": dict(self.invocation),
             "capability": self.capability,
+            "transaction_status": self.transaction_status,
         }
 
 
@@ -807,6 +971,8 @@ class LemmaCard:
     evidence_ids: list[str]
     source_round: int
     scope: str = "current_problem"
+    source_candidate_id: str = ""
+    source_claim_id: str = ""
     schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -821,7 +987,98 @@ class LemmaCard:
             "evidence_ids": list(self.evidence_ids),
             "source_round": self.source_round,
             "scope": self.scope,
+            "source_candidate_id": self.source_candidate_id,
+            "source_claim_id": self.source_claim_id,
         }
+
+    def validate(self) -> None:
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise SchemaValidationError("invalid LemmaCard schema version")
+        for string_value, name in (
+            (self.lemma_id, "lemma_id"),
+            (self.statement, "statement"),
+            (self.proof_sketch, "proof_sketch"),
+            (self.status, "status"),
+            (self.scope, "scope"),
+            (self.source_candidate_id, "source_candidate_id"),
+            (self.source_claim_id, "source_claim_id"),
+        ):
+            if not isinstance(string_value, str):
+                raise SchemaValidationError(f"LemmaCard.{name} must be a string")
+        for list_value, name in (
+            (self.conditions, "conditions"),
+            (self.dependencies, "dependencies"),
+            (self.evidence_ids, "evidence_ids"),
+        ):
+            _require_string_list(list_value, f"LemmaCard.{name}")
+        if not self.lemma_id or "::lemma::" not in self.lemma_id:
+            raise SchemaValidationError("LemmaCard.lemma_id must be namespaced")
+        if not self.source_candidate_id or not self.source_claim_id:
+            raise SchemaValidationError("LemmaCard source identity is required")
+        if type(self.source_round) is not int or self.source_round < 1:
+            raise SchemaValidationError("LemmaCard.source_round must be positive")
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "LemmaCard":
+        if not isinstance(payload, dict):
+            raise SchemaValidationError("LemmaCard payload must be an object")
+        _require_schema_version(payload, cls.SCHEMA_VERSION)
+        allowed = {
+            "schema_version",
+            "lemma_id",
+            "statement",
+            "conditions",
+            "dependencies",
+            "proof_sketch",
+            "status",
+            "evidence_ids",
+            "source_round",
+            "scope",
+            "source_candidate_id",
+            "source_claim_id",
+        }
+        _reject_unknown_fields(payload, allowed, "LemmaCard")
+        strings = _require_string_fields(
+            payload,
+            (
+                "lemma_id",
+                "statement",
+                "proof_sketch",
+                "status",
+                "scope",
+                "source_candidate_id",
+                "source_claim_id",
+            ),
+            "LemmaCard",
+        )
+        source_round = payload.get("source_round")
+        if type(source_round) is not int:
+            raise SchemaValidationError("LemmaCard.source_round must be an integer")
+        card = cls(
+            lemma_id=strings["lemma_id"],
+            statement=strings["statement"],
+            conditions=_require_string_list(
+                payload.get("conditions"),
+                "LemmaCard.conditions",
+            ),
+            dependencies=_require_string_list(
+                payload.get("dependencies"),
+                "LemmaCard.dependencies",
+            ),
+            proof_sketch=strings["proof_sketch"],
+            status=strings["status"],
+            evidence_ids=_require_string_list(
+                payload.get("evidence_ids"),
+                "LemmaCard.evidence_ids",
+            ),
+            source_round=source_round,
+            scope=strings["scope"],
+            source_candidate_id=strings["source_candidate_id"],
+            source_claim_id=strings["source_claim_id"],
+            schema_version=cls.SCHEMA_VERSION,
+        )
+        card.validate()
+        return card
 
 
 @dataclass
@@ -867,6 +1124,7 @@ class MathSession:
     proof_obligations: dict[str, list[ProofObligation]] = field(default_factory=dict)
     working_memory: Any = None
     lemma_memory: Any = None
+    raw_context_store: Any = None
     lemmas: list[LemmaCard] = field(default_factory=list)
     rounds: list[RoundState] = field(default_factory=list)
     trace_events: list[dict[str, Any]] = field(default_factory=list)

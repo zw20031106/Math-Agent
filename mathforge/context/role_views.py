@@ -26,8 +26,10 @@ class RoleContextFactory:
         max_chars: int,
         focus_claim_ids: list[str] | None = None,
         final_answer: str = "",
+        raw_store: RawContextStore | None = None,
+        memory_categories: set[str] | frozenset[str] | None = None,
     ) -> RoleContextView:
-        assembler = ContextAssembler(RawContextStore(max_chars))
+        assembler = ContextAssembler(raw_store or RawContextStore(max_chars))
         snapshot = assembler.assemble(
             problem,
             candidates,
@@ -35,7 +37,10 @@ class RoleContextFactory:
             obligations,
             final_answer=final_answer,
         )
-        snapshot.metadata["authorized_memory"] = blackboard.view(role)
+        snapshot.metadata["authorized_memory"] = blackboard.view(
+            role,
+            categories=memory_categories,
+        )
         compressed = self._compressor.compress(
             snapshot,
             role=role,

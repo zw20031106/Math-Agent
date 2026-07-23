@@ -4,10 +4,18 @@ from dataclasses import dataclass
 from typing import Callable
 
 from mathforge.harness.budget import CallBudget
-from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProofObligation
+from mathforge.harness.schemas import (
+    CandidateSolution,
+    EvidenceRecord,
+    ProblemIR,
+    ProofObligation,
+)
 from mathforge.tools.executor import ToolExecutor
-from mathforge.verification.equivalence import equivalence_clusters
-from mathforge.verification.methods import candidate_method_signature
+from mathforge.verification.equivalence import analyze_equivalence
+from mathforge.verification.methods import (
+    candidate_method_signature,
+    method_contract_valid,
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +43,8 @@ class ArbitrationResult:
     selected: CandidateSolution
     ranks: list[CandidateRank]
     clusters: list[list[str]]
+    unknown_pairs: list[tuple[str, str]]
+    disagreement_pairs: list[tuple[str, str]]
     used_llm_arbiter: bool = False
 
 
@@ -50,10 +60,17 @@ class ArbitrationPolicy:
         *,
         llm_arbiter: Callable[[list[CandidateSolution]], str] | None = None,
         budget: CallBudget | None = None,
+        problem: ProblemIR | None = None,
     ) -> ArbitrationResult:
         if not candidates:
             raise ValueError("at least one candidate is required")
-        clusters = equivalence_clusters(candidates, self._tools, budget)
+        equivalence = analyze_equivalence(
+            candidates,
+            problem,
+            self._tools,
+            budget,
+        )
+        clusters = equivalence.clusters
         candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
         cluster_by_id = {
             candidate_id: [candidate_by_id[item] for item in cluster]
@@ -78,7 +95,14 @@ class ArbitrationPolicy:
                 selected_id = proposed
                 used_llm = True
         selected = next(candidate for candidate in candidates if candidate.candidate_id == selected_id)
-        return ArbitrationResult(selected, ranks, clusters, used_llm)
+        return ArbitrationResult(
+            selected,
+            ranks,
+            clusters,
+            equivalence.unknown_pairs,
+            equivalence.disagreement_pairs,
+            used_llm,
+        )
 
     @staticmethod
     def _rank(
@@ -87,7 +111,12 @@ class ArbitrationPolicy:
         obligations: list[ProofObligation],
         clusters: dict[str, list[CandidateSolution]],
     ) -> CandidateRank:
-        own_evidence = [record for record in evidence if record.candidate_id == candidate.candidate_id]
+        own_evidence = [
+            record
+            for record in evidence
+            if record.candidate_id == candidate.candidate_id
+            and record.transaction_status == "active"
+        ]
         hard_fails = sum(
             record.status == "fail" and record.strength == "hard" for record in own_evidence
         )
@@ -102,13 +131,14 @@ class ArbitrationPolicy:
         own_signature = candidate_method_signature(candidate)
         independent_agreement = (
             0
-            if candidate.is_method_duplicate
+            if candidate.is_method_duplicate or not method_contract_valid(candidate)
             else len(
                 {
                     candidate_method_signature(other)
                     for other in cluster
                     if other.candidate_id != candidate.candidate_id
                     and not other.is_method_duplicate
+                    and method_contract_valid(other)
                     and candidate_method_signature(other) != own_signature
                 }
             )

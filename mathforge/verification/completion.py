@@ -32,7 +32,10 @@ class ProofCompletionGate:
         obligations: list[ProofObligation],
     ) -> CompletionDecision:
         own_evidence = [
-            record for record in evidence if record.candidate_id == candidate.candidate_id
+            record
+            for record in evidence
+            if record.candidate_id == candidate.candidate_id
+            and record.transaction_status == "active"
         ]
         failed_claims = sorted(
             {

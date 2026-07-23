@@ -122,7 +122,7 @@ PASS
 | D01 Prompt 子系统不完整 | 部分解决 | `PromptContractLoader.messages()` 已进入六个生产角色，但只有单一 `contract.md`；缺正式 output schema、renderer/validator/version registry、配置哈希和变量完整性验证；LemmaCurator Contract 未进入模型调用。 |
 | D02 Runtime 缺少统一状态机 | 未解决 | `MathSession` 没有 `RuntimePhase`、`transition(expected, target)` 或合法转换表；`runtime.py` 依赖长函数中的隐式顺序和异常跳转。 |
 | D03 缺少 Feature Flags | 部分解决 | 已有平铺布尔开关和 A0–A9，但没有 safe/balanced/full 配置层、依赖校验、配置哈希和公开入口绑定；被禁用组件仍会初始化。 |
-| D04 角色名称和执行图不一致 | 部分解决 | 七个名称已冻结；LemmaCurator 仍是确定性 Claim 抽取器，`prompts/lemma_curator/contract.md` 未参与生产调用。 |
+| D04 角色名称和执行图不一致 | 已决策关闭 | ADR-001 明确 LemmaCurator 是确定性宿主服务；其 Prompt Contract 是非活动审核模板，不再声称参与生产模型调用。 |
 | D05 Agent 与确定性服务边界不清 | 部分解决 | 服务边界已基本形成，但模型控制 `role`、`answer_type`、`check_type` 等宿主契约字段，导致模型能影响确定性验证语义。 |
 | D06 跨模块 Schema Contract 未冻结 | 未解决 | 核心 dataclass 只有 `to_dict()`；缺 `from_dict()`、`validate()`、`schema_version` 和 Enum；Solution Parser 对错误字段类型会逐字符转换。 |
 | D07 缺少 Contract Tests | 部分解决 | 已有若干运行时集成测试，但没有系统化的 Router→Context→Prompt→Parser→Verifier→Arbiter→Formatter 契约套件，也没有 Feature 组合测试。 |
@@ -1031,11 +1031,37 @@ S2（C11/C12/C13/C14）已完成工程实现：
 详细实现和验收记录见
 `docs/S2_IMPLEMENTATION_STATUS_2026-07-23.md`。
 
-## 16. 下一步
+## 16. S3 实施状态
 
-下一开发阶段为 S3（C15–C19、C23）：Lemma-only 第二轮上下文、
-expanded candidate 全链路重验、namespaced ClaimGraph、Repair 依赖变更
-闭包、assumptions-aware 等价和结构化方法独立性。
+S3（C15–C19、C23）已完成工程实现：
+
+1. Lemma 第二轮使用隔离视图，只发送原题、必要 conditions 和 verified
+   LemmaCard，不携带历史 `solution_text`；
+2. expanded candidate 重新执行 Schema、answer、Claim evidence、proof
+   obligations、批量 VerifierSkeptic、Completion 和 Arbitration；
+3. ClaimGraph 使用 `candidate_id::claim_id` 命名空间，并严格校验重复、悬空、
+   自依赖和环；
+4. Repair 在依赖发生变化后按原图和新图的影响闭包并集复验，回滚 Evidence
+   标记为 rejected transaction；
+5. 等价检查使用宿主 ProblemIR 的 answer type、assumptions 和 domains，并把
+   unknown 与 confirmed disagreement 分开；
+6. 核心 Schema 升级至 1.2，新增受控 MethodFamily 和结构化 MethodStep；
+7. 方法独立性签名不再使用自由文本 `method`，contract deviation 不获得
+   independent agreement；
+8. Session 持有唯一、总容量受限的 RawContextStore，metadata 使用白名单，
+   上下文预算按真实 `to_prompt_json()` 计算；
+9. ADR-001 确认 LemmaCurator 保持确定性宿主服务，其 Prompt Contract 不驱动
+   生产模型调用。
+
+详细实现与验收记录见
+`docs/S3_IMPLEMENTATION_STATUS_2026-07-23.md` 和
+`docs/ADR_001_S3_DETERMINISTIC_LEMMA_CURATOR.md`。
+
+## 17. 下一步
+
+下一开发阶段为 S4（C20/C21/C22）：终态可诊断性、每题 Benchmark
+RunMetrics/成本记录、真实并发污染探针、重复实验统计，以及 Ruff/Mypy/Coverage
+正式门禁配置。
 
 `config/competition.json` 仍保持 `candidate-unvalidated`；在真实重复消融前
 不得标记 frozen，也不启动最终 A0–A10 配置结论。

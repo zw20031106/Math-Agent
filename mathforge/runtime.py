@@ -49,6 +49,32 @@ _ROLE_CONTRACT_DIRECTORIES = {
     "LLMFinalizer": "finalizer",
 }
 
+_PUBLIC_METADATA_KEYS = (
+    "idx",
+    "benchmark_nonce",
+    "label",
+    "labels",
+    "benchmark_label",
+    "case_id",
+    "split",
+)
+
+
+def _public_metadata(metadata: Any) -> dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key in _PUBLIC_METADATA_KEYS:
+        value = metadata.get(key)
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            result[key] = value
+        elif isinstance(value, list) and all(
+            isinstance(item, (str, int, float, bool)) or item is None
+            for item in value[:32]
+        ):
+            result[key] = list(value[:32])
+    return result
+
 
 class MathForgeHarness:
     """Thread-safe facade over the injected official model client."""
@@ -103,7 +129,7 @@ class MathForgeHarness:
 
     def solve(self, problem: str, metadata: dict) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
-        safe_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        safe_metadata = _public_metadata(metadata)
         session = create_session(
             normalized_problem,
             safe_metadata,
@@ -126,6 +152,7 @@ class MathForgeHarness:
                 max_evidence_records=self._config.max_evidence_records,
                 max_prompt_chars_total=self._config.max_prompt_chars_total,
             ),
+            raw_context_max_chars=self._config.raw_context_max_chars,
         )
         trace = TraceBuilder(session.trace_events, max_chars=self._config.trace_max_chars)
         fingerprint_nonce = str(safe_metadata.get("benchmark_nonce", session.session_id))
@@ -146,7 +173,7 @@ class MathForgeHarness:
                 blackboard.publish(
                     "System",
                     "raw",
-                    {"problem": session.problem_ir.raw_problem, "metadata": safe_metadata},
+                    {"metadata": safe_metadata},
                 )
             trace.add(
                 "problem_parsed",
@@ -576,53 +603,12 @@ class MathForgeHarness:
                     else "obligations_skipped"
                 ),
             )
-            unresolved_required = [
-                obligation
-                for item in viable
-                for obligation in session.proof_obligations.get(item.candidate_id, [])
-                if obligation.required and obligation.status != "satisfied"
-            ]
-            if (
-                self._config.enable_verifier
-                and self._config.enable_evidence
-                and session.route_plan.risk_level in {"medium", "high"}
-                and unresolved_required
-            ):
-                verifier_context = self._build_role_context(
-                    session,
-                    blackboard,
-                    trace,
-                    role="VerifierSkeptic",
-                    candidates=viable,
-                )
-                verifier_result = self._verifier_agent.review(
-                    session.problem_ir,
-                    viable,
-                    session.proof_obligations,
-                    session.budget,
-                    max_tokens=min(1536, self._config.primary_max_tokens),
-                    context_view=verifier_context,
-                )
-                for finding in verifier_result.findings:
-                    ledger.record_verifier_finding(
-                        candidate_id=finding.candidate_id,
-                        claim_id=finding.claim_id,
-                        obligation_ids=finding.obligation_ids,
-                        status=finding.status,
-                        description=finding.description,
-                    )
-                trace.add(
-                    "verifier_completed",
-                    used_llm=verifier_result.used_llm,
-                    finding_count=len(verifier_result.findings),
-                    reason=verifier_result.reason,
-                )
             self._transition(
                 session,
                 trace,
                 RuntimePhase.OBLIGATIONS_READY,
                 RuntimePhase.VERIFIED,
-                "verification_completed" if self._config.enable_verifier else "verification_skipped",
+                "pre_lemma_checks_completed",
             )
             if not session.budget.deadline.optional_work_allowed():
                 session.route_plan = replace(
@@ -649,7 +635,6 @@ class MathForgeHarness:
                     verified,
                     round_id,
                     skill_context,
-                    ledger,
                 ),
             )
             session.lemmas.extend(lemma_result.lemmas)
@@ -662,22 +647,61 @@ class MathForgeHarness:
                 RuntimePhase.LEMMA_EXPANDED,
                 lemma_result.stop_reason,
             )
+            expanded_ids = {
+                item.candidate_id for item in lemma_result.generated_candidates
+            }
+            expanded_precheck_rejections: dict[str, list[str]] = {}
             for expanded in lemma_result.generated_candidates:
-                if self._config.enable_tools:
+                rejection_codes: list[str] = []
+                try:
+                    expanded.validate()
+                    session.budget.record_claims(len(expanded.claims))
+                except (BudgetExceeded, TypeError, ValueError):
+                    rejection_codes.append("schema_or_claim_budget")
+                rejection_codes.extend(
+                    self._answer_validator.validate(
+                        expanded,
+                        session.problem_ir,
+                    )
+                )
+                if not rejection_codes and self._config.enable_tools:
                     expanded_result, _ = self._run_answer_type_check(
-                        session, expanded, ledger
+                        session,
+                        expanded,
+                        ledger,
                     )
                     if (
-                        self._config.enable_evidence
-                        and expanded_result.status == "fail"
+                        expanded_result.status == "fail"
                         and expanded_result.strength == "hard"
                     ):
-                        continue
-                viable.append(expanded)
+                        rejection_codes.append("answer_type_hard_fail")
+                if (
+                    not rejection_codes
+                    and self._config.enable_tools
+                    and self._config.enable_evidence
+                ):
+                    self._claim_verifier.verify(
+                        expanded,
+                        ledger,
+                        domains=session.problem_ir.domains,
+                        assumptions=session.problem_ir.assumptions,
+                        budget=session.budget,
+                    )
+                    if ledger.has_hard_fail(expanded.candidate_id):
+                        rejection_codes.append("claim_hard_fail")
+                if rejection_codes:
+                    expanded_precheck_rejections[expanded.candidate_id] = sorted(
+                        set(rejection_codes)
+                    )
+                    continue
                 if self._config.enable_proof_obligations:
                     session.proof_obligations[expanded.candidate_id] = (
-                        self._obligation_engine.generate(session.problem_ir, expanded)
+                        self._obligation_engine.generate(
+                            session.problem_ir,
+                            expanded,
+                        )
                     )
+                viable.append(expanded)
             if session.route_plan.risk_level == "high":
                 trace.add(
                     "lemma_loop_completed",
@@ -690,6 +714,54 @@ class MathForgeHarness:
                     generated_candidates=[
                         item.candidate_id for item in lemma_result.generated_candidates
                     ],
+                )
+            required_obligations = [
+                obligation
+                for item in viable
+                for obligation in session.proof_obligations.get(
+                    item.candidate_id,
+                    [],
+                )
+                if obligation.required
+            ]
+            skeptic_reviewed: set[str] = set()
+            if (
+                self._config.enable_verifier
+                and self._config.enable_evidence
+                and session.route_plan.risk_level in {"medium", "high"}
+                and required_obligations
+            ):
+                verifier_context = self._build_role_context(
+                    session,
+                    blackboard,
+                    trace,
+                    role="VerifierSkeptic",
+                    candidates=viable,
+                    evidence=[],
+                )
+                verifier_result = self._verifier_agent.review(
+                    session.problem_ir,
+                    viable,
+                    session.proof_obligations,
+                    session.budget,
+                    max_tokens=min(1536, self._config.primary_max_tokens),
+                    context_view=verifier_context,
+                )
+                for finding in verifier_result.findings:
+                    ledger.record_verifier_finding(
+                        candidate_id=finding.candidate_id,
+                        claim_id=finding.claim_id,
+                        obligation_ids=finding.obligation_ids,
+                        status=finding.status,
+                        description=finding.description,
+                    )
+                    skeptic_reviewed.add(finding.candidate_id)
+                trace.add(
+                    "verifier_completed",
+                    used_llm=verifier_result.used_llm,
+                    finding_count=len(verifier_result.findings),
+                    reviewed_candidates=sorted(skeptic_reviewed),
+                    reason=verifier_result.reason,
                 )
             self._transition(
                 session,
@@ -731,13 +803,26 @@ class MathForgeHarness:
                     ],
                 )
                 viable = [item for item in viable if item.candidate_id in completed_ids]
-                if not viable:
-                    raise RuntimeError("no proof candidate passed completion gate")
+            accepted_expanded = sorted(
+                item.candidate_id
+                for item in viable
+                if item.candidate_id in expanded_ids
+            )
+            trace.add(
+                "expanded_candidates_reverified",
+                accepted=accepted_expanded,
+                rejected=sorted(expanded_ids - set(accepted_expanded)),
+                skeptic_reviewed=sorted(skeptic_reviewed.intersection(expanded_ids)),
+                precheck_rejections=expanded_precheck_rejections,
+            )
+            if not viable:
+                raise RuntimeError("no proof candidate passed completion gate")
             arbitration = self._arbitration.select(
                 viable,
                 session.evidence,
                 session.proof_obligations,
                 budget=session.budget,
+                problem=session.problem_ir,
             )
             candidate = arbitration.selected
             trace.add(
@@ -745,6 +830,8 @@ class MathForgeHarness:
                 selected=candidate.candidate_id,
                 ranking=[rank.candidate_id for rank in arbitration.ranks],
                 equivalence_clusters=arbitration.clusters,
+                equivalence_unknown_pairs=arbitration.unknown_pairs,
+                equivalence_disagreement_pairs=arbitration.disagreement_pairs,
             )
             self._transition(
                 session,
@@ -914,6 +1001,7 @@ class MathForgeHarness:
         evidence=None,
         focus_claim_ids: list[str] | None = None,
         final_answer: str = "",
+        memory_categories: set[str] | frozenset[str] | None = None,
     ):
         session.budget.ensure_stage("context_compression")
         role_directory = _ROLE_CONTRACT_DIRECTORIES[role]
@@ -922,15 +1010,17 @@ class MathForgeHarness:
             self._config.raw_context_max_chars,
             max(256, contract_budget // 2),
         )
+        use_all_candidates = candidates is None
         selected_candidates = (
-            list(session.candidates) if candidates is None else list(candidates)
+            list(session.candidates) if use_all_candidates else list(candidates)
         )
         candidate_ids = {candidate.candidate_id for candidate in selected_candidates}
         selected_evidence = (
             [
                 record
                 for record in session.evidence
-                if not candidate_ids or record.candidate_id in candidate_ids
+                if use_all_candidates or record.candidate_id in candidate_ids
+                if record.transaction_status == "active"
             ]
             if evidence is None
             else list(evidence)
@@ -938,7 +1028,7 @@ class MathForgeHarness:
         selected_obligations = {
             candidate_id: items
             for candidate_id, items in session.proof_obligations.items()
-            if not candidate_ids or candidate_id in candidate_ids
+            if use_all_candidates or candidate_id in candidate_ids
         }
         try:
             view = self._role_contexts.build(
@@ -951,6 +1041,8 @@ class MathForgeHarness:
                 max_chars=view_budget,
                 focus_claim_ids=focus_claim_ids,
                 final_answer=final_answer,
+                raw_store=session.raw_context_store,
+                memory_categories=memory_categories,
             )
         except ContextBudgetExceeded as exc:
             trace.add(
@@ -1065,7 +1157,6 @@ class MathForgeHarness:
         verified_lemmas,
         round_id: int,
         skill_context: str,
-        ledger: EvidenceLedger,
     ):
         lemma_context = "\n".join(
             f"- {lemma.statement} (conditions: {', '.join(lemma.conditions) or 'none'})"
@@ -1078,13 +1169,15 @@ class MathForgeHarness:
             skill_context=(
                 f"{skill_context}\n\nVerified problem-local lemmas:\n{lemma_context}"
             )[: self._config.skill_char_budget],
-            method_family=f"lemma-guided-{session.route_plan.primary_subject}",
+            method_family="lemma-guided",
             context_view=self._build_role_context(
                 session,
                 blackboard,
                 trace,
                 role="PrimarySolver",
-                candidates=session.candidates,
+                candidates=[],
+                evidence=[],
+                memory_categories={"raw"},
             ),
         )
         candidate = self._solver_executor.execute(
@@ -1095,14 +1188,6 @@ class MathForgeHarness:
             max_tokens=self._config.primary_max_tokens,
             optional=True,
         )
-        if self._config.enable_tools and self._config.enable_evidence:
-            self._claim_verifier.verify(
-                candidate,
-                ledger,
-                domains=session.problem_ir.domains,
-                assumptions=session.problem_ir.assumptions,
-                budget=session.budget,
-            )
         return candidate
 
 

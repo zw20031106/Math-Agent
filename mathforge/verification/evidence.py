@@ -127,6 +127,7 @@ class EvidenceLedger:
         return any(
             record.candidate_id == candidate_id
             and (claim_id is None or record.claim_id == claim_id)
+            and record.transaction_status == "active"
             and record.strength == "hard"
             and record.status == "fail"
             for record in self._records

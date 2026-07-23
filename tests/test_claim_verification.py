@@ -53,10 +53,12 @@ def test_claim_verifier_propagates_assumptions_and_domains():
         domains={"x": "R"},
         assumptions=["y > 0"],
     )
-    assert records[0].status == "unknown"
+    assert records[0].status == "pass"
+    assert records[0].strength == "hard"
     assert records[0].invocation["assumptions"] == ["y > 0", "x >= 0"]
     assert records[0].invocation["domains"] == {"x": "R"}
-    assert candidate.claims[0].status == "unverified"
+    assert candidate.claims[0].status == "verified"
+    assert candidate.claims[0].verification_state == "semantically_verified"
 
 
 def test_nonsemantic_hard_pass_does_not_verify_mathematical_claim():

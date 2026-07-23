@@ -9,6 +9,8 @@ allowed_tools: none
 failure_policy: return_empty_lemma_list
 stop_condition: structured_lemmas
 max_context_chars: 16000
-version: 1
+version: 2
+execution_mode: inactive_review_template
 ---
-Extract concise lemmas with conditions and dependencies; all new lemmas remain provisional.
+Inactive review template. Production lemma curation is a deterministic host
+service under ADR-001 and does not render this contract into model messages.

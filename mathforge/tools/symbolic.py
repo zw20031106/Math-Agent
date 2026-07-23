@@ -47,6 +47,20 @@ def symbolic_equivalence(
     constraints, domain_rules, context_complete = _parse_context(
         assumptions or [], domains or {}
     )
+    predicate = _assumption_predicate(constraints, domain_rules)
+    if predicate is not None:
+        refined = sympy.simplify(sympy.refine(difference, predicate))
+        if refined == 0:
+            return _result(
+                "pass",
+                "hard",
+                "symbolic difference is zero under the supplied domain",
+                {
+                    "difference": "0",
+                    "context_complete": context_complete,
+                    "conditional": True,
+                },
+            )
     counterexample = _counterexample(difference, constraints, domain_rules)
     if counterexample is not None and context_complete:
         return _result(
@@ -112,6 +126,42 @@ def _parse_context(
             else:
                 constraints.append(parsed)
     return constraints, domain_rules, complete
+
+
+def _assumption_predicate(
+    constraints: list[sympy.Expr],
+    domain_rules: dict[sympy.Symbol, str],
+):
+    predicates = []
+    domain_predicates = {
+        "real": sympy.Q.real,
+        "integer": sympy.Q.integer,
+        "rational": sympy.Q.rational,
+        "natural": sympy.Q.nonnegative,
+        "complex": sympy.Q.complex,
+    }
+    for symbol, domain in domain_rules.items():
+        predicates.append(domain_predicates[domain](symbol))
+        if domain == "natural":
+            predicates.append(sympy.Q.integer(symbol))
+    relation_predicates = {
+        sympy.core.relational.GreaterThan: sympy.Q.nonnegative,
+        sympy.core.relational.StrictGreaterThan: sympy.Q.positive,
+        sympy.core.relational.LessThan: sympy.Q.nonpositive,
+        sympy.core.relational.StrictLessThan: sympy.Q.negative,
+        sympy.core.relational.Unequality: sympy.Q.nonzero,
+    }
+    for constraint in constraints:
+        predicate_factory = relation_predicates.get(type(constraint))
+        if (
+            predicate_factory is not None
+            and isinstance(constraint.lhs, sympy.Symbol)
+            and constraint.rhs == 0
+        ):
+            predicates.append(predicate_factory(constraint.lhs))
+    if not predicates:
+        return None
+    return sympy.And(*predicates)
 
 
 def _parse_constraint(source: str):

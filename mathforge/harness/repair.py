@@ -3,8 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from mathforge.context.claim_graph import ClaimGraph
 from mathforge.harness.schemas import CandidateSolution, Claim, EvidenceRecord
-from mathforge.verification.repair_scope import failed_claim_ids, repair_impact_closure
+from mathforge.verification.repair_scope import (
+    claim_impact_closure,
+    failed_claim_ids,
+    repair_impact_closure,
+)
 
 
 RepairCallable = Callable[
@@ -71,9 +76,51 @@ class ClaimRepairService:
             return RepairResult(
                 candidate, None, True, True, affected, [], [], "repair_agent_failed"
             )
-        proposed, changed = self._merge_local_patch(candidate, proposed_patch, affected)
+        try:
+            proposed, changed = self._merge_local_patch(
+                candidate,
+                proposed_patch,
+                affected,
+            )
+        except (TypeError, ValueError):
+            return RepairResult(
+                candidate,
+                None,
+                True,
+                True,
+                affected,
+                [],
+                [],
+                "invalid_repair_graph",
+            )
         if not changed:
             return RepairResult(candidate, proposed, True, True, affected, [], [], "no_local_change")
+        affected = sorted(
+            set(affected)
+            | set(claim_impact_closure(proposed, originally_failed))
+        )
+        if proposed.final_answer != candidate.final_answer:
+            terminal_claim_ids = {
+                claim_id.rsplit("::", 1)[-1]
+                for claim_id in ClaimGraph.from_candidate(
+                    proposed
+                ).terminal_claim_ids(proposed.candidate_id)
+            }
+            if not terminal_claim_ids.intersection(affected):
+                return RepairResult(
+                    candidate,
+                    proposed,
+                    True,
+                    True,
+                    affected,
+                    changed,
+                    [],
+                    "final_answer_dependency_missing",
+                )
+        for claim in proposed.claims:
+            if claim.claim_id in affected:
+                claim.status = "unverified"
+                claim.verification_state = "unknown"
         try:
             new_evidence = reverify(proposed, affected)
         except Exception:
@@ -96,10 +143,12 @@ class ClaimRepairService:
             for record in new_evidence
             if record.candidate_id == proposed.candidate_id
             and record.claim_id in originally_failed
+            and record.transaction_status == "active"
             and record.status == "pass"
             and record.strength == "hard"
         }
         if set(originally_failed) - passed_failed_claims:
+            self._mark_transaction(new_evidence, "rejected")
             return RepairResult(
                 candidate,
                 proposed,
@@ -119,6 +168,7 @@ class ClaimRepairService:
             for record in evidence
             if record.candidate_id == candidate.candidate_id
             and record.claim_id in affected
+            and record.transaction_status == "active"
             and record.status == "pass"
             and record.strength == "hard"
         }
@@ -128,10 +178,12 @@ class ClaimRepairService:
             for record in new_evidence
             if record.candidate_id == proposed.candidate_id
             and record.claim_id in required_reverification
+            and record.transaction_status == "active"
             and record.status == "pass"
             and record.strength == "hard"
         }
         if required_reverification - passed_affected:
+            self._mark_transaction(new_evidence, "rejected")
             return RepairResult(
                 candidate,
                 proposed,
@@ -144,10 +196,12 @@ class ClaimRepairService:
             )
         if any(
             record.claim_id is None
+            and record.transaction_status == "active"
             and record.status == "fail"
             and record.strength == "hard"
             for record in new_evidence
         ):
+            self._mark_transaction(new_evidence, "rejected")
             return RepairResult(
                 candidate,
                 proposed,
@@ -161,6 +215,7 @@ class ClaimRepairService:
         new_local = [record for record in new_evidence if record.claim_id in affected]
         old_local = self._local_evidence(candidate, evidence, affected)
         if self._evidence_quality(new_local) < self._evidence_quality(old_local):
+            self._mark_transaction(new_evidence, "rejected")
             return RepairResult(
                 candidate,
                 proposed,
@@ -172,6 +227,7 @@ class ClaimRepairService:
                 "evidence_quality_decreased",
             )
         if any(record.status == "fail" and record.strength == "hard" for record in new_evidence):
+            self._mark_transaction(new_evidence, "rejected")
             return RepairResult(
                 candidate,
                 proposed,
@@ -182,9 +238,18 @@ class ClaimRepairService:
                 new_evidence,
                 "hard_failure_remains",
             )
+        self._mark_transaction(new_evidence, "active")
         return RepairResult(
             proposed, proposed, True, False, affected, changed, new_evidence, "accepted"
         )
+
+    @staticmethod
+    def _mark_transaction(
+        records: list[EvidenceRecord],
+        status: str,
+    ) -> None:
+        for record in records:
+            record.transaction_status = status
 
     @staticmethod
     def _local_evidence(
@@ -195,7 +260,9 @@ class ClaimRepairService:
         return [
             record
             for record in evidence
-            if record.candidate_id == candidate.candidate_id and record.claim_id in claim_ids
+            if record.candidate_id == candidate.candidate_id
+            and record.claim_id in claim_ids
+            and record.transaction_status == "active"
         ]
 
     @staticmethod
@@ -262,6 +329,7 @@ class ClaimRepairService:
                 set(original.contract_deviations)
                 | {f"repair:{item}" for item in patch.contract_deviations}
             ),
+            method_steps=list(original.method_steps),
         )
         proposed.validate()
         return proposed, changed
@@ -280,6 +348,11 @@ class ClaimRepairService:
 
     @staticmethod
     def _evidence_quality(records: list[EvidenceRecord]) -> tuple[int, int, int, int]:
+        records = [
+            record
+            for record in records
+            if record.transaction_status == "active"
+        ]
         hard_fails = sum(record.strength == "hard" and record.status == "fail" for record in records)
         hard_passes = sum(record.strength == "hard" and record.status == "pass" for record in records)
         medium_passes = sum(

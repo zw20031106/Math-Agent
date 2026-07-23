@@ -15,6 +15,13 @@ class MemoryBlackboard:
             raise PermissionError(f"{role} cannot write {category}")
         return self._memory.add(category, payload, role)
 
-    def view(self, role: str) -> list[dict]:
-        categories = READ_PERMISSIONS.get(role, frozenset())
-        return [item.to_dict() for item in self._memory.read(categories)]
+    def view(
+        self,
+        role: str,
+        *,
+        categories: set[str] | frozenset[str] | None = None,
+    ) -> list[dict]:
+        allowed = READ_PERMISSIONS.get(role, frozenset())
+        if categories is not None:
+            allowed = allowed.intersection(categories)
+        return [item.to_dict() for item in self._memory.read(allowed)]

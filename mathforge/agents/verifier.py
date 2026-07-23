@@ -269,12 +269,13 @@ class LemmaVerifier:
         candidates: list[CandidateSolution],
         evidence: list[EvidenceRecord],
     ) -> LemmaCard:
-        source = lemma.proof_sketch.removeprefix("Extracted from ")
-        candidate_id, separator, claim_id = source.partition(":")
+        candidate_id = lemma.source_candidate_id
+        claim_id = lemma.source_claim_id
         matching = [
             record
             for record in evidence
             if record.candidate_id == candidate_id and record.claim_id == claim_id
+            and record.transaction_status == "active"
         ]
         if any(
             record.status == "fail"

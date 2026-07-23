@@ -84,8 +84,9 @@ def test_symbolic_counterexamples_respect_assumptions_and_domains():
             "assumptions": ["x is sufficiently nice"],
         },
     )
-    assert constrained.status == "unknown"
-    assert constrained.strength == "medium"
+    assert constrained.status == "pass"
+    assert constrained.strength == "hard"
+    assert constrained.payload["conditional"] is True
     assert negative_domain.status == "fail"
     assert negative_domain.strength == "hard"
     assert unparsed.status == "unknown"

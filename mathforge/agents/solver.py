@@ -12,8 +12,10 @@ from mathforge.parsing.solution_parser import SolutionParser
 
 
 _OUTPUT_INSTRUCTION = """Return a CandidateSolution JSON object when possible, with
-method, solution_text, final_answer, answer_type, assumptions, theorems, claims,
-and unresolved_obligations. Keep the exact final answer explicit."""
+method, structured method_steps, solution_text, final_answer, answer_type,
+assumptions, theorems, claims, and unresolved_obligations. Each method step must
+use a controlled kind and reference real claim IDs. Keep the exact final answer
+explicit."""
 
 
 @dataclass(frozen=True)

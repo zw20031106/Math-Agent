@@ -7,8 +7,11 @@ from typing import Any
 
 from mathforge.harness.schemas import (
     MAX_CLAIMS,
+    MAX_METHOD_STEPS,
     CandidateSolution,
     Claim,
+    MethodStep,
+    MethodStepKind,
     SchemaValidationError,
 )
 from mathforge.verification.capabilities import derive_claim_kind
@@ -94,6 +97,7 @@ class SolutionParser:
         )
         allowed_fields = host_fields | {
             "method",
+            "method_steps",
             "solution_text",
             "final_answer",
             "assumptions",
@@ -177,6 +181,72 @@ class SolutionParser:
                     claim_kind=derive_claim_kind(check_suggestion),
                 )
             )
+        raw_method_steps = payload.get("method_steps", [])
+        method_steps: list[MethodStep] = []
+        if not isinstance(raw_method_steps, list):
+            deviations.append("method_steps:type")
+            raw_method_steps = []
+        if len(raw_method_steps) > MAX_METHOD_STEPS:
+            raise SchemaValidationError(
+                f"method step count exceeds {MAX_METHOD_STEPS}"
+            )
+        valid_claim_ids = {claim.claim_id for claim in claims}
+        valid_kinds = {item.value for item in MethodStepKind}
+        for index, item in enumerate(raw_method_steps):
+            prefix = f"method_steps[{index}]"
+            if not isinstance(item, dict):
+                deviations.append(f"{prefix}:type")
+                continue
+            allowed_step_fields = {"step_id", "kind", "claim_ids", "theorem"}
+            deviations.extend(
+                f"{prefix}.{name}:ignored"
+                for name in sorted(set(item) - allowed_step_fields)
+            )
+            step_id = SolutionParser._model_string(
+                item,
+                "step_id",
+                f"s{index + 1}",
+                deviations,
+                prefix=prefix,
+            )
+            kind = SolutionParser._model_string(
+                item,
+                "kind",
+                MethodStepKind.OTHER.value,
+                deviations,
+                prefix=prefix,
+            )
+            if kind not in valid_kinds:
+                deviations.append(f"{prefix}.kind:value")
+                kind = MethodStepKind.OTHER.value
+            claim_ids = SolutionParser._model_string_list(
+                item,
+                "claim_ids",
+                deviations,
+                prefix=prefix,
+            )
+            unknown_claim_ids = sorted(set(claim_ids) - valid_claim_ids)
+            if unknown_claim_ids:
+                deviations.append(f"{prefix}.claim_ids:unknown")
+                claim_ids = [
+                    claim_id
+                    for claim_id in claim_ids
+                    if claim_id in valid_claim_ids
+                ]
+            method_steps.append(
+                MethodStep(
+                    step_id=step_id,
+                    kind=kind,
+                    claim_ids=claim_ids,
+                    theorem=SolutionParser._model_string(
+                        item,
+                        "theorem",
+                        "",
+                        deviations,
+                        prefix=prefix,
+                    ),
+                )
+            )
         final_answer = SolutionParser._model_string(
             payload,
             "final_answer",
@@ -221,6 +291,7 @@ class SolutionParser:
             ),
             parse_status=status,
             contract_deviations=sorted(set(deviations)),
+            method_steps=method_steps,
         )
         candidate.validate()
         return candidate

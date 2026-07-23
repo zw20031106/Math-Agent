@@ -43,7 +43,7 @@ class RoleContextView:
 
     @property
     def char_count(self) -> int:
-        return len(self.to_json())
+        return len(self.to_prompt_json())
 
     def to_json(self) -> str:
         return json.dumps(

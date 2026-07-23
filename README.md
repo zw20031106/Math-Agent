@@ -9,11 +9,16 @@ The official `main.py` and `llm_client.py` files are frozen and verified byte-fo
 `user_agent.ReasoningAgent` is a thin, thread-safe entry point. Each solve creates
 an isolated session, parses and routes the problem, runs risk-sized method-orthogonal
 candidates under mutually exclusive method-family contracts, checks actual
-method duplicates and capability-scoped claim evidence, batches unresolved proof
+method duplicates from structured steps and capability-scoped claim evidence,
+batches unresolved proof
 claims through a soft-evidence VerifierSkeptic, and requires every completed
 proof obligation to cite an explicitly mapped Claim and Evidence record before
 lexicographic arbitration. High-risk problems can use a verified-lemma loop and
-evidence-scoped repair. Final output is deterministic; the LLM finalizer is
+evidence-scoped repair. Lemma curation is a deterministic host service; its
+inactive Prompt Contract is retained only for content review and is not used for
+a production model call. Every lemma-expanded candidate is included in the same
+batch Skeptic and proof-completion gates before arbitration. Final output is
+deterministic; the LLM finalizer is
 disabled by default. Reviewed knowledge retrieval and the optional MCP adapter
 are offline.
 

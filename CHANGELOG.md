@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### S3
+
+- Upgraded core contracts to schema version 1.2 with a controlled
+  `MethodFamily`, structured `MethodStep` records, namespaced `ClaimGraph`
+  serialization, and namespaced Lemma sources and dependencies.
+- Made lemma expansion history-free: the second Solver round receives the
+  original problem, conditions, and verified problem-local LemmaCards without
+  any historical `solution_text`.
+- Moved the single batch VerifierSkeptic call after optional lemma expansion so
+  expanded candidates must repeat schema, answer, evidence, obligation,
+  Skeptic, completion, and arbitration gates.
+- Recomputed Repair impact from both the original and proposed dependency
+  graphs, validated final-answer terminal dependencies, and marked rolled-back
+  proposed evidence as a rejected transaction.
+- Made answer equivalence use the host ProblemIR answer type, assumptions, and
+  domains; unknown comparisons are now distinct from confirmed disagreement.
+- Replaced free-text method-label agreement with structured step/theorem/claim
+  topology signatures and excluded contract-deviating methods from independent
+  agreement.
+- Added one capacity-bounded RawContextStore per session, exact prompt-view
+  character accounting, a metadata allowlist, and lemma-round context
+  isolation.
+
 ### S2
 
 - Separated Router confidence, ambiguity margin, and complexity signals; close

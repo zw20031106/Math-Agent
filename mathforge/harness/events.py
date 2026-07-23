@@ -11,6 +11,7 @@ JUDGE_EVENTS = frozenset(
         "proof_completion_gate",
         "tool_checks",
         "lemma_loop_completed",
+        "expanded_candidates_reverified",
         "candidate_arbitrated",
         "finalization_completed",
         "primary_completed",

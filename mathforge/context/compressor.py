@@ -24,7 +24,14 @@ class ContextCompressor:
     ) -> ContextSnapshot:
         if max_chars < 1:
             raise ContextBudgetExceeded("context budget must be positive")
-        allowed_claims = self._dependency_closure(snapshot.claim_graph, focus_claim_ids or [])
+        allowed_graph_nodes = self._dependency_closure(
+            snapshot.claim_graph,
+            focus_claim_ids or [],
+        )
+        allowed_claims = {
+            claim_id.rsplit("::", 1)[-1]
+            for claim_id in allowed_graph_nodes
+        }
         candidates = [
             candidate_view(candidate, role, allowed_claims if role == "RepairAgent" else None)
             for candidate in snapshot.candidates
@@ -56,7 +63,7 @@ class ContextCompressor:
             claim_graph={
                 key: list(value)
                 for key, value in snapshot.claim_graph.items()
-                if role != "RepairAgent" or key in allowed_claims
+                if role != "RepairAgent" or key in allowed_graph_nodes
             },
             metadata={
                 **deepcopy(snapshot.metadata),
@@ -80,12 +87,36 @@ class ContextCompressor:
 
     @staticmethod
     def serialized_size(snapshot: ContextSnapshot) -> int:
-        return len(json.dumps(snapshot.to_dict(), ensure_ascii=False, default=str))
+        payload = snapshot.to_dict()
+        payload.pop("original_problem", None)
+        payload.pop("raw_context_ref", None)
+        payload["context_snapshot_id"] = snapshot.snapshot_id
+        return len(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+        )
 
     @staticmethod
     def _dependency_closure(graph: dict[str, list[str]], roots: list[str]) -> set[str]:
         closure: set[str] = set()
-        stack = list(roots)
+        stack = [
+            graph_key
+            for root in roots
+            for graph_key in (
+                [root]
+                if root in graph
+                else [
+                    key
+                    for key in graph
+                    if key.rsplit("::", 1)[-1] == root
+                ]
+            )
+        ]
         while stack:
             claim_id = stack.pop()
             if claim_id in closure:
