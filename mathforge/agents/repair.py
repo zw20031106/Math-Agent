@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from mathforge.agents.registry import PromptContractLoader
+from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProblemIR
@@ -29,6 +30,7 @@ class RepairAgent:
         budget: CallBudget,
         *,
         max_tokens: int,
+        context_view: RoleContextView | None = None,
     ) -> CandidateSolution:
         local_claims = [
             claim.to_dict() for claim in candidate.claims if claim.claim_id in affected_claim_ids
@@ -40,27 +42,26 @@ class RepairAgent:
             and record.claim_id in affected_claim_ids
         ]
         budget.consume()
+        user = (
+            f"Problem:\n{problem.normalized_problem}\n\n"
+            + (
+                f"Authorized repair context:\n{context_view.to_prompt_json()}"
+                if context_view is not None
+                else (
+                    f"Affected claims:\n{json.dumps(local_claims, ensure_ascii=False)}\n"
+                    f"Evidence:\n{json.dumps(local_evidence, ensure_ascii=False)}"
+                )
+            )
+        )
         response = self._provider.chat(
-            messages=[
-                {
-                    "role": "system",
-                    "content": self._contracts.system_prompt(
-                        "repair",
-                        (
-                            "Repair only the supplied failed claim impact closure. "
-                            "Return CandidateSolution JSON with replacement claims."
-                        ),
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Problem:\n{problem.normalized_problem}\n\n"
-                        f"Affected claims:\n{json.dumps(local_claims, ensure_ascii=False)}\n"
-                        f"Evidence:\n{json.dumps(local_evidence, ensure_ascii=False)}"
-                    ),
-                },
-            ],
+            messages=self._contracts.messages(
+                "repair",
+                user,
+                (
+                    "Repair only the supplied failed claim impact closure. "
+                    "Return CandidateSolution JSON with replacement claims."
+                ),
+            ),
             temperature=0.1,
             max_tokens=max_tokens,
         )

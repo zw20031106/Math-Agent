@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from mathforge.context.compressor import ContextCompressor
+from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.context.snapshots import ContextSnapshot
 from mathforge.context.validator import CompressionValidator
 
@@ -45,8 +48,18 @@ def test_agent_views_hide_primary_derivation_and_limit_repair_closure():
 
 def test_compression_preserves_hard_invariants_and_rolls_back_invalid_view():
     original = _snapshot()
-    compressed = ContextCompressor().compress(original, role="VerifierSkeptic", max_chars=300)
+    compressed = ContextCompressor().compress(original, role="VerifierSkeptic", max_chars=1000)
     assert CompressionValidator().validate(original, compressed) == []
+    assert ContextCompressor.serialized_size(compressed) <= 1000
     invalid = _snapshot()
     invalid.original_problem = "changed"
     assert "original_problem_changed" in CompressionValidator().validate(original, invalid)
+
+
+def test_compression_explicitly_rejects_an_infeasible_hard_budget():
+    with pytest.raises(ContextBudgetExceeded, match="budget"):
+        ContextCompressor().compress(
+            _snapshot(),
+            role="VerifierSkeptic",
+            max_chars=300,
+        )

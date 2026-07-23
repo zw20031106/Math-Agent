@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mathforge.agents.registry import PromptContractLoader
+from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
@@ -22,6 +23,7 @@ class SolverRequest:
     skill_context: str
     method_family: str
     forbidden_method_families: tuple[str, ...] = ()
+    context_view: RoleContextView | None = None
 
 
 class PrimarySolver:
@@ -31,27 +33,25 @@ class PrimarySolver:
         self._contracts = contracts or PromptContractLoader()
 
     def build_messages(self, request: SolverRequest) -> list[dict[str, str]]:
-        return [
-            {
-                "role": "system",
-                "content": self._contracts.system_prompt(
-                    "primary_solver",
-                    (
-                        "Produce a rigorous independently verifiable solution. "
-                        f"{_OUTPUT_INSTRUCTION} Set method exactly to the assigned method family."
-                    ),
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Problem:\n{request.problem.normalized_problem}\n\nProvide a complete solution.\n\n"
-                    f"Required core method family: {request.method_family}.\n"
-                    f"Forbidden method families: {', '.join(request.forbidden_method_families) or 'none'}.\n"
-                    f"{request.skill_context}"
-                ),
-            },
-        ]
+        context = (
+            f"\nAuthorized context view:\n{request.context_view.to_prompt_json()}"
+            if request.context_view is not None
+            else ""
+        )
+        user = (
+            f"Problem:\n{request.problem.normalized_problem}\n\nProvide a complete solution.\n\n"
+            f"Required core method family: {request.method_family}.\n"
+            f"Forbidden method families: {', '.join(request.forbidden_method_families) or 'none'}.\n"
+            f"{request.skill_context}{context}"
+        )
+        return self._contracts.messages(
+            "primary_solver",
+            user,
+            (
+                "Produce a rigorous independently verifiable solution. "
+                f"{_OUTPUT_INSTRUCTION} Set method exactly to the assigned method family."
+            ),
+        )
 
 
 class AlternativeSolver:
@@ -62,26 +62,24 @@ class AlternativeSolver:
 
     def build_messages(self, request: SolverRequest) -> list[dict[str, str]]:
         forbidden = ", ".join(request.forbidden_method_families) or "none"
-        return [
-            {
-                "role": "system",
-                "content": self._contracts.system_prompt(
-                    "alternative_solver",
-                    (
-                        "Solve independently using only the assigned core method family. "
-                        f"{_OUTPUT_INSTRUCTION} Set method exactly to the assigned method family."
-                    ),
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Problem:\n{request.problem.normalized_problem}\n\nProvide a complete solution.\n\n"
-                    f"Required core method family: {request.method_family}.\n"
-                    f"Forbidden method families: {forbidden}.\n{request.skill_context}"
-                ),
-            },
-        ]
+        context = (
+            f"\nAuthorized context view:\n{request.context_view.to_prompt_json()}"
+            if request.context_view is not None
+            else ""
+        )
+        user = (
+            f"Problem:\n{request.problem.normalized_problem}\n\nProvide a complete solution.\n\n"
+            f"Required core method family: {request.method_family}.\n"
+            f"Forbidden method families: {forbidden}.\n{request.skill_context}{context}"
+        )
+        return self._contracts.messages(
+            "alternative_solver",
+            user,
+            (
+                "Solve independently using only the assigned core method family. "
+                f"{_OUTPUT_INSTRUCTION} Set method exactly to the assigned method family."
+            ),
+        )
 
 
 class SolverExecutor:

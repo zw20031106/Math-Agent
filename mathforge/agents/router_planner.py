@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Callable
 
 from mathforge.agents.registry import PromptContractLoader
+from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.schemas import ProblemIR, RoutePlan
 
 
@@ -108,6 +109,7 @@ class RouterPlanner:
         llm_chat: Callable[..., str] | None = None,
         consume_call: Callable[[], None] | None = None,
         record_tokens: Callable[[int], None] | None = None,
+        context_view: RoleContextView | None = None,
     ) -> RoutePlan:
         rule_plan = self._rules.plan(problem)
         top_score = self._rules.rank(problem)[0][1]
@@ -115,24 +117,23 @@ class RouterPlanner:
             return rule_plan
         try:
             consume_call()
+            context = (
+                f"\nAuthorized context view:\n{context_view.to_prompt_json()}"
+                if context_view is not None
+                else ""
+            )
+            user = (
+                f"Problem:\n{problem.normalized_problem}\n\n"
+                'Return {"primary_subject":"...","auxiliary_subject":null,'
+                '"risk_level":"low|medium|high","method_families":["...","...","..."]}.'
+                f"{context}"
+            )
             response = llm_chat(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": self._contracts.system_prompt(
-                            "router_planner",
-                            "Classify the math domain and return JSON only.",
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Problem:\n{problem.normalized_problem}\n\n"
-                            'Return {"primary_subject":"...","auxiliary_subject":null,'
-                            '"risk_level":"low|medium|high","method_families":["...","...","..."]}.'
-                        ),
-                    },
-                ],
+                messages=self._contracts.messages(
+                    "router_planner",
+                    user,
+                    "Classify the math domain and return JSON only.",
+                ),
                 temperature=0.0,
                 max_tokens=256,
             )

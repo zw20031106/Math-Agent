@@ -10,6 +10,8 @@ from mathforge.agents.solver import (
     SolverRequest,
 )
 from mathforge.agents.router_planner import method_families_for
+from mathforge.agents.registry import PromptContractLoader
+from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
 from mathforge.verification.methods import candidate_method_signature
@@ -31,8 +33,13 @@ class FanoutResult:
 
 
 class CandidateOrchestrator:
-    def __init__(self, executor: SolverExecutor) -> None:
+    def __init__(
+        self,
+        executor: SolverExecutor,
+        contracts: PromptContractLoader | None = None,
+    ) -> None:
         self._executor = executor
+        self._contracts = contracts or PromptContractLoader()
 
     def fanout(
         self,
@@ -43,7 +50,9 @@ class CandidateOrchestrator:
         *,
         temperature: float,
         max_tokens: int,
+        context_views: dict[str, RoleContextView] | None = None,
     ) -> FanoutResult:
+        views = context_views or {}
         count = max(1, min(3, route.candidate_count))
         method_families = list(
             dict.fromkeys(
@@ -62,7 +71,7 @@ class CandidateOrchestrator:
         branches.append(
             (
                 0,
-                PrimarySolver(),
+                PrimarySolver(self._contracts),
                 SolverRequest(
                     "primary-1",
                     problem,
@@ -70,6 +79,7 @@ class CandidateOrchestrator:
                     skill_context,
                     method_families[0],
                     tuple(method_families[1:count]),
+                    views.get("PrimarySolver"),
                 ),
             )
         )
@@ -77,7 +87,7 @@ class CandidateOrchestrator:
             branches.append(
                 (
                     index,
-                    AlternativeSolver(),
+                    AlternativeSolver(self._contracts),
                     SolverRequest(
                         f"alternative-{index}",
                         problem,
@@ -89,6 +99,7 @@ class CandidateOrchestrator:
                             for family in method_families[:count]
                             if family != method_families[index]
                         ),
+                        views.get("AlternativeSolver"),
                     ),
                 )
             )

@@ -28,9 +28,11 @@ def _config() -> HarnessConfig:
 class RepairRuntimeClient:
     def __init__(self, repaired_answer: str) -> None:
         self.repaired_answer = repaired_answer
+        self.calls = []
 
     def chat(self, *, messages, temperature, max_tokens):
         del temperature, max_tokens
+        self.calls.append(messages)
         if messages[0]["content"].startswith("You are RepairAgent"):
             return json.dumps(
                 {
@@ -55,7 +57,12 @@ class RepairRuntimeClient:
                         "claim_id": "failed",
                         "statement": "x = x+1",
                         "check_type": "symbolic_equivalence",
-                    }
+                    },
+                    {
+                        "claim_id": "safe",
+                        "statement": "UNRELATED_SAFE_CLAIM",
+                        "check_type": "reasoning",
+                    },
                 ],
             }
         )
@@ -72,7 +79,8 @@ def test_runtime_rechecks_repaired_answer_type_and_rolls_back_invalid_patch():
 
 
 def test_runtime_accepts_fully_reverified_repair_and_rebuilds_solution_text():
-    result = MathForgeHarness(RepairRuntimeClient("B"), _config()).solve(
+    client = RepairRuntimeClient("B")
+    result = MathForgeHarness(client, _config()).solve(
         "Choose the correct option:\nA. one\nB. two", {}
     )
     repair = next(event for event in result["trace"] if event["event"] == "repair_completed")
@@ -80,3 +88,10 @@ def test_runtime_accepts_fully_reverified_repair_and_rebuilds_solution_text():
     assert repair["reason"] == "accepted"
     assert "x = x" in result["final_response"]
     assert "STALE BAD DERIVATION" not in result["final_response"]
+    repair_prompt = next(
+        messages[-1]["content"]
+        for messages in client.calls
+        if messages[0]["content"].startswith("You are RepairAgent")
+    )
+    assert "context_snapshot_id" in repair_prompt
+    assert "UNRELATED_SAFE_CLAIM" not in repair_prompt

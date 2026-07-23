@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from mathforge.context.errors import ContextBudgetExceeded
+
 
 FIXED_ROLES = (
     "RouterPlanner",
@@ -141,3 +143,22 @@ class PromptContractLoader:
 
     def system_prompt(self, role_directory: str, runtime_instructions: str = "") -> str:
         return self.load(role_directory).render_system(runtime_instructions)
+
+    def messages(
+        self,
+        role_directory: str,
+        user_content: str,
+        runtime_instructions: str = "",
+    ) -> list[dict[str, str]]:
+        contract = self.load(role_directory)
+        system = contract.render_system(runtime_instructions)
+        total = len(system) + len(user_content)
+        if total > contract.max_context_chars:
+            raise ContextBudgetExceeded(
+                f"{contract.fields['role']} messages require {total} chars, "
+                f"budget is {contract.max_context_chars}"
+            )
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
+        ]

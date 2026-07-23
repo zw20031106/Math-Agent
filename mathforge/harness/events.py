@@ -18,6 +18,8 @@ JUDGE_EVENTS = frozenset(
         "repair_completed",
         "deadline_finalize",
         "compression_validated",
+        "context_view_built",
+        "context_budget_infeasible",
         "fallback_used",
     }
 )

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mathforge.agents.registry import PromptContractLoader
+from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, ProblemIR
@@ -39,31 +40,28 @@ class LLMFinalizer:
         budget: CallBudget,
         *,
         max_tokens: int,
+        context_view: RoleContextView | None = None,
     ) -> FinalizationResult:
         try:
             budget.consume()
+            selected = (
+                f"Authorized finalizer context:\n{context_view.to_prompt_json()}"
+                if context_view is not None
+                else f"Verified selected solution:\n{candidate.solution_text}"
+            )
+            user = (
+                f"Problem:\n{problem.normalized_problem}\n\n{selected}\n\n"
+                f"Exact final answer (must not change): {candidate.final_answer}"
+            )
             response = self._provider.chat(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": self._contracts.system_prompt(
-                            "finalizer",
-                            (
-                                "Improve exposition only. Do not introduce new conclusions or "
-                                "assumptions. Preserve the exact final answer. Return "
-                                "CandidateSolution JSON."
-                            ),
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Problem:\n{problem.normalized_problem}\n\n"
-                            f"Verified selected solution:\n{candidate.solution_text}\n\n"
-                            f"Exact final answer (must not change): {candidate.final_answer}"
-                        ),
-                    },
-                ],
+                messages=self._contracts.messages(
+                    "finalizer",
+                    user,
+                    (
+                        "Improve exposition only. Do not introduce new conclusions or "
+                        "assumptions. Preserve the exact final answer. Return CandidateSolution JSON."
+                    ),
+                ),
                 temperature=0.0,
                 max_tokens=max_tokens,
             )

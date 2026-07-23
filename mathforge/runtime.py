@@ -4,7 +4,7 @@ from typing import Any
 from dataclasses import replace
 from time import perf_counter
 
-from mathforge.agents.registry import SkillRegistry
+from mathforge.agents.registry import PromptContractLoader, SkillRegistry
 from mathforge.agents.router_planner import RouterPlanner
 from mathforge.config import HarnessConfig
 from mathforge.harness.budget import CallBudget
@@ -23,8 +23,8 @@ from mathforge.tools.executor import ToolExecutor
 from mathforge.verification.evidence import EvidenceLedger
 from mathforge.verification.arbitration import ArbitrationPolicy
 from mathforge.verification.proof_obligations import ProofObligationEngine
-from mathforge.context.assembler import ContextAssembler, RawContextStore
-from mathforge.context.compressor import ContextCompressor
+from mathforge.context.errors import ContextBudgetExceeded
+from mathforge.context.role_views import RoleContextFactory
 from mathforge.memory.blackboard import MemoryBlackboard
 from mathforge.harness.lemma_loop import VerifiedLemmaLoop
 from mathforge.retrieval.retriever import Retriever
@@ -34,6 +34,17 @@ from mathforge.harness.repair import ClaimRepairService
 from mathforge.agents.finalizer import LLMFinalizer
 from mathforge.agents.verifier import VerifierSkepticAgent
 from mathforge.verification.completion import ProofCompletionGate
+
+
+_ROLE_CONTRACT_DIRECTORIES = {
+    "RouterPlanner": "router_planner",
+    "PrimarySolver": "primary_solver",
+    "AlternativeSolver": "alternative_solver",
+    "LemmaCurator": "lemma_curator",
+    "VerifierSkeptic": "verifier_skeptic",
+    "RepairAgent": "repair",
+    "LLMFinalizer": "finalizer",
+}
 
 
 class MathForgeHarness:
@@ -48,24 +59,33 @@ class MathForgeHarness:
         self._solution_parser = SolutionParser()
         self._answer_validator = AnswerValidator()
         self._formatter = DeterministicFormatter()
-        self._router = RouterPlanner()
+        self._contracts = PromptContractLoader()
+        self._role_contexts = RoleContextFactory()
+        self._router = RouterPlanner(contracts=self._contracts)
         self._skills = SkillRegistry()
         self._solver_executor = SolverExecutor(self._provider, self._solution_parser)
-        self._candidate_orchestrator = CandidateOrchestrator(self._solver_executor)
+        self._candidate_orchestrator = CandidateOrchestrator(
+            self._solver_executor,
+            self._contracts,
+        )
         self._tool_executor = ToolExecutor(use_mcp=self._config.use_mcp)
         self._obligation_engine = ProofObligationEngine()
         self._arbitration = ArbitrationPolicy(self._tool_executor)
-        self._context_compressor = ContextCompressor()
         self._lemma_loop = VerifiedLemmaLoop()
         self._retriever = Retriever()
         self._claim_verifier = ClaimEvidenceVerifier(self._tool_executor)
-        self._repair_agent = RepairAgent(self._provider, self._solution_parser)
+        self._repair_agent = RepairAgent(
+            self._provider,
+            self._solution_parser,
+            self._contracts,
+        )
         self._finalizer = LLMFinalizer(
             self._provider,
             self._solution_parser,
             self._formatter,
+            self._contracts,
         )
-        self._verifier_agent = VerifierSkepticAgent(self._provider)
+        self._verifier_agent = VerifierSkepticAgent(self._provider, self._contracts)
         self._proof_completion_gate = ProofCompletionGate()
 
     def solve(self, problem: str, metadata: dict) -> dict:
@@ -104,13 +124,25 @@ class MathForgeHarness:
                 problem_type=session.problem_ir.problem_type,
                 answer_type=session.problem_ir.answer_type,
             )
+            router_context = None
+            router_enabled = self._config.enable_router
+            try:
+                router_context = self._build_role_context(
+                    session,
+                    blackboard,
+                    trace,
+                    role="RouterPlanner",
+                )
+            except ContextBudgetExceeded:
+                router_enabled = False
             session.route_plan = self._router.plan(
                 session.problem_ir,
-                llm_chat=self._provider.chat if self._config.enable_router else None,
-                consume_call=session.budget.consume if self._config.enable_router else None,
+                llm_chat=self._provider.chat if router_enabled else None,
+                consume_call=session.budget.consume if router_enabled else None,
                 record_tokens=(
-                    session.budget.record_tokens if self._config.enable_router else None
+                    session.budget.record_tokens if router_enabled else None
                 ),
+                context_view=router_context,
             )
             if not self._config.enable_alternatives:
                 session.route_plan = replace(session.route_plan, candidate_count=1)
@@ -143,6 +175,12 @@ class MathForgeHarness:
                     use_lemma_loop=False,
                 )
                 trace.add("deadline_finalize", stage="before_fanout")
+            if self._config.enable_memory:
+                blackboard.publish(
+                    "System",
+                    "working",
+                    {"route_plan": session.route_plan.to_dict()},
+                )
             skill_context = (
                 self._skills.compose(
                     session.route_plan.selected_skills,
@@ -174,6 +212,21 @@ class MathForgeHarness:
                 selected_skills=session.route_plan.selected_skills,
                 method_families=session.route_plan.method_families,
             )
+            solver_contexts = {
+                "PrimarySolver": self._build_role_context(
+                    session,
+                    blackboard,
+                    trace,
+                    role="PrimarySolver",
+                )
+            }
+            if session.route_plan.candidate_count > 1:
+                solver_contexts["AlternativeSolver"] = self._build_role_context(
+                    session,
+                    blackboard,
+                    trace,
+                    role="AlternativeSolver",
+                )
             fanout = self._candidate_orchestrator.fanout(
                 session.problem_ir,
                 session.route_plan,
@@ -181,6 +234,7 @@ class MathForgeHarness:
                 session.budget,
                 temperature=self._config.primary_temperature,
                 max_tokens=self._config.primary_max_tokens,
+                context_views=solver_contexts,
             )
             session.candidates.extend(fanout.candidates)
             trace.add(
@@ -212,6 +266,16 @@ class MathForgeHarness:
                             for record in claim_records
                         )
                 trace.add("tool_checks", checks=tool_results)
+                if self._config.enable_memory:
+                    blackboard.publish(
+                        "System",
+                        "evidence",
+                        {
+                            "evidence_ids": [
+                                record.evidence_id for record in session.evidence
+                            ]
+                        },
+                    )
             active_candidates = list(fanout.candidates)
             if self._config.enable_repair and self._config.enable_evidence:
                 repair_service = ClaimRepairService()
@@ -220,13 +284,13 @@ class MathForgeHarness:
                     repair_result = repair_service.attempt(
                         item,
                         session.evidence,
-                        repair=lambda candidate, affected, local_evidence: self._repair_agent.repair(
-                            session.problem_ir,
+                        repair=lambda candidate, affected, local_evidence: self._repair_candidate(
+                            session,
+                            blackboard,
+                            trace,
                             candidate,
                             affected,
                             local_evidence,
-                            session.budget,
-                            max_tokens=self._config.primary_max_tokens,
                         ),
                         reverify=lambda candidate, affected: self._reverify_repair_candidate(
                             session,
@@ -283,12 +347,20 @@ class MathForgeHarness:
                 and session.route_plan.risk_level in {"medium", "high"}
                 and unresolved_required
             ):
+                verifier_context = self._build_role_context(
+                    session,
+                    blackboard,
+                    trace,
+                    role="VerifierSkeptic",
+                    candidates=viable,
+                )
                 verifier_result = self._verifier_agent.review(
                     session.problem_ir,
                     viable,
                     session.proof_obligations,
                     session.budget,
                     max_tokens=min(1536, self._config.primary_max_tokens),
+                    context_view=verifier_context,
                 )
                 for finding in verifier_result.findings:
                     ledger.record_verifier_finding(
@@ -312,6 +384,8 @@ class MathForgeHarness:
                 session.lemma_memory,
                 expand_round=lambda verified, round_id: self._expand_with_verified_lemmas(
                     session,
+                    blackboard,
+                    trace,
                     verified,
                     round_id,
                     skill_context,
@@ -391,31 +465,6 @@ class MathForgeHarness:
                 session.proof_obligations,
             )
             candidate = arbitration.selected
-            if self._config.enable_memory:
-                context_assembler = ContextAssembler(
-                    RawContextStore(self._config.raw_context_max_chars)
-                )
-                snapshot = context_assembler.assemble(
-                    session.problem_ir,
-                    viable,
-                    session.evidence,
-                    session.proof_obligations,
-                    final_answer=candidate.final_answer,
-                )
-                final_view = self._context_compressor.compress(
-                    snapshot,
-                    role="LLMFinalizer",
-                    max_chars=self._config.raw_context_max_chars,
-                )
-                blackboard.publish(
-                    "System",
-                    "working",
-                    {"context_snapshot": final_view.to_dict()},
-                )
-                trace.add(
-                    "compression_validated",
-                    invariant_failure=final_view is snapshot,
-                )
             trace.add(
                 "candidate_arbitrated",
                 selected=candidate.candidate_id,
@@ -434,19 +483,36 @@ class MathForgeHarness:
             if not final_response.strip():
                 raise ValueError("empty formatted response")
             if self._config.enable_finalizer and session.route_plan.use_llm_finalizer:
-                finalization = self._finalizer.finalize(
-                    session.problem_ir,
-                    candidate,
-                    final_response,
-                    session.budget,
-                    max_tokens=min(2048, self._config.primary_max_tokens),
-                )
-                final_response = finalization.text
-                trace.add(
-                    "finalization_completed",
-                    used_llm=finalization.used_llm,
-                    reason=finalization.reason,
-                )
+                try:
+                    finalizer_context = self._build_role_context(
+                        session,
+                        blackboard,
+                        trace,
+                        role="LLMFinalizer",
+                        candidates=[candidate],
+                        final_answer=candidate.final_answer,
+                    )
+                except ContextBudgetExceeded:
+                    trace.add(
+                        "finalization_completed",
+                        used_llm=False,
+                        reason="context_budget_infeasible",
+                    )
+                else:
+                    finalization = self._finalizer.finalize(
+                        session.problem_ir,
+                        candidate,
+                        final_response,
+                        session.budget,
+                        max_tokens=min(2048, self._config.primary_max_tokens),
+                        context_view=finalizer_context,
+                    )
+                    final_response = finalization.text
+                    trace.add(
+                        "finalization_completed",
+                        used_llm=finalization.used_llm,
+                        reason=finalization.reason,
+                    )
             trace.add(
                 "budget_summary",
                 model_calls=session.budget.used_calls,
@@ -467,6 +533,99 @@ class MathForgeHarness:
             "final_response": final_response,
             "trace": trace.build(),
         }
+
+    def _build_role_context(
+        self,
+        session,
+        blackboard: MemoryBlackboard,
+        trace: TraceBuilder,
+        *,
+        role: str,
+        candidates=None,
+        evidence=None,
+        focus_claim_ids: list[str] | None = None,
+        final_answer: str = "",
+    ):
+        role_directory = _ROLE_CONTRACT_DIRECTORIES[role]
+        contract_budget = self._contracts.load(role_directory).max_context_chars
+        view_budget = min(
+            self._config.raw_context_max_chars,
+            max(256, contract_budget // 2),
+        )
+        selected_candidates = (
+            list(session.candidates) if candidates is None else list(candidates)
+        )
+        candidate_ids = {candidate.candidate_id for candidate in selected_candidates}
+        selected_evidence = (
+            [
+                record
+                for record in session.evidence
+                if not candidate_ids or record.candidate_id in candidate_ids
+            ]
+            if evidence is None
+            else list(evidence)
+        )
+        selected_obligations = {
+            candidate_id: items
+            for candidate_id, items in session.proof_obligations.items()
+            if not candidate_ids or candidate_id in candidate_ids
+        }
+        try:
+            view = self._role_contexts.build(
+                problem=session.problem_ir,
+                candidates=selected_candidates,
+                evidence=selected_evidence,
+                obligations=selected_obligations,
+                blackboard=blackboard,
+                role=role,
+                max_chars=view_budget,
+                focus_claim_ids=focus_claim_ids,
+                final_answer=final_answer,
+            )
+        except ContextBudgetExceeded as exc:
+            trace.add(
+                "context_budget_infeasible",
+                role=role,
+                max_chars=view_budget,
+                reason=str(exc),
+            )
+            raise
+        trace.add(
+            "context_view_built",
+            role=role,
+            snapshot_id=view.snapshot_id,
+            chars=view.char_count,
+            max_chars=view.max_chars,
+        )
+        return view
+
+    def _repair_candidate(
+        self,
+        session,
+        blackboard: MemoryBlackboard,
+        trace: TraceBuilder,
+        candidate,
+        affected_claim_ids: list[str],
+        local_evidence,
+    ):
+        context_view = self._build_role_context(
+            session,
+            blackboard,
+            trace,
+            role="RepairAgent",
+            candidates=[candidate],
+            evidence=local_evidence,
+            focus_claim_ids=affected_claim_ids,
+        )
+        return self._repair_agent.repair(
+            session.problem_ir,
+            candidate,
+            affected_claim_ids,
+            local_evidence,
+            session.budget,
+            max_tokens=self._config.primary_max_tokens,
+            context_view=context_view,
+        )
 
     def _run_answer_type_check(self, session, candidate, ledger: EvidenceLedger):
         arguments = {
@@ -518,6 +677,8 @@ class MathForgeHarness:
     def _expand_with_verified_lemmas(
         self,
         session,
+        blackboard: MemoryBlackboard,
+        trace: TraceBuilder,
         verified_lemmas,
         round_id: int,
         skill_context: str,
@@ -535,9 +696,16 @@ class MathForgeHarness:
                 f"{skill_context}\n\nVerified problem-local lemmas:\n{lemma_context}"
             )[: self._config.skill_char_budget],
             method_family=f"lemma-guided-{session.route_plan.primary_subject}",
+            context_view=self._build_role_context(
+                session,
+                blackboard,
+                trace,
+                role="PrimarySolver",
+                candidates=session.candidates,
+            ),
         )
         candidate = self._solver_executor.execute(
-            PrimarySolver(),
+            PrimarySolver(self._contracts),
             request,
             session.budget,
             temperature=self._config.primary_temperature,

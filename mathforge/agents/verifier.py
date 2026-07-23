@@ -5,6 +5,7 @@ import json
 import re
 
 from mathforge.agents.registry import PromptContractLoader
+from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import (
@@ -59,34 +60,37 @@ class VerifierSkepticAgent:
         budget: CallBudget,
         *,
         max_tokens: int,
+        context_view: RoleContextView | None = None,
     ) -> BatchVerificationResult:
         payload = self._review_payload(problem, candidates, obligations)
         try:
             budget.consume()
+            visible_payload = (
+                json.dumps(
+                    self._review_payload_from_view(context_view),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                if context_view is not None
+                else json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            )
+            user = (
+                "Review this structured batch. Do not reconstruct or rewrite the full "
+                "solutions. Return {\"findings\":[{\"candidate_id\":\"...\","
+                "\"claim_id\":\"...\",\"obligation_ids\":[\"...\"],"
+                "\"status\":\"pass|fail|unknown\",\"description\":\"...\"}]}.\n\n"
+                f"Batch:\n{visible_payload}"
+            )
             response = self._provider.chat(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": self._contracts.system_prompt(
-                            "verifier_skeptic",
-                            (
-                                "Challenge the supplied claims and required proof obligations. "
-                                "Return JSON only. A pass must name both a real claim_id and one "
-                                "or more obligation_ids supported by that claim. Unknown is not pass."
-                            ),
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            "Review this structured batch. Do not reconstruct or rewrite the full "
-                            "solutions. Return {\"findings\":[{\"candidate_id\":\"...\","
-                            "\"claim_id\":\"...\",\"obligation_ids\":[\"...\"],"
-                            "\"status\":\"pass|fail|unknown\",\"description\":\"...\"}]}.\n\n"
-                            f"Batch:\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
-                        ),
-                    },
-                ],
+                messages=self._contracts.messages(
+                    "verifier_skeptic",
+                    user,
+                    (
+                        "Challenge the supplied claims and required proof obligations. "
+                        "Return JSON only. A pass must name both a real claim_id and one or more "
+                        "obligation_ids supported by that claim. Unknown is not pass."
+                    ),
+                ),
                 temperature=0.0,
                 max_tokens=max_tokens,
             )
@@ -125,6 +129,30 @@ class VerifierSkepticAgent:
                 }
                 for candidate in candidates
             ],
+        }
+
+    @staticmethod
+    def _review_payload_from_view(context_view: RoleContextView) -> dict:
+        payload = context_view.payload
+        obligations = payload.get("obligations", [])
+        return {
+            "problem": payload.get("original_problem", ""),
+            "candidates": [
+                {
+                    **candidate,
+                    "obligations": [
+                        obligation
+                        for obligation in obligations
+                        if str(obligation.get("obligation_id", "")).startswith(
+                            f"{candidate.get('candidate_id')}:"
+                        )
+                    ],
+                }
+                for candidate in payload.get("candidates", [])
+            ],
+            "conditions": payload.get("conditions", []),
+            "metadata": payload.get("metadata", {}),
+            "context_snapshot_id": context_view.snapshot_id,
         }
 
     @staticmethod
