@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### S5
+
+- Made reviewed SQLite FTS5 construction atomic: cards are validated and built
+  in a same-directory temporary database, integrity and row counts are checked,
+  and only then is the previous database replaced.
+- Added controlled Chinese-to-English retrieval normalization, an eight-domain
+  bilingual recall gate, and explicit matched/no-match/missing-DB/FTS/query
+  statuses in runtime traces.
+- Required two distinct verification reviewers before a knowledge card may use
+  `verified`; the existing eight internal cards remain `reviewed`.
+- Added versioned run provenance for code, config, public model identifier,
+  Prompt Contracts, Skills, RAG database, tools, content reviews, and optional
+  component decisions.
+- Upgraded benchmark artifacts to schema 3.1 with a semantic artifact digest,
+  provenance validation, A0–A10 overlay loading, and a standalone verifier.
+- Added engineering hash review coverage for 18 domain Skills, six general
+  Skills, seven Prompt Contracts, proof obligations, tool capabilities,
+  routing calibration, golden E2E cases, and retrieval content. Human
+  signatures remain an explicit freeze blocker.
+- Kept RAG, StdIO MCP, and the LLM finalizer disabled pending representative
+  repeated ablations; Direct remains the default and HTTP/persistent MCP is not
+  introduced.
+- Added a fully pinned CPython 3.13 dependency lock and a clean-venv,
+  `--no-index` installation and public-entry smoke check.
+
 ### S4
 
 - Added stable safe failure codes, an always-emitted `run_completed` terminal

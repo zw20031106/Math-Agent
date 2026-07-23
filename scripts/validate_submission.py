@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.verify_baseline_files import verify  # noqa: E402
 from mathforge.config import load_competition_config  # noqa: E402
+from mathforge.governance.reviews import validate_review_manifest  # noqa: E402
 from user_agent import ReasoningAgent  # noqa: E402
 
 
@@ -28,6 +29,12 @@ class OfflineClient:
 
 def validate(max_file_mb: float = 5.0) -> list[str]:
     errors = verify()
+    errors.extend(
+        validate_review_manifest(
+            ROOT / "docs" / "content_review_manifest.json",
+            require_human=False,
+        )
+    )
     try:
         result = ReasoningAgent(client=OfflineClient()).solve("Calculate the integer 1+1", {})
         json.dumps(result)
@@ -58,12 +65,23 @@ def validate(max_file_mb: float = 5.0) -> list[str]:
 
 def validation_warnings() -> list[str]:
     config = load_competition_config()
+    warnings: list[str] = []
     if config.status == "candidate-unvalidated":
-        return [
+        warnings.append(
             "WARNING: competition config is candidate-unvalidated; "
             "benchmark evidence has not frozen it."
-        ]
-    return []
+        )
+    review_manifest = json.loads(
+        (ROOT / "docs" / "content_review_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    if review_manifest.get("status") != "human-approved":
+        warnings.append(
+            "WARNING: mathematical content has engineering review only; "
+            "human signatures are still required before freezing."
+        )
+    return warnings
 
 
 def main() -> int:

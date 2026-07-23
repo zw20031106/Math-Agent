@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "status": "pending-human",
+  "engineering_reviewer": "codex-s5-audit",
+  "review_date": "2026-07-23",
+  "cases": [
+    {
+      "id": "golden-low-equation",
+      "problem": "Solve the equation x + 1 = 2.",
+      "expected_risk": "low",
+      "answer_type": "expression",
+      "expected_answer": "1"
+    },
+    {
+      "id": "golden-medium-calculation",
+      "problem": "Compute 1 + 1.",
+      "expected_risk": "medium",
+      "answer_type": "expression",
+      "expected_answer": "2"
+    },
+    {
+      "id": "golden-high-proof",
+      "problem": "Prove by contradiction that x equals x.",
+      "expected_risk": "high",
+      "answer_type": "text",
+      "required_conclusion": "x equals x"
+    }
+  ]
+}

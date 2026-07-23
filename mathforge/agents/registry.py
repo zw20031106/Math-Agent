@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Iterable
 
@@ -66,6 +67,20 @@ class SkillRegistry:
     @property
     def fingerprint(self) -> str:
         return content_tree_fingerprint(self._root)
+
+    @property
+    def manifest(self) -> list[dict[str, str]]:
+        items: list[dict[str, str]] = []
+        for path in sorted(self._root.rglob("*.md")):
+            fields, _ = _parse_frontmatter(path.read_text(encoding="utf-8"))
+            items.append(
+                {
+                    "name": fields.get("name", path.stem),
+                    "version": fields.get("version", "1"),
+                    "sha256": _normalized_file_hash(path),
+                }
+            )
+        return items
 
     def _load(self) -> dict[str, SkillDefinition]:
         loaded: dict[str, SkillDefinition] = {}
@@ -141,6 +156,21 @@ class PromptContractLoader:
     def fingerprint(self) -> str:
         return content_tree_fingerprint(self._root)
 
+    @property
+    def manifest(self) -> list[dict[str, str]]:
+        items: list[dict[str, str]] = []
+        for path in sorted(self._root.glob("*/contract.md")):
+            fields, _ = _parse_frontmatter(path.read_text(encoding="utf-8"))
+            items.append(
+                {
+                    "name": path.parent.name,
+                    "role": fields.get("role", ""),
+                    "version": fields.get("version", "1"),
+                    "sha256": _normalized_file_hash(path),
+                }
+            )
+        return items
+
     def load(self, role_directory: str) -> PromptContract:
         path = self._root / role_directory / "contract.md"
         fields, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -171,3 +201,7 @@ class PromptContractLoader:
             {"role": "system", "content": system},
             {"role": "user", "content": user_content},
         ]
+
+
+def _normalized_file_hash(path: Path) -> str:
+    return sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()

@@ -27,7 +27,15 @@ def _card(identifier: str, trust: str, statement: str) -> KnowledgeCard:
         "test-maintainer",
         "2026-07-23",
     )
-    return replace(card, content_hash=card.computed_content_hash())
+    return replace(
+        card,
+        content_hash=card.computed_content_hash(),
+        verification_reviewers=(
+            ["authority-reviewer-1", "authority-reviewer-2"]
+            if trust == "verified"
+            else []
+        ),
+    )
 
 
 def test_retrieval_filters_trust_and_preserves_sources(tmp_path: Path):
@@ -113,6 +121,18 @@ def test_builder_rejects_stale_content_hash_before_replacing_database(tmp_path: 
         build_database(database, [stale])
 
     assert database.exists()
+
+
+def test_builder_rejects_verified_card_without_two_distinct_reviewers(
+    tmp_path: Path,
+):
+    verified = replace(
+        _card("verified", "verified", "Equation rule."),
+        verification_reviewers=["same-reviewer", "same-reviewer"],
+    )
+
+    with pytest.raises(ValueError, match="requires two distinct reviewers"):
+        build_database(tmp_path / "knowledge.sqlite", [verified])
 
 
 def test_production_cards_have_versioned_review_records():

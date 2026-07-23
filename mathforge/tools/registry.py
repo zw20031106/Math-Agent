@@ -224,6 +224,27 @@ class ToolRegistry:
             }
         )
 
+    @property
+    def manifest(self) -> list[dict[str, str]]:
+        return [
+            {
+                "name": definition.name,
+                "version": definition.version,
+                "capability": definition.capability,
+                "claim_state": definition.claim_state,
+                "limitations_sha256": semantic_fingerprint(
+                    {
+                        "proves": definition.proves,
+                        "limitations": definition.limitations,
+                    }
+                ),
+            }
+            for definition in sorted(
+                self._definitions.values(),
+                key=lambda item: item.name,
+            )
+        ]
+
     def get(self, name: str) -> ToolDefinition:
         try:
             return self._definitions[name]

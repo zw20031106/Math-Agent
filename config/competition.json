@@ -31,7 +31,7 @@
   "enable_verifier": true,
   "enable_memory": true,
   "enable_lemma_loop": true,
-  "enable_rag": true,
+  "enable_rag": false,
   "enable_repair": true,
   "enable_finalizer": false
 }

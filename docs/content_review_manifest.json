@@ -1,0 +1,105 @@
+{
+  "schema_version": "1.0",
+  "status": "pending-human",
+  "review_date": "2026-07-23",
+  "engineering_reviewer": "codex-s5-audit",
+  "human_signatures": [],
+  "scopes": [
+    {
+      "id": "domain-skills",
+      "kind": "tree",
+      "path": "skills/domains",
+      "pattern": "*.md",
+      "expected_count": 18,
+      "version": "frontmatter-version",
+      "engineering_reviewer": "codex-s5-audit",
+      "review_date": "2026-07-23",
+      "sha256": "5b1e4d557fe881c5359ed2e095b6a78e2bee4ea7371fa7512964e22afe99a720"
+    },
+    {
+      "id": "general-skills",
+      "kind": "tree",
+      "path": "skills/general",
+      "pattern": "*.md",
+      "expected_count": 6,
+      "version": "frontmatter-version",
+      "engineering_reviewer": "codex-s5-audit",
+      "review_date": "2026-07-23",
+      "sha256": "a9572e1a2604a5799d74c2ee5ee934eff061900603dd0b163f7b85031c7f56d7"
+    },
+    {
+      "id": "prompt-contracts",
+      "kind": "tree",
+      "path": "prompts",
+      "pattern": "contract.md",
+      "expected_count": 7,
+      "version": "frontmatter-version",
+      "engineering_reviewer": "codex-s5-audit",
+      "review_date": "2026-07-23",
+      "sha256": "944b15dacd74e8e71d7d54fb4ba643b480cb0556d04250879db71069a1b801e1"
+    },
+    {
+      "id": "proof-obligations",
+      "kind": "file",
+      "path": "mathforge/verification/proof_obligations.py",
+      "expected_count": 1,
+      "version": "core-schema-1.2",
+      "engineering_reviewer": "codex-s5-audit",
+      "review_date": "2026-07-23",
+      "sha256": "9600329351ee394d603447f4a3dd0ddcf1df1ddd2f38a73ac680fe1cbd9f8b52"
+    },
+    {
+      "id": "tool-capabilities",
+      "kind": "file_set",
+      "paths": [
+        "mathforge/tools/registry.py",
+        "mathforge/verification/capabilities.py"
+      ],
+      "expected_count": 2,
+      "version": "tool-contract-2",
+      "engineering_reviewer": "codex-s5-audit",
+      "review_date": "2026-07-23",
+      "sha256": "ebc99f15a2247a6ded85159eb55ddec6c32228c3a311580d2f36b51b06537cd8"
+    },
+    {
+      "id": "router-calibration",
+      "kind": "file",
+      "path": "data/router_calibration.json",
+      "expected_count": 1,
+      "version": "router-calibration-1",
+      "engineering_reviewer": "codex-s5-audit",
+      "review_date": "2026-07-23",
+      "sha256": "cbe3ed0bb603aded6884f73888e0f003bd6fa7ad73734bc214aeccd31bbaf1a7"
+    },
+    {
+      "id": "golden-e2e",
+      "kind": "file",
+      "path": "data/golden_e2e.json",
+      "expected_count": 1,
+      "version": "golden-e2e-1",
+      "engineering_reviewer": "codex-s5-audit",
+      "review_date": "2026-07-23",
+      "sha256": "961777866cc0559ca3cf7389136db6ea577eafede54a36bf82693d8c9dd1b0a4"
+    },
+    {
+      "id": "knowledge-cards",
+      "kind": "file",
+      "path": "data/knowledge_cards.json",
+      "expected_count": 1,
+      "version": "knowledge-cards-1",
+      "engineering_reviewer": "codex-s5-audit",
+      "review_date": "2026-07-23",
+      "sha256": "a6314104e6b1eced9ceb482cadf2b3cd59e962f10fc32b1d795aaef0d6a7aa13"
+    },
+    {
+      "id": "bilingual-retrieval",
+      "kind": "file",
+      "path": "data/retrieval_bilingual_benchmark.json",
+      "expected_count": 1,
+      "version": "retrieval-bilingual-1",
+      "engineering_reviewer": "codex-s5-audit",
+      "review_date": "2026-07-23",
+      "sha256": "172a5f4a8476e96eaba61b7c4cc1e07fa9c6254ba1198c3293ba6d54d84135f2"
+    }
+  ]
+}

@@ -33,6 +33,7 @@ from mathforge.context.role_views import RoleContextFactory
 from mathforge.memory.blackboard import MemoryBlackboard
 from mathforge.harness.lemma_loop import VerifiedLemmaLoop
 from mathforge.retrieval.retriever import Retriever
+from mathforge.provenance import build_run_provenance
 from mathforge.verification.evidence import ClaimEvidenceVerifier
 from mathforge.agents.repair import RepairAgent
 from mathforge.harness.repair import ClaimRepairService
@@ -87,6 +88,7 @@ class MathForgeHarness:
         config: HarnessConfig | None = None,
         *,
         debug_sink: DebugSink | None = None,
+        model_identifier: str = "unreported",
     ) -> None:
         self._config = config or load_competition_config()
         self._debug_sink = debug_sink
@@ -125,6 +127,10 @@ class MathForgeHarness:
         )
         self._verifier_agent = VerifierSkepticAgent(self._provider, self._contracts)
         self._proof_completion_gate = ProofCompletionGate()
+        self._run_provenance = build_run_provenance(
+            self._config,
+            model_identifier=model_identifier,
+        )
         self._provenance = {
             "config_schema_version": self._config.schema_version,
             "config_profile": self._config.profile,
@@ -134,6 +140,9 @@ class MathForgeHarness:
             "skill_hash": self._skills.fingerprint,
             "rag_hash": self._retriever.fingerprint,
             "tool_hash": self._tool_executor.fingerprint,
+            "code_commit": self._run_provenance.code_commit,
+            "model_identifier": self._run_provenance.model_identifier,
+            "provenance_hash": self._run_provenance.fingerprint,
         }
 
     def solve(self, problem: str, metadata: dict) -> dict:
@@ -342,14 +351,17 @@ class MathForgeHarness:
                 and session.budget.deadline.optional_work_allowed()
             ):
                 session.budget.ensure_stage("rag", optional=True)
-                retrieval_hits = self._retriever.search(
+                retrieval_result = self._retriever.search_with_status(
                     session.problem_ir.normalized_problem,
                     subject=session.route_plan.primary_subject,
                     role="PrimarySolver",
                     top_k=3,
                 )
+                retrieval_hits = retrieval_result.hits
+                retrieval_status = retrieval_result.status.value
                 if session.budget.must_finalize():
                     retrieval_hits = []
+                    retrieval_status = "discarded_by_deadline"
                     trace.add("deadline_finalize", stage="after_rag")
                 cards = [hit.card for hit in retrieval_hits]
                 if cards:
@@ -362,6 +374,7 @@ class MathForgeHarness:
                     skill_context = f"{skill_context}\n\n{rag_context}"[: self._config.skill_char_budget]
                 trace.add(
                     "retrieval_completed",
+                    status=retrieval_status,
                     card_ids=[card.id for card in cards],
                     ranking=[
                         {
@@ -1018,6 +1031,7 @@ class MathForgeHarness:
             "final_response": final_response,
             "trace": trace.build(),
             "run_metrics": metrics.to_dict(),
+            "provenance": self._run_provenance.to_dict(),
         }
 
     @staticmethod

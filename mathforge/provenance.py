@@ -1,0 +1,206 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from dataclasses import asdict, dataclass
+import json
+from pathlib import Path
+import subprocess
+from typing import Any
+
+from mathforge.agents.registry import PromptContractLoader, SkillRegistry
+from mathforge.config import HarnessConfig
+from mathforge.harness.fingerprints import file_fingerprint, semantic_fingerprint
+from mathforge.retrieval.retriever import Retriever
+from mathforge.retrieval.schemas import RAG_SCHEMA_VERSION
+from mathforge.tools.registry import ToolRegistry
+
+
+PROVENANCE_SCHEMA_VERSION = "1.0"
+ROOT = Path(__file__).resolve().parents[1]
+CONTENT_REVIEW_MANIFEST = ROOT / "docs" / "content_review_manifest.json"
+COMPONENT_DECISIONS = ROOT / "config" / "component_decisions.json"
+
+
+@dataclass(frozen=True)
+class RunProvenance:
+    schema_version: str
+    code_commit: str
+    model_identifier: str
+    config: dict[str, str]
+    prompts: list[dict[str, str]]
+    skills: list[dict[str, str]]
+    rag: dict[str, str]
+    tools: list[dict[str, str]]
+    content_reviews: dict[str, str]
+    component_decisions: dict[str, str]
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    @property
+    def fingerprint(self) -> str:
+        return semantic_fingerprint(self.to_dict())
+
+    def validate(self) -> None:
+        if self.schema_version != PROVENANCE_SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported provenance schema version: {self.schema_version!r}"
+            )
+        if not self.code_commit or not self.model_identifier:
+            raise ValueError("provenance commit and model identifier are required")
+        if not self.config.get("schema_version"):
+            raise ValueError("provenance config schema version is required")
+        _require_sha256(self.config.get("sha256"), "config")
+        if not self.prompts or not self.skills or not self.tools:
+            raise ValueError("provenance content manifests must be non-empty")
+        for group_name, items in (
+            ("prompts", self.prompts),
+            ("skills", self.skills),
+        ):
+            for item in items:
+                if not item.get("name") or not item.get("version"):
+                    raise ValueError(f"{group_name} provenance entry is incomplete")
+                _require_sha256(item.get("sha256"), group_name)
+        for item in self.tools:
+            if not item.get("name") or not item.get("version"):
+                raise ValueError("tool provenance entry is incomplete")
+            _require_sha256(item.get("limitations_sha256"), "tool limitations")
+        if self.rag.get("schema_version") != RAG_SCHEMA_VERSION:
+            raise ValueError("RAG provenance schema version is invalid")
+        _require_sha256(self.rag.get("knowledge_db_sha256"), "knowledge DB")
+        _require_sha256(
+            self.content_reviews.get("manifest_sha256"),
+            "content review manifest",
+        )
+        _require_sha256(
+            self.component_decisions.get("manifest_sha256"),
+            "component decisions",
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> RunProvenance:
+        expected = {
+            "schema_version",
+            "code_commit",
+            "model_identifier",
+            "config",
+            "prompts",
+            "skills",
+            "rag",
+            "tools",
+            "content_reviews",
+            "component_decisions",
+        }
+        if set(payload) != expected:
+            raise ValueError("provenance fields are invalid")
+        return cls(**payload)
+
+
+def build_run_provenance(
+    config: HarnessConfig,
+    *,
+    contracts: PromptContractLoader | None = None,
+    skills: SkillRegistry | None = None,
+    retriever: Retriever | None = None,
+    tools: ToolRegistry | None = None,
+    model_identifier: str = "unreported",
+) -> RunProvenance:
+    static = _DEFAULT_STATIC_PROVENANCE
+    prompt_manifest = (
+        contracts.manifest
+        if contracts is not None
+        else deepcopy(static["prompts"])
+    )
+    skill_manifest = (
+        skills.manifest
+        if skills is not None
+        else deepcopy(static["skills"])
+    )
+    rag_hash = (
+        retriever.fingerprint
+        if retriever is not None
+        else str(static["knowledge_db_sha256"])
+    )
+    tool_manifest = (
+        tools.manifest
+        if tools is not None
+        else deepcopy(static["tools"])
+    )
+    return RunProvenance(
+        schema_version=PROVENANCE_SCHEMA_VERSION,
+        code_commit=str(static["code_commit"]),
+        model_identifier=model_identifier.strip() or "unreported",
+        config={
+            "schema_version": config.schema_version,
+            "profile": config.profile,
+            "status": config.status,
+            "sha256": config.fingerprint,
+        },
+        prompts=prompt_manifest,
+        skills=skill_manifest,
+        rag={
+            "schema_version": RAG_SCHEMA_VERSION,
+            "knowledge_db_sha256": rag_hash,
+        },
+        tools=tool_manifest,
+        content_reviews=deepcopy(static["content_reviews"]),
+        component_decisions=deepcopy(static["component_decisions"]),
+    )
+
+
+def _git_commit() -> str:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _require_sha256(value: str | None, name: str) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{name} provenance hash is invalid")
+
+
+def _build_default_static_provenance() -> dict[str, Any]:
+    review_payload = _read_json(CONTENT_REVIEW_MANIFEST)
+    decision_payload = _read_json(COMPONENT_DECISIONS)
+    return {
+        "code_commit": _git_commit(),
+        "prompts": PromptContractLoader().manifest,
+        "skills": SkillRegistry().manifest,
+        "knowledge_db_sha256": Retriever().fingerprint,
+        "tools": ToolRegistry().manifest,
+        "content_reviews": {
+            "schema_version": str(review_payload.get("schema_version", "")),
+            "status": str(review_payload.get("status", "missing")),
+            "manifest_sha256": file_fingerprint(CONTENT_REVIEW_MANIFEST),
+        },
+        "component_decisions": {
+            "schema_version": str(decision_payload.get("schema_version", "")),
+            "status": str(decision_payload.get("decision_status", "missing")),
+            "manifest_sha256": file_fingerprint(COMPONENT_DECISIONS),
+        },
+    }
+
+
+_DEFAULT_STATIC_PROVENANCE = _build_default_static_provenance()

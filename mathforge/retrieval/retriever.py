@@ -7,13 +7,53 @@ import re
 import sqlite3
 
 from mathforge.harness.fingerprints import file_fingerprint
-from mathforge.retrieval.schemas import KnowledgeCard, SearchHit
+from mathforge.retrieval.schemas import (
+    RAG_SCHEMA_VERSION,
+    KnowledgeCard,
+    RetrievalStatus,
+    SearchHit,
+    SearchResult,
+)
 
 
 _TRUST_PRIORITY = {
     "verified": 0,
     "reviewed": 1,
     "conflicted": 2,
+}
+_BILINGUAL_TERMS = {
+    "方程": ("equation",),
+    "不等式": ("inequality",),
+    "平方": ("squaring",),
+    "增根": ("extraneous", "root"),
+    "三角形": ("triangle",),
+    "圆": ("circle",),
+    "几何": ("geometry",),
+    "退化": ("degenerate",),
+    "整数": ("integer",),
+    "整除": ("divisibility",),
+    "同余": ("modulo",),
+    "互素": ("coprimality",),
+    "计数": ("counting",),
+    "排列": ("permutation",),
+    "组合": ("combination",),
+    "概率": ("probability",),
+    "密度": ("density",),
+    "分布": ("distribution",),
+    "归一化": ("normalization",),
+    "极限": ("limit",),
+    "积分": ("integral",),
+    "导数": ("derivative",),
+    "级数": ("series",),
+    "交换": ("interchange",),
+    "矩阵": ("matrix",),
+    "向量": ("vector",),
+    "特征值": ("eigenvalue",),
+    "维数": ("dimension",),
+    "微分方程": ("differential", "equation"),
+    "初值": ("initial", "condition"),
+    "边界条件": ("boundary", "condition"),
+    "代入": ("substitution",),
 }
 
 
@@ -55,11 +95,36 @@ class Retriever:
         role: str = "PrimarySolver",
         top_k: int = 3,
     ) -> list[SearchHit]:
+        return self.search_with_status(
+            query,
+            subject=subject,
+            card_type=card_type,
+            role=role,
+            top_k=top_k,
+        ).hits
+
+    def search_with_status(
+        self,
+        query: str,
+        *,
+        subject: str | None = None,
+        card_type: str | None = None,
+        role: str = "PrimarySolver",
+        top_k: int = 3,
+    ) -> SearchResult:
         if not self._database.exists():
-            return []
+            return SearchResult(
+                RAG_SCHEMA_VERSION,
+                RetrievalStatus.MISSING_DB,
+                [],
+            )
         match_query = self._match_query(query)
         if not match_query:
-            return []
+            return SearchResult(
+                RAG_SCHEMA_VERSION,
+                RetrievalStatus.NO_MATCH,
+                [],
+            )
         result_limit = min(max(1, top_k), self._max_top_k)
         trust_levels = ("verified", "reviewed", "conflicted") if role == "VerifierSkeptic" else ("verified", "reviewed")
         placeholders = ",".join("?" for _ in trust_levels)
@@ -92,8 +157,20 @@ class Retriever:
             uri = f"{self._database.resolve().as_uri()}?mode=ro"
             with closing(sqlite3.connect(uri, uri=True)) as connection:
                 rows = connection.execute(sql, parameters).fetchall()
+        except sqlite3.OperationalError as error:
+            message = str(error).lower()
+            status = (
+                RetrievalStatus.FTS_UNAVAILABLE
+                if "fts" in message or "no such table" in message
+                else RetrievalStatus.QUERY_ERROR
+            )
+            return SearchResult(RAG_SCHEMA_VERSION, status, [])
         except (sqlite3.Error, OSError):
-            return []
+            return SearchResult(
+                RAG_SCHEMA_VERSION,
+                RetrievalStatus.QUERY_ERROR,
+                [],
+            )
         hits = [self._row_to_hit(query, row) for row in rows]
         hits.sort(
             key=lambda hit: (
@@ -112,12 +189,25 @@ class Retriever:
                 deduplicated.append(hit)
             if len(deduplicated) >= result_limit:
                 break
-        return deduplicated
+        return SearchResult(
+            RAG_SCHEMA_VERSION,
+            (
+                RetrievalStatus.MATCHED
+                if deduplicated
+                else RetrievalStatus.NO_MATCH
+            ),
+            deduplicated,
+        )
 
     @staticmethod
     def _match_query(query: str) -> str:
-        tokens = re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]{2,}", query.lower())
-        return " OR ".join(f'"{token}"' for token in tokens[:24])
+        lowered = query.lower()
+        tokens = re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]{2,}", lowered)
+        for chinese, translations in _BILINGUAL_TERMS.items():
+            if chinese in lowered:
+                tokens.extend(translations)
+        deduplicated = list(dict.fromkeys(tokens))
+        return " OR ".join(f'"{token}"' for token in deduplicated[:24])
 
     @staticmethod
     def _condition_overlap(query: str, card: KnowledgeCard) -> int:
@@ -142,10 +232,11 @@ class Retriever:
             reviewer=row[12],
             review_date=row[13],
             content_hash=row[14],
+            verification_reviewers=json.loads(row[15]),
         )
         return SearchHit(
             card=card,
-            bm25_score=float(row[15]),
+            bm25_score=float(row[16]),
             trust_priority=_TRUST_PRIORITY[card.trust_level],
             condition_score=Retriever._condition_overlap(query, card),
         )

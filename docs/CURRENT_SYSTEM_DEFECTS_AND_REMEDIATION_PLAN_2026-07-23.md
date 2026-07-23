@@ -137,18 +137,18 @@ PASS
 | D16 Memory 物理实现过重 | 大部分解决 | 已收敛为题内 Session/Lemma Memory；但 RawContextStore 每次 view 临时创建、引用不可再解析，memory 内容仍会重复原题。 |
 | D17 CEPC 可能误用 LLM 摘要 | 大部分解决 | 当前是确定性压缩且有硬预算；但历史候选泄漏、candidate claim ID 冲突和不可用 raw reference 仍需修复。 |
 | D18 Raw Context 缺容量管理 | 部分解决 | 有 view 字符预算；没有 per-session raw/tool/evidence 总预算，metadata、Claim 数、Evidence 数和工具参数没有完整上限。 |
-| D19 RAG 治理不足 | 部分解决 | 已有来源/审核/哈希；当前只有内部 reviewed 卡，中文查询与英文卡基本无法匹配，数据库重建不是原子替换。 |
+| D19 RAG 治理不足 | 工程已解决 | 已有来源/审核/哈希、双语基准、结构化失败状态和原子替换；verified 卡强制双人记录。现有内部卡仍为 reviewed，真实收益留待 S6。 |
 | D20 MCP 默认策略未冻结 | 已解决 | Direct 默认、StdIO MCP 可选、失败回退 Direct、无 HTTP MCP；继续默认关闭即可。 |
 | D21 Trace 边界不明确 | 部分解决 | allowlist 和清洗存在；Token 成本被误删、终态事件不保留槽位、异常原因全部折叠为 `primary_unavailable`，internal trace 无持久 debug sink。 |
 | D22 Finalizer 可能改坏答案 | 未解决 | 精确答案字符串有回滚，但推导文本没有再验证；已复现保持答案不变却注入错误论述并被接受。 |
 | D23 Budget 缺统一 Deadline | 部分解决 | 模型调用有共享 Deadline；工具、RAG、压缩、解析和 Claim 循环不共享硬截止；启动模型调用也不考虑官方客户端最坏重试时长。 |
 | D24 共享实例锁策略未冻结 | 已解决 | Session 题内隔离、共享模型 Gate、有慢调用回写隔离测试；继续保留并做长时压力验证。 |
-| D25 依赖和离线可用性不足 | 部分解决 | 正式/开发依赖已分离且 `pip check` 通过；版本只限定大版本范围，`pyproject.toml` 缺 project/dependencies 元数据和 lock/constraints。 |
-| D26 Prompt/Skill/RAG 缺版本化 | 部分解决 | 文件中有 version/source_version/tool_version；每次运行没有统一记录 prompt/skill/config/DB/model/code 指纹。 |
-| D27 缺组件降级矩阵 | 部分解决 | 多处有局部 fallback；RAG 错误静默成空结果，非法 Flag 组合不拒绝，所有顶层异常都变成同一种 fallback。 |
+| D25 依赖和离线可用性不足 | 已解决 | 正式/开发依赖已分离，CPython 3.13 精确 lock、临时 wheelhouse、clean-venv `--no-index` 安装和公开入口 smoke test 已通过。 |
+| D26 Prompt/Skill/RAG 缺版本化 | 已解决 | 每次运行统一记录 code/config/public model/Prompt/Skill/RAG DB/Tool/审核与组件决策指纹；benchmark artifact 具备整体语义哈希。 |
+| D27 缺组件降级矩阵 | 已解决 | Feature 依赖启动期拒绝；顶层错误码分级；RAG 区分 no-match、missing-db、fts-unavailable、query-error；组件决策有机器可读默认和启用门。 |
 | D28 Codex 计划缺架构守卫 | 部分解决 | `AGENTS.md` 和测试已有部分守卫；状态机、Schema、工具能力、配置绑定和阶段级 Definition of Done 仍缺。 |
 | D29 完整代码与比赛配置未区分 | 未解决 | `competition.json` 标记 candidate-unvalidated 是正确的，但公开入口不用该文件且默认几乎全开；实验配置无法保证就是提交配置。 |
-| D30 缺数学内容人工审核门 | 未解决 | 只有 8 张 RAG 卡有清单；18 个领域 Skill、7 个 Prompt、Proof Obligation 模板、工具能力边界和 E2E 数学样例没有签署式人工审核。 |
+| D30 缺数学内容人工审核门 | 工程门已解决，人工待办 | manifest 已覆盖 18 个领域 Skill、6 个通用 Skill、7 个 Prompt、Obligation、Capability、Router、黄金 E2E 和 RAG 内容；工程哈希校验通过，人工签名为空并阻止冻结。 |
 
 ## 5. 当前缺陷总表
 
@@ -1083,8 +1083,20 @@ S4（C20/C21/C22）已完成工程实现：
 
 ## 18. 下一步
 
-下一开发阶段为 S5（C24–C26）：RAG 内容治理、完整 benchmark artifact
-provenance、MCP 生命周期，以及真实 A0–A10 重复消融和配置冻结。
+S5（C24–C26）已完成工程实现与自动化门禁：
+
+1. RAG 使用双语受控术语、结构化状态、临时库完整校验和原子替换；
+2. `verified` 知识卡强制两个不同审核者，现有 8 卡保持 `reviewed`；
+3. RunProvenance 1.0 和 benchmark 3.1 记录并校验完整运行指纹；
+4. 内容 manifest 覆盖全部指定范围，工程哈希通过，人工签名仍为空；
+5. Direct/RAG/MCP/Finalizer 的保守默认和 S6 启用门已机器可读固化；
+6. 精确 dependency lock、clean-venv 离线安装和 smoke test 已通过。
+
+详细记录见 `docs/S5_IMPLEMENTATION_STATUS_2026-07-23.md` 和
+`docs/ADR_002_S5_OPTIONAL_COMPONENT_DEFAULTS.md`。
+
+下一开发阶段为 S6：在代表性隐藏验证集和官方公开模型上执行真实 A0–A10
+重复、配对消融，并根据准确率、置信区间、P50/P95、成本与故障率冻结配置。
 
 `config/competition.json` 仍保持 `candidate-unvalidated`；在真实重复消融前
-不得标记 frozen。
+不得标记 frozen。数学专家人工双签也必须在冻结前完成。

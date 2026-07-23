@@ -1,0 +1,42 @@
+[
+  {
+    "query": "解方程时平方后如何排除增根",
+    "subject": "algebra",
+    "expected_card_id": "skill-algebra-equivalence"
+  },
+  {
+    "query": "三角形和圆的几何证明需要检查哪些非退化条件",
+    "subject": "geometry",
+    "expected_card_id": "skill-geometry-nondegeneracy"
+  },
+  {
+    "query": "整数整除和同余推理中如何处理互素条件",
+    "subject": "number-theory",
+    "expected_card_id": "skill-number-theory-integrality"
+  },
+  {
+    "query": "排列组合计数如何保证分类不重不漏",
+    "subject": "combinatorics",
+    "expected_card_id": "skill-combinatorics-disjointness"
+  },
+  {
+    "query": "概率密度与分布如何检查归一化",
+    "subject": "probability",
+    "expected_card_id": "skill-probability-normalization"
+  },
+  {
+    "query": "极限积分导数与级数交换需要哪些条件",
+    "subject": "calculus",
+    "expected_card_id": "skill-calculus-interchange"
+  },
+  {
+    "query": "矩阵向量特征值计算怎样检查维数",
+    "subject": "linear-algebra",
+    "expected_card_id": "skill-linear-algebra-dimensions"
+  },
+  {
+    "query": "微分方程解代入后怎样检查初值和边界条件",
+    "subject": "differential-equations",
+    "expected_card_id": "skill-differential-equations-substitution"
+  }
+]

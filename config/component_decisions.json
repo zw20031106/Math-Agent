@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "decision_status": "pre-ablation-safe-defaults",
+  "review_date": "2026-07-23",
+  "engineering_reviewer": "codex-s5-audit",
+  "rag": {
+    "default_enabled": false,
+    "implementation_retained": true,
+    "reason": "No representative repeated ablation has established a stable accuracy benefit.",
+    "enablement_gate": "S6 A8 paired benchmark with no pollution and acceptable P95."
+  },
+  "mcp": {
+    "default_enabled": false,
+    "implementation_retained": true,
+    "transport": "stdio",
+    "http_allowed": false,
+    "persistent_process": false,
+    "reason": "Direct execution is simpler and no benchmark shows an MCP benefit.",
+    "enablement_gate": "S6 comparison must beat Direct on accuracy, isolation, or maintenance value."
+  },
+  "finalizer": {
+    "default_enabled": false,
+    "implementation_retained": true,
+    "reason": "The deterministic formatter remains the safe default and no A10 benefit is established.",
+    "enablement_gate": "S6 A10 must pass semantic-preservation and paired-benefit gates."
+  }
+}

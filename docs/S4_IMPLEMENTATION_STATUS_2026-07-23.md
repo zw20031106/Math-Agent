@@ -104,6 +104,7 @@ git diff --check
 
 - S4 不执行 C24–C26 的 RAG 内容治理、完整 artifact 运行指纹和 MCP 生命周期；
 - `config/competition.json` 继续保持 `candidate-unvalidated`；
-- 真实比赛数据的 A0–A10 重复消融、配置冻结和人工审核属于 S5。
+- 真实比赛数据的 A0–A10 重复消融和配置冻结属于 S6；数学专家人工审核是
+  S5 完成工程门禁后仍需线下完成的前置条件。
 
 下一阶段为 S5（C24–C26）。

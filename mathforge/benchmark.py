@@ -424,6 +424,7 @@ def benchmark_record_to_dict(record: BenchmarkRecord) -> dict:
             "final_response": record.result.get("final_response", ""),
             "trace": record.result.get("trace", []),
             "run_metrics": record.result.get("run_metrics", {}),
+            "provenance": record.result.get("provenance", {}),
         },
         "latency_seconds": record.latency_seconds,
         "json_valid": record.json_valid,
