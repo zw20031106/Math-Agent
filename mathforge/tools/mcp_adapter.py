@@ -45,4 +45,6 @@ class StdioMCPAdapter:
             summary=str(payload["summary"]),
             payload=dict(payload.get("payload", {})),
             tool_version=str(payload.get("tool_version", "1")),
+            capability=str(payload.get("capability", "none")),
+            claim_state=str(payload.get("claim_state", "unknown")),
         )

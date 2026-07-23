@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### S0
+
+- Added host-owned Claim kinds, verification states, and a fixed tool capability
+  matrix so syntax, parsing, answer-shape, and numerical support cannot be
+  promoted into mathematical proof.
+- Required proof completion to cite an explicitly mapped Claim, matching
+  capability, Evidence record, and invocation; free-text obligation matching
+  and inherited `verified` status no longer complete proofs or verify lemmas.
+- Disabled LLM finalization by default and made explicitly enabled finalization
+  roll back whenever the answer, derivation, claims, assumptions, or theorems
+  change.
+- Replaced answer-substring detection with one canonical final-answer block
+  while preserving raw-text degradation behavior.
+- Preserved token counts and terminal events in judge-safe traces, emitted
+  independent run metrics, distinguished tool timeout/unknown/error reasons,
+  and made context failure metrics use real runtime events.
+- Made benchmark records round-trip serializable so every current summary
+  metric can be recomputed offline.
+
 ### R0
 
 - Replaced suffix-based benchmark grading with answer-type-aware exact,

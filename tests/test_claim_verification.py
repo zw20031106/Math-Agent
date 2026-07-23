@@ -22,8 +22,11 @@ def test_claim_tools_bind_evidence_and_update_status():
         ("good", "pass"),
         ("bad", "fail"),
     ]
+    assert records[0].capability == "equality.symbolic_under_domain"
     assert candidate.claims[0].status == "verified"
+    assert candidate.claims[0].verification_state == "semantically_verified"
     assert candidate.claims[1].status == "rejected"
+    assert candidate.claims[1].verification_state == "rejected"
     assert candidate.claims[2].status == "unverified"
 
 
@@ -54,3 +57,87 @@ def test_claim_verifier_propagates_assumptions_and_domains():
     assert records[0].invocation["assumptions"] == ["y > 0", "x >= 0"]
     assert records[0].invocation["domains"] == {"x": "R"}
     assert candidate.claims[0].status == "unverified"
+
+
+def test_nonsemantic_hard_pass_does_not_verify_mathematical_claim():
+    candidate = CandidateSolution(
+        "c",
+        "PrimarySolver",
+        "direct",
+        "QED",
+        "text",
+        claims=[
+            Claim(
+                "fake-proof",
+                "uniqueness is handled",
+                check_type="latex_syntax_check",
+                importance="critical",
+            )
+        ],
+    )
+    records = ClaimEvidenceVerifier(ToolExecutor()).verify(candidate, EvidenceLedger())
+    assert records[0].status == "pass"
+    assert records[0].capability == "syntax.latex_brace_balance"
+    assert candidate.claims[0].status == "unverified"
+    assert candidate.claims[0].verification_state == "syntax_checked"
+
+
+def test_unknown_check_suggestion_produces_only_unknown_host_evidence():
+    candidate = CandidateSolution(
+        "c",
+        "PrimarySolver",
+        "direct",
+        "QED",
+        "text",
+        claims=[Claim("forged", "done", check_type="proof_everything")],
+    )
+    records = ClaimEvidenceVerifier(ToolExecutor()).verify(
+        candidate,
+        EvidenceLedger(),
+    )
+    assert len(records) == 1
+    assert records[0].evidence_type == "host:check_type_resolution"
+    assert records[0].status == "unknown"
+    assert records[0].capability == "none"
+    assert candidate.claims[0].status == "unverified"
+    assert candidate.claims[0].verification_state == "unknown"
+
+
+def test_shape_and_syntax_tools_only_update_their_own_capability_state():
+    candidate = CandidateSolution(
+        "c",
+        "PrimarySolver",
+        "matrix",
+        "[[1,2],[3,4]]",
+        "matrix",
+        claims=[
+            Claim(
+                "matrix",
+                "[[1,2],[3,4]]",
+                check_type="matrix_shape_check",
+            ),
+            Claim(
+                "answer",
+                "the answer has the right shape",
+                check_type="answer_type_check",
+            ),
+            Claim(
+                "syntax",
+                "x + 1",
+                check_type="safe_parse_expression",
+            ),
+        ],
+    )
+    records = ClaimEvidenceVerifier(ToolExecutor()).verify(
+        candidate,
+        EvidenceLedger(),
+    )
+    by_claim = {record.claim_id: record for record in records}
+    assert by_claim["matrix"].capability == "matrix.shape"
+    assert candidate.claims[0].verification_state == "semantically_verified"
+    assert candidate.claims[0].status == "verified"
+    assert by_claim["answer"].capability == "answer.shape"
+    assert candidate.claims[1].status == "unverified"
+    assert by_claim["syntax"].capability == "syntax.restricted_parse"
+    assert candidate.claims[2].verification_state == "syntax_checked"
+    assert candidate.claims[2].status == "unverified"

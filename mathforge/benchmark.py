@@ -139,6 +139,16 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
         for record, value in zip(records, fingerprints)
     )
     duplicate_sessions = len(session_ids) - len(set(session_ids))
+    context_successes = sum(
+        event.get("event") == "context_view_built" for event in traces
+    )
+    context_failures = sum(
+        event.get("event") == "context_budget_infeasible" for event in traces
+    )
+    context_attempts = context_successes + context_failures
+    context_failure_rate = (
+        context_failures / context_attempts if context_attempts else 0.0
+    )
     return {
         "case_count": len(records),
         "expected_count": len(expected),
@@ -162,7 +172,28 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
             sum(not record.json_valid for record in records) / len(records) if records else 0.0
         ),
         "tool_timeout_rate": (
-            sum(check.get("status") == "unknown" for check in tool_checks) / len(tool_checks)
+            sum(check.get("outcome_reason") == "timeout" for check in tool_checks)
+            / len(tool_checks)
+            if tool_checks
+            else 0.0
+        ),
+        "tool_unknown_rate": (
+            sum(
+                check.get("status") == "unknown"
+                and check.get("outcome_reason") != "timeout"
+                for check in tool_checks
+            )
+            / len(tool_checks)
+            if tool_checks
+            else 0.0
+        ),
+        "tool_error_rate": (
+            sum(
+                check.get("status") == "error"
+                or check.get("outcome_reason") == "error"
+                for check in tool_checks
+            )
+            / len(tool_checks)
             if tool_checks
             else 0.0
         ),
@@ -171,14 +202,8 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
             if lemma_events
             else 0.0
         ),
-        "cepc_invariant_failure_rate": (
-            sum(
-                bool(event.get("invariant_failure"))
-                for event in traces
-                if event.get("event") == "compression_validated"
-            )
-            / max(1, sum(event.get("event") == "compression_validated" for event in traces))
-        ),
+        "cepc_invariant_failure_rate": context_failure_rate,
+        "context_view_failure_rate": context_failure_rate,
         "repair_success_rate": (
             sum(not event.get("rolled_back", True) for event in repair_events) / len(repair_events)
             if repair_events
@@ -201,6 +226,50 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
         "fingerprint_mismatch_count": fingerprint_mismatches,
         "concurrency_pollution_count": duplicate_sessions + fingerprint_mismatches,
     }
+
+
+def benchmark_record_to_dict(record: BenchmarkRecord) -> dict:
+    return {
+        "case": {
+            "idx": record.case.idx,
+            "problem": record.case.problem,
+            "expected_answer": record.case.expected_answer,
+            "subject": record.case.subject,
+            "problem_type": record.case.problem_type,
+            "answer_type": record.case.answer_type,
+            "scorer": record.case.scorer,
+        },
+        "result": {
+            "final_response": record.result.get("final_response", ""),
+            "trace": record.result.get("trace", []),
+            "run_metrics": record.result.get("run_metrics", {}),
+        },
+        "latency_seconds": record.latency_seconds,
+        "json_valid": record.json_valid,
+        "score": record.score.to_dict(),
+        "request_fingerprint": record.request_fingerprint,
+    }
+
+
+def benchmark_record_from_dict(payload: dict) -> BenchmarkRecord:
+    case_payload = dict(payload["case"])
+    score_payload = dict(payload["score"])
+    return BenchmarkRecord(
+        case=BenchmarkCase(
+            idx=str(case_payload["idx"]),
+            problem=str(case_payload["problem"]),
+            expected_answer=case_payload.get("expected_answer"),
+            subject=str(case_payload.get("subject", "unknown")),
+            problem_type=str(case_payload.get("problem_type", "unknown")),
+            answer_type=case_payload.get("answer_type"),
+            scorer=case_payload.get("scorer"),
+        ),
+        result=dict(payload["result"]),
+        latency_seconds=float(payload["latency_seconds"]),
+        json_valid=bool(payload["json_valid"]),
+        score=ScoreResult(**score_payload),
+        request_fingerprint=str(payload["request_fingerprint"]),
+    )
 
 
 def _is_correct(record: BenchmarkRecord) -> bool:
@@ -233,6 +302,14 @@ def _case_nonce(index: int, case: BenchmarkCase) -> str:
 
 
 def _record_cost(record: BenchmarkRecord) -> tuple[int, int]:
+    run_metrics = record.result.get("run_metrics", {})
+    if isinstance(run_metrics, dict) and (
+        "model_calls" in run_metrics or "estimated_tokens" in run_metrics
+    ):
+        return (
+            _nonnegative_int(run_metrics.get("model_calls", 0)),
+            _nonnegative_int(run_metrics.get("estimated_tokens", 0)),
+        )
     trace = _trace_events(record)
     summaries = [
         event

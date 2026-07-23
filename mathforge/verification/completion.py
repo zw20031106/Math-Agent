@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProofObligation
+from mathforge.verification.capabilities import (
+    VerificationCapability,
+    capability_satisfies_obligation,
+    capability_verifies_claim,
+)
 
 
 @dataclass(frozen=True)
@@ -36,6 +41,7 @@ class ProofCompletionGate:
                 if record.claim_id is not None
                 and record.status == "fail"
                 and record.strength == "hard"
+                and capability_verifies_claim(record.capability)
             }
         )
         failed_obligations = sorted(
@@ -59,35 +65,38 @@ class ProofCompletionGate:
                 failed_claims,
             )
 
-        hard_passed_claims = {
-            record.claim_id
-            for record in own_evidence
-            if record.claim_id is not None
-            and record.status == "pass"
-            and record.strength == "hard"
-        }
-        verified_claims = {
-            claim.claim_id for claim in candidate.claims if claim.status == "verified"
-        }
         unresolved: list[str] = []
         for obligation in obligations:
             if not obligation.required:
                 continue
             source_claim_ids = set(obligation.source_claim_ids)
-            hard_satisfied = bool(
-                source_claim_ids & (hard_passed_claims | verified_claims)
-            )
-            soft_satisfied = any(
-                record.evidence_type == "llm:VerifierSkeptic"
-                and record.status == "pass"
+            matching_evidence = [
+                record
+                for record in own_evidence
+                if record.status == "pass"
                 and record.claim_id in source_claim_ids
                 and obligation.obligation_id in record.payload.get("obligation_ids", [])
-                for record in own_evidence
-            )
-            if hard_satisfied or soft_satisfied:
+                and capability_satisfies_obligation(
+                    record.capability,
+                    obligation.kind,
+                )
+                and (
+                    record.strength == "hard"
+                    or (
+                        record.strength == "soft"
+                        and record.capability
+                        == VerificationCapability.PROOF_OBLIGATION_REVIEW.value
+                    )
+                )
+            ]
+            if matching_evidence:
                 obligation.status = "satisfied"
+                obligation.satisfaction_evidence_ids = sorted(
+                    record.evidence_id for record in matching_evidence
+                )
             else:
                 obligation.status = "unresolved"
+                obligation.satisfaction_evidence_ids = []
                 unresolved.append(obligation.obligation_id)
 
         candidate.unresolved_obligations = sorted(unresolved)

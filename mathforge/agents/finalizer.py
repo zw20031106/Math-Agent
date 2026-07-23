@@ -77,6 +77,12 @@ class LLMFinalizer:
             )
             if normalized_answer(finalized.final_answer) != normalized_answer(candidate.final_answer):
                 return FinalizationResult(deterministic_text, False, "exact_answer_changed")
+            if not self._verified_content_unchanged(candidate, finalized):
+                return FinalizationResult(
+                    deterministic_text,
+                    False,
+                    "verified_content_changed",
+                )
             finalized.final_answer = candidate.final_answer
             text = self._formatter.format(finalized, problem)
             if not text.strip():
@@ -84,3 +90,21 @@ class LLMFinalizer:
             return FinalizationResult(text, True, "accepted")
         except Exception:
             return FinalizationResult(deterministic_text, False, "finalizer_unavailable")
+
+    @staticmethod
+    def _verified_content_unchanged(
+        original: CandidateSolution,
+        finalized: CandidateSolution,
+    ) -> bool:
+        return (
+            LLMFinalizer._normalize_text(finalized.solution_text)
+            == LLMFinalizer._normalize_text(original.solution_text)
+            and finalized.assumptions == original.assumptions
+            and finalized.theorems == original.theorems
+            and [claim.to_dict() for claim in finalized.claims]
+            == [claim.to_dict() for claim in original.claims]
+        )
+
+    @staticmethod
+    def _normalize_text(value: str) -> str:
+        return " ".join(str(value).split())

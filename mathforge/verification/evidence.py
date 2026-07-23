@@ -10,6 +10,11 @@ from mathforge.harness.schemas import EvidenceRecord
 from mathforge.tools.registry import ToolResult
 from mathforge.tools.executor import ToolExecutor
 from mathforge.harness.schemas import CandidateSolution
+from mathforge.verification.capabilities import (
+    ClaimVerificationState,
+    VerificationCapability,
+    capability_verifies_claim,
+)
 
 
 class EvidenceLedger:
@@ -50,6 +55,7 @@ class EvidenceLedger:
             description=result.summary,
             payload=result.to_dict()["payload"],
             invocation=invocation,
+            capability=result.capability,
         )
         self._records.append(record)
         return record
@@ -72,6 +78,33 @@ class EvidenceLedger:
             strength="soft",
             description=description,
             payload={"obligation_ids": list(obligation_ids)},
+            invocation={
+                "role": "VerifierSkeptic",
+                "obligation_ids": list(obligation_ids),
+            },
+            capability=VerificationCapability.PROOF_OBLIGATION_REVIEW.value,
+        )
+        self._records.append(record)
+        return record
+
+    def record_unknown_check(
+        self,
+        *,
+        candidate_id: str,
+        claim_id: str,
+        check_suggestion: str,
+    ) -> EvidenceRecord:
+        record = EvidenceRecord(
+            evidence_id=f"ev-{uuid4().hex[:12]}",
+            candidate_id=candidate_id,
+            claim_id=claim_id,
+            evidence_type="host:check_type_resolution",
+            status="unknown",
+            strength="soft",
+            description="unsupported check suggestion",
+            payload={"check_suggestion": str(check_suggestion)},
+            invocation={"resolver": "host_capability_matrix"},
+            capability=VerificationCapability.NONE.value,
         )
         self._records.append(record)
         return record
@@ -109,17 +142,30 @@ class ClaimEvidenceVerifier:
         for claim in candidate.claims:
             if allowed is not None and claim.claim_id not in allowed:
                 continue
+            tool_name = self._tool_name(claim.check_type)
+            if tool_name is None:
+                claim.verification_state = ClaimVerificationState.UNKNOWN.value
+                if claim.check_type.strip().lower() != "reasoning":
+                    records.append(
+                        ledger.record_unknown_check(
+                            candidate_id=candidate.candidate_id,
+                            claim_id=claim.claim_id,
+                            check_suggestion=claim.check_type,
+                        )
+                    )
+                continue
             arguments = self._arguments(
                 candidate,
-                claim.check_type,
+                tool_name,
                 claim.statement,
                 domains=domains,
                 assumptions=effective_assumptions,
             )
             if arguments is None:
+                claim.verification_state = ClaimVerificationState.UNKNOWN.value
                 continue
             started = perf_counter()
-            result = self._tools.execute(claim.check_type, arguments)
+            result = self._tools.execute(tool_name, arguments)
             duration_ms = (perf_counter() - started) * 1000
             record = ledger.record_tool_result(
                 candidate_id=candidate.candidate_id,
@@ -132,11 +178,38 @@ class ClaimEvidenceVerifier:
                 timeout_seconds=self._tools.default_timeout,
             )
             records.append(record)
-            if result.strength == "hard" and result.status == "pass":
+            if result.status == "pass":
+                claim.verification_state = result.claim_state
+            if (
+                result.strength == "hard"
+                and result.status == "pass"
+                and capability_verifies_claim(result.capability)
+            ):
                 claim.status = "verified"
-            elif result.strength == "hard" and result.status == "fail":
+                claim.verification_state = ClaimVerificationState.SEMANTICALLY_VERIFIED.value
+            elif (
+                result.strength == "hard"
+                and result.status == "fail"
+                and capability_verifies_claim(result.capability)
+            ):
                 claim.status = "rejected"
+                claim.verification_state = ClaimVerificationState.REJECTED.value
         return records
+
+    @staticmethod
+    def _tool_name(check_suggestion: str) -> str | None:
+        normalized = str(check_suggestion).strip().lower()
+        if normalized in {
+            "safe_parse_expression",
+            "symbolic_equivalence",
+            "simplify_expression",
+            "numerical_residual",
+            "matrix_shape_check",
+            "latex_syntax_check",
+            "answer_type_check",
+        }:
+            return normalized
+        return None
 
     @staticmethod
     def _arguments(
@@ -180,6 +253,7 @@ def _tool_invocation(
         {
             "tool_name": result.tool_name,
             "tool_version": result.tool_version,
+            "capability": result.capability,
             "arguments": dict(arguments or {}),
             "assumptions": list(assumptions or []),
             "domains": dict(domains or {}),

@@ -13,12 +13,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from llm_client import InternChatClient  # noqa: E402
-from mathforge.benchmark import load_jsonl, run_benchmark  # noqa: E402
+from mathforge.benchmark import benchmark_record_to_dict, load_jsonl, run_benchmark  # noqa: E402
 from mathforge.config import HarnessConfig  # noqa: E402
 from mathforge.runtime import MathForgeHarness  # noqa: E402
 
 
-BENCHMARK_SCHEMA_VERSION = "2.0"
+BENCHMARK_SCHEMA_VERSION = "2.1"
 
 
 def build_benchmark_metadata(input_path: Path, config_path: Path) -> dict:
@@ -48,17 +48,7 @@ def main() -> int:
         **build_benchmark_metadata(args.input, args.config),
         "config": args.config.as_posix(),
         "summary": summary,
-        "records": [
-            {
-                "idx": record.case.idx,
-                "latency_seconds": record.latency_seconds,
-                "json_valid": record.json_valid,
-                "final_response": record.result.get("final_response", ""),
-                "request_fingerprint": record.request_fingerprint,
-                "score": record.score.to_dict(),
-            }
-            for record in records
-        ],
+        "records": [benchmark_record_to_dict(record) for record in records],
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

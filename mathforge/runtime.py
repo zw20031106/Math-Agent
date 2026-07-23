@@ -112,6 +112,7 @@ class MathForgeHarness:
             session_id=session.session_id,
             request_fingerprint=request_fingerprint(normalized_problem, fingerprint_nonce),
         )
+        outcome = "fallback"
 
         try:
             session.problem_ir = self._problem_parser.parse(normalized_problem)
@@ -309,7 +310,16 @@ class MathForgeHarness:
             if self._config.enable_tools:
                 for item in fanout.candidates:
                     result, _ = self._run_answer_type_check(session, item, ledger)
-                    tool_results.append({"candidate_id": item.candidate_id, "status": result.status})
+                    tool_results.append(
+                        {
+                            "candidate_id": item.candidate_id,
+                            "status": result.status,
+                            "outcome_reason": _tool_outcome_reason(
+                                result.status,
+                                result.summary,
+                            ),
+                        }
+                    )
                     if self._config.enable_evidence:
                         claim_records = self._claim_verifier.verify(
                             item,
@@ -322,6 +332,10 @@ class MathForgeHarness:
                                 "candidate_id": item.candidate_id,
                                 "claim_id": record.claim_id,
                                 "status": record.status,
+                                "outcome_reason": _tool_outcome_reason(
+                                    record.status,
+                                    record.description,
+                                ),
                             }
                             for record in claim_records
                         )
@@ -618,6 +632,7 @@ class MathForgeHarness:
                 estimated_tokens=session.budget.used_tokens,
                 outcome="primary",
             )
+            outcome = "primary"
         except Exception:  # The public contract requires a result on every path.
             final_response = self._fallback.solve(normalized_problem)
             trace.add(
@@ -631,6 +646,11 @@ class MathForgeHarness:
         return {
             "final_response": final_response,
             "trace": trace.build(),
+            "run_metrics": {
+                "model_calls": session.budget.used_calls,
+                "estimated_tokens": session.budget.used_tokens,
+                "outcome": outcome,
+            },
         }
 
     def _build_role_context(
@@ -819,3 +839,23 @@ class MathForgeHarness:
                 assumptions=session.problem_ir.assumptions,
             )
         return candidate
+
+
+def _tool_outcome_reason(status: str, summary: str) -> str:
+    normalized_status = str(status).strip().lower()
+    normalized_summary = str(summary).strip().lower()
+    if normalized_status in {"pass", "fail", "error"}:
+        return normalized_status
+    if "timed out" in normalized_summary or "timeout" in normalized_summary:
+        return "timeout"
+    if any(
+        marker in normalized_summary
+        for marker in ("parse", "unparseable", "invalid expression")
+    ):
+        return "parse_unknown"
+    if any(
+        marker in normalized_summary
+        for marker in ("domain", "assumption", "counterexample", "sample")
+    ):
+        return "domain_unknown"
+    return "parse_unknown"

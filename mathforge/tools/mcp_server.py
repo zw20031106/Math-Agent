@@ -16,6 +16,7 @@ class StdioMCPServer:
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         request_id = request.get("id")
         method = request.get("method")
+        result: dict[str, Any]
         if method == "initialize":
             result = {
                 "protocolVersion": "2024-11-05",

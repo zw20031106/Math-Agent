@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, ProofObligation
+from mathforge.verification.capabilities import derive_claim_kind
 
 
 class ProofObligationEngine:
@@ -50,16 +51,19 @@ class ProofObligationEngine:
         obligations: list[ProofObligation], candidate: CandidateSolution
     ) -> None:
         for obligation in obligations:
+            for claim in candidate.claims:
+                claim.claim_kind = derive_claim_kind(claim.check_type)
             matches = [
                 claim
                 for claim in candidate.claims
-                if claim.check_type == obligation.kind or obligation.kind in claim.statement.lower()
+                if claim.claim_kind == obligation.kind
             ]
             obligation.source_claim_ids = [claim.claim_id for claim in matches]
-            if matches and all(claim.status == "verified" for claim in matches):
-                obligation.status = "satisfied"
-            elif any(claim.status == "rejected" for claim in matches):
+            obligation.satisfaction_evidence_ids = []
+            if any(claim.status == "rejected" for claim in matches):
                 obligation.status = "failed"
+            else:
+                obligation.status = "unresolved"
         candidate.unresolved_obligations = [
             obligation.obligation_id
             for obligation in obligations

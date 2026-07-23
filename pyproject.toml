@@ -6,3 +6,6 @@ build-backend = "setuptools.build_meta"
 testpaths = ["tests"]
 addopts = "-ra"
 pythonpath = ["."]
+
+[tool.mypy]
+ignore_missing_imports = true

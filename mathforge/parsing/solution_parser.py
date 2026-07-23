@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from mathforge.harness.schemas import CandidateSolution, Claim
+from mathforge.verification.capabilities import derive_claim_kind
 
 
 _ANSWER_PATTERNS = (
@@ -77,13 +78,15 @@ class SolutionParser:
         if isinstance(raw_claims, list):
             for index, item in enumerate(raw_claims):
                 if isinstance(item, dict):
+                    check_suggestion = str(item.get("check_type", "reasoning"))
                     claims.append(
                         Claim(
                             claim_id=str(item.get("claim_id", f"c{index + 1}")),
                             statement=str(item.get("statement", "")),
                             depends_on=[str(value) for value in item.get("depends_on", [])],
-                            check_type=str(item.get("check_type", "reasoning")),
+                            check_type=check_suggestion,
                             importance=str(item.get("importance", "supporting")),
+                            claim_kind=derive_claim_kind(check_suggestion),
                         )
                     )
         final_answer = str(payload.get("final_answer", "")).strip()

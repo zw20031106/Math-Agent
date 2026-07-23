@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from mathforge.benchmark import BenchmarkCase, run_benchmark
+from mathforge.benchmark import (
+    BenchmarkCase,
+    benchmark_record_from_dict,
+    benchmark_record_to_dict,
+    run_benchmark,
+    summarize,
+)
 from mathforge.harness.fingerprints import request_fingerprint
 
 
@@ -94,3 +100,61 @@ def test_fingerprint_mismatch_is_reported_as_concurrency_pollution():
     )
     assert summary["fingerprint_mismatch_count"] == 1
     assert summary["concurrency_pollution_count"] == 1
+
+
+def test_context_and_tool_failure_metrics_use_explicit_event_reasons():
+    def solve(*_):
+        return {
+            "final_response": "Final answer: 1",
+            "trace": [
+                {"event": "context_view_built", "role": "PrimarySolver"},
+                {
+                    "event": "context_budget_infeasible",
+                    "role": "VerifierSkeptic",
+                },
+                {
+                    "event": "tool_checks",
+                    "checks": [
+                        {"status": "unknown", "outcome_reason": "timeout"},
+                        {"status": "unknown", "outcome_reason": "domain_unknown"},
+                        {"status": "error", "outcome_reason": "error"},
+                    ],
+                },
+            ],
+        }
+
+    _, summary = run_benchmark(
+        [BenchmarkCase("1", "1", "1", answer_type="integer")],
+        solve,
+    )
+    assert summary["cepc_invariant_failure_rate"] == 0.5
+    assert summary["context_view_failure_rate"] == 0.5
+    assert summary["tool_timeout_rate"] == 1 / 3
+    assert summary["tool_unknown_rate"] == 1 / 3
+    assert summary["tool_error_rate"] == 1 / 3
+
+
+def test_serialized_benchmark_records_recompute_the_same_summary():
+    records, summary = run_benchmark(
+        [BenchmarkCase("1", "1", "1", "algebra", "calculation", "integer")],
+        lambda *_: {
+            "final_response": "Final answer: 1",
+            "trace": [
+                {
+                    "event": "budget_summary",
+                    "model_calls": 1,
+                    "estimated_tokens": 9,
+                }
+            ],
+            "run_metrics": {
+                "model_calls": 1,
+                "estimated_tokens": 9,
+                "outcome": "primary",
+            },
+        },
+    )
+    restored = [
+        benchmark_record_from_dict(benchmark_record_to_dict(record))
+        for record in records
+    ]
+    assert summarize(restored) == summary

@@ -33,7 +33,7 @@ class HarnessConfig:
     enable_lemma_loop: bool = True
     enable_rag: bool = True
     enable_repair: bool = True
-    enable_finalizer: bool = True
+    enable_finalizer: bool = False
 
     @classmethod
     def from_environment(cls) -> "HarnessConfig":

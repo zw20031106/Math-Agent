@@ -44,6 +44,8 @@ class Claim:
     check_type: str = "reasoning"
     importance: str = "supporting"
     status: str = "unverified"
+    claim_kind: str = "unknown"
+    verification_state: str = "unknown"
 
     def to_dict(self) -> dict:
         return {
@@ -53,6 +55,8 @@ class Claim:
             "check_type": self.check_type,
             "importance": self.importance,
             "status": self.status,
+            "claim_kind": self.claim_kind,
+            "verification_state": self.verification_state,
         }
 
 
@@ -137,6 +141,7 @@ class EvidenceRecord:
     description: str
     payload: dict[str, Any] = field(default_factory=dict)
     invocation: dict[str, Any] = field(default_factory=dict)
+    capability: str = "none"
 
     def to_dict(self) -> dict:
         return {
@@ -149,6 +154,7 @@ class EvidenceRecord:
             "description": self.description,
             "payload": dict(self.payload),
             "invocation": dict(self.invocation),
+            "capability": self.capability,
         }
 
 
@@ -160,6 +166,7 @@ class ProofObligation:
     required: bool = True
     status: str = "unresolved"
     source_claim_ids: list[str] = field(default_factory=list)
+    satisfaction_evidence_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -169,6 +176,7 @@ class ProofObligation:
             "required": self.required,
             "status": self.status,
             "source_claim_ids": list(self.source_claim_ids),
+            "satisfaction_evidence_ids": list(self.satisfaction_evidence_ids),
         }
 
 

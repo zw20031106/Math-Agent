@@ -33,3 +33,58 @@ def test_formatter_preserves_exact_answer():
     )
     rendered = DeterministicFormatter().format(candidate, parsed)
     assert rendered.endswith(r"\frac{1}{3}")
+
+
+def test_formatter_does_not_treat_exact_answer_as_substring_of_wrong_value():
+    parsed = ProblemParser().parse("求整数答案")
+    candidate = CandidateSolution(
+        "c",
+        "PrimarySolver",
+        "arithmetic",
+        "2",
+        "integer",
+        solution_text="A mistaken derivation concludes 42.",
+    )
+    rendered = DeterministicFormatter().format(candidate, parsed)
+    assert rendered.endswith("Final answer: 2")
+    assert rendered.count("Final answer:") == 1
+
+
+def test_formatter_replaces_existing_answer_line_with_one_canonical_block():
+    parsed = ProblemParser().parse("求整数答案")
+    candidate = CandidateSolution(
+        "c",
+        "PrimarySolver",
+        "arithmetic",
+        "2",
+        "integer",
+        solution_text="Work.\nAnswer: 42",
+    )
+    rendered = DeterministicFormatter().format(candidate, parsed)
+    assert "Answer: 42" not in rendered
+    assert rendered == "Work.\n\nFinal answer: 2"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "A",
+        r"\frac{1}{3}",
+        "{1,2}",
+        "[0,1)",
+        "[[1,0],[0,1]]",
+    ],
+)
+def test_formatter_preserves_exact_answer_representation_in_unique_block(answer):
+    parsed = ProblemParser().parse("Return the requested object")
+    candidate = CandidateSolution(
+        "c",
+        "PrimarySolver",
+        "direct",
+        answer,
+        parsed.answer_type,
+        solution_text="Work.",
+    )
+    rendered = DeterministicFormatter().format(candidate, parsed)
+    assert rendered.endswith(f"Final answer: {answer}")
+    assert rendered.count("Final answer:") == 1

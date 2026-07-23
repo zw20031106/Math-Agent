@@ -66,6 +66,8 @@ class ToolExecutor:
                     f"tool failed: {type(error).__name__}",
                     {},
                     definition.version,
+                    definition.capability,
+                    definition.claim_state,
                 )
         request = json.dumps({"name": name, "arguments": arguments}, ensure_ascii=False)
         try:
@@ -81,11 +83,25 @@ class ToolExecutor:
             )
         except subprocess.TimeoutExpired:
             return ToolResult(
-                name, "unknown", "soft", "tool timed out", {}, definition.version
+                name,
+                "unknown",
+                "soft",
+                "tool timed out",
+                {},
+                definition.version,
+                definition.capability,
+                definition.claim_state,
             )
         if completed.returncode != 0:
             return ToolResult(
-                name, "error", "soft", "isolated tool failed", {}, definition.version
+                name,
+                "error",
+                "soft",
+                "isolated tool failed",
+                {},
+                definition.version,
+                definition.capability,
+                definition.claim_state,
             )
         try:
             payload = json.loads(completed.stdout)
@@ -96,6 +112,8 @@ class ToolExecutor:
                 str(payload["summary"]),
                 dict(payload.get("payload", {})),
                 str(payload.get("tool_version", "1")),
+                str(payload.get("capability", definition.capability)),
+                str(payload.get("claim_state", definition.claim_state)),
             )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             return ToolResult(
@@ -105,4 +123,6 @@ class ToolExecutor:
                 "invalid isolated tool response",
                 {},
                 definition.version,
+                definition.capability,
+                definition.claim_state,
             )

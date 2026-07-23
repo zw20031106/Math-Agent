@@ -15,6 +15,10 @@ from mathforge.harness.schemas import (
     ProblemIR,
     ProofObligation,
 )
+from mathforge.verification.capabilities import (
+    ClaimVerificationState,
+    capability_verifies_claim,
+)
 
 
 @dataclass(frozen=True)
@@ -237,6 +241,7 @@ class VerifierSkeptic:
                 and record.claim_id is not None
                 and record.status == "fail"
                 and record.strength == "hard"
+                and capability_verifies_claim(record.capability)
             }
         )
         unresolved = [
@@ -267,9 +272,18 @@ class LemmaVerifier:
             for record in evidence
             if record.candidate_id == candidate_id and record.claim_id == claim_id
         ]
-        if any(record.status == "fail" and record.strength == "hard" for record in matching):
+        if any(
+            record.status == "fail"
+            and record.strength == "hard"
+            and capability_verifies_claim(record.capability)
+            for record in matching
+        ):
             lemma.status = "rejected"
-        elif any(record.status == "pass" and record.strength == "hard" for record in matching):
+        elif any(
+            record.status == "pass"
+            and capability_verifies_claim(record.capability)
+            for record in matching
+        ):
             lemma.status = "verified"
         else:
             claim = next(
@@ -282,9 +296,16 @@ class LemmaVerifier:
                 ),
                 None,
             )
-            if claim is not None and claim.status == "verified":
+            if (
+                claim is not None
+                and claim.verification_state
+                == ClaimVerificationState.SEMANTICALLY_VERIFIED.value
+            ):
                 lemma.status = "verified"
-            elif claim is not None and claim.status == "rejected":
+            elif (
+                claim is not None
+                and claim.verification_state == ClaimVerificationState.REJECTED.value
+            ):
                 lemma.status = "rejected"
             else:
                 lemma.status = "conflicted"

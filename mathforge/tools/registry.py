@@ -7,6 +7,10 @@ from mathforge.tools.formatting import answer_type_check, latex_syntax_check
 from mathforge.tools.linear_algebra import matrix_shape_check
 from mathforge.tools.numerical import density_normalization, numerical_residual, small_case_enumeration
 from mathforge.tools.symbolic import safe_parse_expression, simplify_expression, symbolic_equivalence
+from mathforge.verification.capabilities import (
+    ClaimVerificationState,
+    VerificationCapability,
+)
 
 
 def _json_value(value: Any) -> Any:
@@ -27,6 +31,8 @@ class ToolResult:
     summary: str
     payload: dict[str, Any]
     tool_version: str = "1"
+    capability: str = VerificationCapability.NONE.value
+    claim_state: str = ClaimVerificationState.UNKNOWN.value
 
     def to_dict(self) -> dict:
         return {
@@ -36,6 +42,8 @@ class ToolResult:
             "summary": self.summary,
             "payload": _json_value(self.payload),
             "tool_version": self.tool_version,
+            "capability": self.capability,
+            "claim_state": self.claim_state,
         }
 
 
@@ -47,10 +55,20 @@ class ToolDefinition:
     proves: str
     limitations: str
     version: str = "1"
+    capability: str = VerificationCapability.NONE.value
+    claim_state: str = ClaimVerificationState.UNKNOWN.value
 
 
 _DEFINITIONS = (
-    ToolDefinition("safe_parse_expression", safe_parse_expression, False, "restricted syntax acceptance", "does not prove a formula"),
+    ToolDefinition(
+        "safe_parse_expression",
+        safe_parse_expression,
+        False,
+        "restricted syntax acceptance",
+        "does not prove a formula",
+        capability=VerificationCapability.SYNTAX_RESTRICTED_PARSE.value,
+        claim_state=ClaimVerificationState.SYNTAX_CHECKED.value,
+    ),
     ToolDefinition(
         "symbolic_equivalence",
         symbolic_equivalence,
@@ -58,17 +76,73 @@ _DEFINITIONS = (
         "exact equality or a domain-valid exact counterexample",
         "unparseable assumptions make non-equivalence unknown",
         "2",
+        VerificationCapability.EQUALITY_SYMBOLIC_UNDER_DOMAIN.value,
+        ClaimVerificationState.SEMANTICALLY_VERIFIED.value,
     ),
-    ToolDefinition("simplify_expression", simplify_expression, True, "an exact algebraic simplification", "does not establish theorem conditions"),
-    ToolDefinition("numerical_residual", numerical_residual, True, "finite-sample residual evidence", "cannot prove universal equality"),
-    ToolDefinition("matrix_shape_check", matrix_shape_check, False, "matrix rectangularity and dimensions", "does not prove matrix identities"),
-    ToolDefinition("density_normalization", density_normalization, True, "an exact integral normalization check", "does not prove nonnegativity"),
-    ToolDefinition("small_case_enumeration", small_case_enumeration, True, "the supplied finite cases", "cannot prove untested cases"),
-    ToolDefinition("latex_syntax_check", latex_syntax_check, False, "brace balance", "does not validate mathematical meaning"),
-    ToolDefinition("answer_type_check", answer_type_check, False, "basic answer-shape conformance", "does not prove correctness"),
+    ToolDefinition(
+        "simplify_expression",
+        simplify_expression,
+        True,
+        "an exact algebraic simplification",
+        "does not establish theorem conditions",
+        capability=VerificationCapability.ALGEBRA_SIMPLIFICATION.value,
+    ),
+    ToolDefinition(
+        "numerical_residual",
+        numerical_residual,
+        True,
+        "finite-sample residual evidence",
+        "cannot prove universal equality",
+        capability=VerificationCapability.EQUALITY_NUMERICAL_SAMPLES.value,
+        claim_state=ClaimVerificationState.NUMERICALLY_SUPPORTED.value,
+    ),
+    ToolDefinition(
+        "matrix_shape_check",
+        matrix_shape_check,
+        False,
+        "matrix rectangularity and dimensions",
+        "does not prove matrix identities",
+        capability=VerificationCapability.MATRIX_SHAPE.value,
+        claim_state=ClaimVerificationState.SEMANTICALLY_VERIFIED.value,
+    ),
+    ToolDefinition(
+        "density_normalization",
+        density_normalization,
+        True,
+        "an exact integral normalization check",
+        "does not prove nonnegativity",
+        capability=VerificationCapability.PROBABILITY_NORMALIZATION.value,
+        claim_state=ClaimVerificationState.SEMANTICALLY_VERIFIED.value,
+    ),
+    ToolDefinition(
+        "small_case_enumeration",
+        small_case_enumeration,
+        True,
+        "the supplied finite cases",
+        "cannot prove untested cases",
+        capability=VerificationCapability.FINITE_CASE_EXACT.value,
+        claim_state=ClaimVerificationState.SEMANTICALLY_VERIFIED.value,
+    ),
+    ToolDefinition(
+        "latex_syntax_check",
+        latex_syntax_check,
+        False,
+        "brace balance",
+        "does not validate mathematical meaning",
+        capability=VerificationCapability.SYNTAX_LATEX_BRACE_BALANCE.value,
+        claim_state=ClaimVerificationState.SYNTAX_CHECKED.value,
+    ),
+    ToolDefinition(
+        "answer_type_check",
+        answer_type_check,
+        False,
+        "basic answer-shape conformance",
+        "does not prove correctness",
+        capability=VerificationCapability.ANSWER_SHAPE.value,
+    ),
 )
 
-_INPUT_SCHEMAS = {
+_INPUT_SCHEMAS: dict[str, dict[str, dict[str, Any]]] = {
     "safe_parse_expression": {
         "expression": {"type": "string"},
     },
@@ -119,7 +193,7 @@ _INPUT_SCHEMAS = {
     },
 }
 
-_OPTIONAL_ARGUMENTS = {
+_OPTIONAL_ARGUMENTS: dict[str, set[str]] = {
     "symbolic_equivalence": {"assumptions", "domains"},
     "numerical_residual": {"right", "tolerance", "samples"},
     "small_case_enumeration": {"expected"},
@@ -139,8 +213,8 @@ class ToolRegistry:
         except KeyError as error:
             raise KeyError(f"unknown tool: {name}") from error
 
-    def mcp_schemas(self) -> list[dict]:
-        schemas: list[dict] = []
+    def mcp_schemas(self) -> list[dict[str, Any]]:
+        schemas: list[dict[str, Any]] = []
         for definition in sorted(self._definitions.values(), key=lambda item: item.name):
             properties = _INPUT_SCHEMAS[definition.name]
             required = [
@@ -182,4 +256,6 @@ def run_tool_direct(name: str, arguments: dict[str, Any]) -> ToolResult:
         summary=str(raw["summary"]),
         payload=_json_value(raw.get("payload", {})),
         tool_version=definition.version,
+        capability=definition.capability,
+        claim_state=definition.claim_state,
     )

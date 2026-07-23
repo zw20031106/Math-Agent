@@ -9,11 +9,13 @@ The official `main.py` and `llm_client.py` files are frozen and verified byte-fo
 `user_agent.ReasoningAgent` is a thin, thread-safe entry point. Each solve creates
 an isolated session, parses and routes the problem, runs risk-sized method-orthogonal
 candidates under mutually exclusive method-family contracts, checks actual
-method duplicates and claim evidence, batches unresolved proof claims through a
-soft-evidence VerifierSkeptic, enforces required proof obligations before
-lexicographic arbitration, and returns a compact judge-safe trace. High-risk
-problems can use a verified-lemma loop and evidence-scoped repair. Reviewed
-knowledge retrieval and the optional MCP adapter are offline.
+method duplicates and capability-scoped claim evidence, batches unresolved proof
+claims through a soft-evidence VerifierSkeptic, and requires every completed
+proof obligation to cite an explicitly mapped Claim and Evidence record before
+lexicographic arbitration. High-risk problems can use a verified-lemma loop and
+evidence-scoped repair. Final output is deterministic; the LLM finalizer is
+disabled by default. Reviewed knowledge retrieval and the optional MCP adapter
+are offline.
 
 The injected official client is the only model interface. No API keys, alternate
 model clients, native function calling, or network retrieval are used.
@@ -39,3 +41,5 @@ Run an ablation with
 Per-problem defaults are four model calls, 24,000 estimated output tokens, a
 12-minute soft deadline, a 13-minute exploration cutoff, and a 14.5-minute hard
 finalization deadline. Every failure path returns a non-empty deterministic fallback.
+Each result also carries structured call/token/outcome metrics independently of
+the bounded judge trace.

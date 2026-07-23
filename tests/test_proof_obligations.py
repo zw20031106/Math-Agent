@@ -10,7 +10,7 @@ def test_proof_obligations_cover_bidirectional_unique_statement():
     assert {"definition", "necessity", "sufficiency", "existence", "uniqueness", "boundary"} <= kinds
 
 
-def test_required_obligation_is_only_satisfied_by_verified_claim():
+def test_verified_claim_status_alone_cannot_satisfy_required_obligation():
     problem = ProblemParser().parse("证明结论")
     candidate = CandidateSolution(
         "c",
@@ -22,5 +22,6 @@ def test_required_obligation_is_only_satisfied_by_verified_claim():
     )
     obligations = ProofObligationEngine().generate(problem, candidate)
     sufficiency = next(item for item in obligations if item.kind == "sufficiency")
-    assert sufficiency.status == "satisfied"
+    assert sufficiency.status == "unresolved"
+    assert sufficiency.source_claim_ids == ["claim-1"]
     assert any(item.status == "unresolved" for item in obligations)

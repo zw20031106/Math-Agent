@@ -162,3 +162,45 @@ def test_runtime_reserves_one_call_for_verifier_after_router():
     assert sum(role.startswith("You are VerifierSkeptic") for role in client.roles) == 1
     budget = next(event for event in result["trace"] if event["event"] == "budget_summary")
     assert budget["model_calls"] == 4
+
+
+class SyntaxOnlyProofClient:
+    def chat(self, *, messages, temperature, max_tokens):
+        del messages, temperature, max_tokens
+        return json.dumps(
+            {
+                "method": "direct",
+                "solution_text": "Unsupported assertions only.",
+                "final_answer": "QED",
+                "answer_type": "text",
+                "claims": [
+                    {
+                        "claim_id": kind,
+                        "statement": f"{kind} is handled",
+                        "check_type": "latex_syntax_check",
+                        "importance": "critical",
+                    }
+                    for kind in ("definition", "sufficiency", "uniqueness", "boundary")
+                ],
+            }
+        )
+
+
+def test_syntax_checks_cannot_complete_mathematical_proof_obligations():
+    config = replace(
+        _proof_config(),
+        max_model_calls=1,
+        enable_tools=True,
+        enable_verifier=False,
+    )
+    result = MathForgeHarness(SyntaxOnlyProofClient(), config).solve(
+        "Prove that the solution is unique.", {}
+    )
+    assert "Unsupported assertions" not in result["final_response"]
+    gate = next(event for event in result["trace"] if event["event"] == "proof_completion_gate")
+    assert gate["accepted"] == []
+    assert {
+        item.rsplit(":", 1)[-1]
+        for item in gate["rejected"][0]["unresolved_obligation_ids"]
+    } == {"definition", "sufficiency", "uniqueness", "boundary"}
+    assert result["trace"][-1]["event"] == "fallback_used"

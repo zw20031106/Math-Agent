@@ -7,8 +7,16 @@ from typing import Any
 from mathforge.harness.events import JUDGE_EVENTS
 
 
-_SENSITIVE_KEYS = re.compile(r"(secret|token|password|api[_-]?key|exception|traceback)", re.I)
+_SENSITIVE_KEYS = re.compile(
+    r"^(?:"
+    r"secret|.*[_-]secret|password|passwd|.*[_-]password|api[_-]?key|"
+    r".*[_-]api[_-]?key|(?:access|auth|bearer|refresh|private|session|id)[_-]?token|"
+    r"authorization|credentials?|exception|traceback"
+    r")$",
+    re.I,
+)
 _ABSOLUTE_PATH = re.compile(r"(?:[A-Za-z]:\\|/(?:home|Users|root|tmp)/)[^\s]+")
+_TERMINAL_EVENTS = frozenset({"session_started", "budget_summary", "fallback_used"})
 
 
 class TraceBuilder:
@@ -34,13 +42,7 @@ class TraceBuilder:
             if not _SENSITIVE_KEYS.search(key)
         }
         item = {"event": event, **sanitized}
-        if len(self._events) >= self._max_events:
-            if event == "fallback_used":
-                self._events[-1] = item
-            return
-        proposed = [*self._events, item]
-        if len(json.dumps(proposed, ensure_ascii=False, default=str)) <= self._max_chars:
-            self._events.append(item)
+        self._append_bounded(item)
 
     def build(self) -> list[dict[str, Any]]:
         return [dict(event) for event in self._events]
@@ -48,6 +50,40 @@ class TraceBuilder:
     @property
     def internal_events(self) -> list[dict[str, Any]]:
         return [dict(event) for event in self._internal_events]
+
+    def _append_bounded(self, item: dict[str, Any]) -> None:
+        event = str(item.get("event", ""))
+        if event in _TERMINAL_EVENTS:
+            self._events[:] = [
+                existing
+                for existing in self._events
+                if existing.get("event") != event
+            ]
+            while len(self._events) >= self._max_events:
+                if not self._evict_nonterminal():
+                    self._events.pop(0)
+            self._events.append(item)
+            while self._serialized_size() > self._max_chars:
+                if not self._evict_nonterminal():
+                    self._events.pop(0)
+                    if not self._events:
+                        break
+            return
+        if len(self._events) >= self._max_events:
+            return
+        self._events.append(item)
+        if self._serialized_size() > self._max_chars:
+            self._events.pop()
+
+    def _evict_nonterminal(self) -> bool:
+        for index in range(len(self._events) - 1, -1, -1):
+            if self._events[index].get("event") not in _TERMINAL_EVENTS:
+                self._events.pop(index)
+                return True
+        return False
+
+    def _serialized_size(self) -> int:
+        return len(json.dumps(self._events, ensure_ascii=False, default=str))
 
     @classmethod
     def _sanitize(cls, value: Any) -> Any:

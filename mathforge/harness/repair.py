@@ -218,6 +218,8 @@ class ClaimRepairService:
                         replacement.check_type,
                         replacement.importance,
                         "unverified",
+                        replacement.claim_kind,
+                        "unknown",
                     )
                 )
                 changed.append(claim.claim_id)
@@ -230,6 +232,12 @@ class ClaimRepairService:
                         claim.check_type,
                         claim.importance,
                         "unverified" if claim.claim_id in affected else claim.status,
+                        claim.claim_kind,
+                        (
+                            "unknown"
+                            if claim.claim_id in affected
+                            else claim.verification_state
+                        ),
                     )
                 )
         proposed = CandidateSolution(

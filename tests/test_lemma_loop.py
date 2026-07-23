@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from mathforge.harness.lemma_loop import VerifiedLemmaLoop
-from mathforge.harness.schemas import CandidateSolution, Claim, RoutePlan
+from mathforge.harness.schemas import CandidateSolution, Claim, EvidenceRecord, RoutePlan
 from mathforge.memory.lemma_memory import LemmaMemory
 from mathforge.memory.session_memory import SessionMemory
+from mathforge.verification.capabilities import (
+    ClaimVerificationState,
+    VerificationCapability,
+)
 
 
 def _route(risk: str = "high") -> RoutePlan:
@@ -26,7 +30,12 @@ def test_only_verified_lemmas_enter_memory_and_rounds_stop_without_new_work():
         "proved",
         "text",
         claims=[
-            Claim("verified", "sufficiency lemma", status="verified"),
+            Claim(
+                "verified",
+                "sufficiency lemma",
+                status="verified",
+                verification_state=ClaimVerificationState.SEMANTICALLY_VERIFIED.value,
+            ),
             Claim("unknown", "boundary lemma", status="unverified"),
         ],
     )
@@ -52,13 +61,53 @@ def test_rejected_lemma_is_not_reintroduced():
         "direct",
         "x",
         "text",
-        claims=[Claim("bad", "false lemma", status="rejected")],
+        claims=[
+            Claim(
+                "bad",
+                "false lemma",
+                status="rejected",
+                verification_state=ClaimVerificationState.REJECTED.value,
+            )
+        ],
     )
     result = VerifiedLemmaLoop().run(
         _route(), [candidate], [], {}, LemmaMemory(SessionMemory())
     )
     assert [lemma.status for lemma in result.lemmas] == ["rejected"]
     assert result.stop_reason == "no_new_progress"
+
+
+def test_soft_obligation_review_does_not_promote_solver_visible_lemma():
+    candidate = CandidateSolution(
+        "c",
+        "PrimarySolver",
+        "direct",
+        "QED",
+        "text",
+        claims=[Claim("claim", "sufficiency statement")],
+    )
+    evidence = [
+        EvidenceRecord(
+            "ev",
+            "c",
+            "claim",
+            "llm:VerifierSkeptic",
+            "pass",
+            "soft",
+            "reviewed",
+            {"obligation_ids": ["c:sufficiency"]},
+            {"role": "VerifierSkeptic"},
+            VerificationCapability.PROOF_OBLIGATION_REVIEW.value,
+        )
+    ]
+    result = VerifiedLemmaLoop().run(
+        _route(),
+        [candidate],
+        evidence,
+        {},
+        LemmaMemory(SessionMemory()),
+    )
+    assert [lemma.status for lemma in result.lemmas] == ["conflicted"]
 
 
 def test_verified_progress_can_drive_one_bounded_next_round():
@@ -68,7 +117,14 @@ def test_verified_progress_can_drive_one_bounded_next_round():
         "direct",
         "x",
         "text",
-        claims=[Claim("first-claim", "first verified lemma", status="verified")],
+        claims=[
+            Claim(
+                "first-claim",
+                "first verified lemma",
+                status="verified",
+                verification_state=ClaimVerificationState.SEMANTICALLY_VERIFIED.value,
+            )
+        ],
     )
     calls: list[list[str]] = []
 
@@ -81,7 +137,14 @@ def test_verified_progress_can_drive_one_bounded_next_round():
             "lemma-guided",
             "x",
             "text",
-            claims=[Claim("second-claim", "second verified lemma", status="verified")],
+            claims=[
+                Claim(
+                    "second-claim",
+                    "second verified lemma",
+                    status="verified",
+                    verification_state=ClaimVerificationState.SEMANTICALLY_VERIFIED.value,
+                )
+            ],
         )
 
     memory = LemmaMemory(SessionMemory())

@@ -97,6 +97,8 @@ def test_tool_version_round_trips_in_result_schema():
     )
     assert result.tool_version == "1"
     assert result.to_dict()["tool_version"] == "1"
+    assert result.capability == "answer.shape"
+    assert result.to_dict()["claim_state"] == "unknown"
 
 
 def test_symbolic_counterexample_search_uses_independent_symbol_values():

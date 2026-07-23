@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+import re
+
 from mathforge.harness.schemas import CandidateSolution, ProblemIR
+
+
+_ANSWER_BLOCK = re.compile(
+    r"^\s*(?:(?:final\s*)?answer|最终答案|答案)\s*[:：].*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 class DeterministicFormatter:
@@ -10,8 +18,11 @@ class DeterministicFormatter:
         solution = candidate.solution_text.strip()
         if not solution:
             return answer
-        if candidate.parse_status == "raw_text" or answer == solution:
+        if candidate.parse_status.split(":", 1)[0] == "raw_text":
             return solution
-        if answer and answer not in solution:
-            return f"{solution}\n\nFinal answer: {answer}"
-        return solution
+        without_answer_blocks = _ANSWER_BLOCK.sub("", solution).strip()
+        if not answer:
+            return without_answer_blocks
+        if without_answer_blocks:
+            return f"{without_answer_blocks}\n\nFinal answer: {answer}"
+        return f"Final answer: {answer}"
