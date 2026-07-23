@@ -84,7 +84,8 @@ def test_malicious_claim_count_fails_before_per_claim_processing():
     assert perf_counter() - started < 1.0
     assert client.calls == 1
     assert result["run_metrics"]["model_calls"] == 1
-    assert result["trace"][-1]["event"] == "fallback_used"
+    assert result["trace"][-1]["event"] == "run_completed"
+    assert any(event["event"] == "fallback_used" for event in result["trace"])
     assert all(event["event"] != "tool_checks" for event in result["trace"])
 
 

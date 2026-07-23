@@ -9,9 +9,11 @@ from mathforge.agents.router_planner import RouterPlanner
 from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.budget import CallBudget
-from mathforge.harness.errors import BudgetExceeded
+from mathforge.harness.debug import DebugSink, sanitized_failure_record
+from mathforge.harness.errors import BudgetExceeded, classify_failure
 from mathforge.harness.fallback import FallbackSolver
 from mathforge.harness.fingerprints import request_fingerprint
+from mathforge.harness.metrics import collect_run_metrics
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.harness.orchestration import BranchFailure, CandidateOrchestrator
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
@@ -79,8 +81,15 @@ def _public_metadata(metadata: Any) -> dict[str, Any]:
 class MathForgeHarness:
     """Thread-safe facade over the injected official model client."""
 
-    def __init__(self, client: Any, config: HarnessConfig | None = None) -> None:
+    def __init__(
+        self,
+        client: Any,
+        config: HarnessConfig | None = None,
+        *,
+        debug_sink: DebugSink | None = None,
+    ) -> None:
         self._config = config or load_competition_config()
+        self._debug_sink = debug_sink
         gate = ModelCallGate(self._config.model_max_concurrency)
         self._provider = OfficialClientProvider(client, gate)
         self._fallback = FallbackSolver()
@@ -156,13 +165,17 @@ class MathForgeHarness:
         )
         trace = TraceBuilder(session.trace_events, max_chars=self._config.trace_max_chars)
         fingerprint_nonce = str(safe_metadata.get("benchmark_nonce", session.session_id))
+        run_fingerprint = request_fingerprint(normalized_problem, fingerprint_nonce)
         trace.add(
             "session_started",
             session_id=session.session_id,
-            request_fingerprint=request_fingerprint(normalized_problem, fingerprint_nonce),
+            request_fingerprint=run_fingerprint,
             **self._provenance,
         )
         outcome = "fallback"
+        error_code = ""
+        failure: Exception | None = None
+        failed_phase = RuntimePhase.CREATED
 
         try:
             session.budget.ensure_stage("problem_parser")
@@ -711,6 +724,14 @@ class MathForgeHarness:
                     ],
                     stop_reason=lemma_result.stop_reason,
                     error_rate=lemma_result.error_rate,
+                    checked_count=sum(
+                        lemma.status in {"verified", "rejected", "conflicted"}
+                        for lemma in lemma_result.lemmas
+                    ),
+                    error_count=sum(
+                        lemma.status in {"rejected", "conflicted"}
+                        for lemma in lemma_result.lemmas
+                    ),
                     generated_candidates=[
                         item.candidate_id for item in lemma_result.generated_candidates
                     ],
@@ -931,12 +952,14 @@ class MathForgeHarness:
                 outcome="primary",
             )
             outcome = "primary"
-        except Exception:  # The public contract requires a result on every path.
+        except Exception as error:  # The public contract requires a result on every path.
+            failure = error
             failed_phase = session.phase
+            error_code = classify_failure(error, failed_phase).value
             transition = session.transition(
                 failed_phase,
                 RuntimePhase.FAILED,
-                reason="phase_failed",
+                reason=error_code,
             )
             trace.add("phase_transition", **transition)
             final_response = self._fallback.solve(normalized_problem)
@@ -958,25 +981,43 @@ class MathForgeHarness:
             trace.add("phase_transition", **transition)
             trace.add(
                 "fallback_used",
-                reason="phase_failed",
+                reason=error_code,
+                error_code=error_code,
                 failed_phase=failed_phase.value,
             )
 
+        trace.add(
+            "run_completed",
+            outcome=outcome,
+            error_code=error_code,
+            final_phase=session.phase.value,
+        )
+        metrics = collect_run_metrics(
+            budget=session.budget,
+            internal_events=trace.internal_events,
+            session_id=session.session_id,
+            request_fingerprint=run_fingerprint,
+            outcome=outcome,
+            final_phase=session.phase.value,
+            error_code=error_code,
+        )
+        if failure is not None and self._debug_sink is not None:
+            try:
+                self._debug_sink.record(
+                    sanitized_failure_record(
+                        failure,
+                        session_id=session.session_id,
+                        phase=failed_phase.value,
+                        error_code=error_code,
+                        internal_events=trace.internal_events,
+                    )
+                )
+            except Exception:
+                pass
         return {
             "final_response": final_response,
             "trace": trace.build(),
-            "run_metrics": {
-                "model_calls": session.budget.used_calls,
-                "estimated_tokens": session.budget.used_tokens,
-                "claims": session.budget.used_claims,
-                "tool_calls": session.budget.used_tool_calls,
-                "isolated_tool_calls": session.budget.used_isolated_tool_calls,
-                "tool_seconds": round(session.budget.used_tool_seconds, 6),
-                "evidence_records": session.budget.used_evidence_records,
-                "prompt_chars": session.budget.used_prompt_chars,
-                "outcome": outcome,
-                "final_phase": session.phase.value,
-            },
+            "run_metrics": metrics.to_dict(),
         }
 
     @staticmethod
@@ -1044,12 +1085,12 @@ class MathForgeHarness:
                 raw_store=session.raw_context_store,
                 memory_categories=memory_categories,
             )
-        except ContextBudgetExceeded as exc:
+        except ContextBudgetExceeded:
             trace.add(
                 "context_budget_infeasible",
                 role=role,
                 max_chars=view_budget,
-                reason=str(exc),
+                reason="budget_infeasible",
             )
             raise
         trace.add(

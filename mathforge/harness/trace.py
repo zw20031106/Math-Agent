@@ -16,7 +16,9 @@ _SENSITIVE_KEYS = re.compile(
     re.I,
 )
 _ABSOLUTE_PATH = re.compile(r"(?:[A-Za-z]:\\|/(?:home|Users|root|tmp)/)[^\s]+")
-_TERMINAL_EVENTS = frozenset({"session_started", "budget_summary", "fallback_used"})
+_TERMINAL_EVENTS = frozenset(
+    {"session_started", "budget_summary", "fallback_used", "run_completed"}
+)
 
 
 class TraceBuilder:

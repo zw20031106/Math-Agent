@@ -67,3 +67,21 @@ def test_terminal_trace_events_survive_event_pressure():
         "fallback_used",
     ]
     assert len(json.dumps(trace.build())) <= 240
+
+
+def test_run_completed_is_the_final_terminal_event_under_trace_pressure():
+    events: list[dict] = []
+    trace = TraceBuilder(events, max_events=4, max_chars=320)
+    trace.add("session_started", session_id="s")
+    for index in range(20):
+        trace.add("retrieval_completed", card_ids=[str(index)])
+    trace.add("budget_summary", model_calls=1, estimated_tokens=12)
+    trace.add("fallback_used", reason="budget")
+    trace.add(
+        "run_completed",
+        outcome="fallback",
+        error_code="budget",
+        final_phase="fallback_completed",
+    )
+    assert trace.build()[-1]["event"] == "run_completed"
+    assert len(json.dumps(trace.build())) <= 320

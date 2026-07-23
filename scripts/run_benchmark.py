@@ -21,7 +21,7 @@ from mathforge.runtime import MathForgeHarness  # noqa: E402
 from mathforge.tools.registry import ToolRegistry  # noqa: E402
 
 
-BENCHMARK_SCHEMA_VERSION = "2.2"
+BENCHMARK_SCHEMA_VERSION = "3.0"
 
 
 def build_benchmark_metadata(input_path: Path, config_path: Path) -> dict:
@@ -47,12 +47,20 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=ROOT / "config" / "competition.json")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--repetitions", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
     config = HarnessConfig.from_json(args.config)
     harness = MathForgeHarness(InternChatClient(), config)
     cases = load_jsonl(args.input)
-    records, summary = run_benchmark(cases, harness.solve, concurrency=args.concurrency)
+    records, summary = run_benchmark(
+        cases,
+        harness.solve,
+        concurrency=args.concurrency,
+        repetitions=args.repetitions,
+        seed=args.seed,
+    )
     output = {
         **build_benchmark_metadata(args.input, args.config),
         "config": args.config.as_posix(),

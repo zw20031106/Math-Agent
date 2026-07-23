@@ -75,7 +75,8 @@ def test_runtime_rechecks_repaired_answer_type_and_rolls_back_invalid_patch():
     repair = next(event for event in result["trace"] if event["event"] == "repair_completed")
     assert repair["rolled_back"] is True
     assert repair["reason"] == "candidate_validation_failed"
-    assert result["trace"][-1]["event"] == "fallback_used"
+    assert result["trace"][-1]["event"] == "run_completed"
+    assert any(event["event"] == "fallback_used" for event in result["trace"])
 
 
 def test_runtime_accepts_fully_reverified_repair_and_rebuilds_solution_text():

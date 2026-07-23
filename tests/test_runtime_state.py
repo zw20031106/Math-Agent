@@ -111,6 +111,7 @@ def test_failure_transitions_to_safe_fallback_terminal_state():
         RuntimePhase.FALLBACK_COMPLETED.value,
     ]
     fallback = next(event for event in result["trace"] if event["event"] == "fallback_used")
-    assert fallback["reason"] == "phase_failed"
+    assert fallback["reason"] == "all_candidates_failed"
+    assert fallback["error_code"] == "all_candidates_failed"
     assert fallback["failed_phase"] == RuntimePhase.CONTEXT_READY.value
     assert result["run_metrics"]["final_phase"] == RuntimePhase.FALLBACK_COMPLETED.value

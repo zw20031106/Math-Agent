@@ -80,7 +80,8 @@ def test_claimless_proof_falls_back_even_when_skeptic_claims_pass():
         "Prove that x equals x", {}
     )
     assert "Assertion only" not in result["final_response"]
-    assert result["trace"][-1]["event"] == "fallback_used"
+    assert result["trace"][-1]["event"] == "run_completed"
+    assert result["run_metrics"]["error_code"] == "proof_incomplete"
     gate = next(event for event in result["trace"] if event["event"] == "proof_completion_gate")
     assert gate["accepted"] == []
     assert gate["rejected"][0]["status"] == "incomplete"
@@ -101,7 +102,8 @@ def test_invalid_verifier_output_cannot_complete_proof():
     result = MathForgeHarness(ProofClient(invalid_verifier=True), _proof_config()).solve(
         "Prove that x equals x", {}
     )
-    assert result["trace"][-1]["event"] == "fallback_used"
+    assert result["trace"][-1]["event"] == "run_completed"
+    assert result["run_metrics"]["error_code"] == "proof_incomplete"
     verifier = next(event for event in result["trace"] if event["event"] == "verifier_completed")
     assert verifier["reason"] == "invalid_or_empty_findings"
 
@@ -275,4 +277,5 @@ def test_syntax_checks_cannot_complete_mathematical_proof_obligations():
         item.rsplit(":", 1)[-1]
         for item in gate["rejected"][0]["unresolved_obligation_ids"]
     } == {"definition", "sufficiency", "uniqueness", "boundary"}
-    assert result["trace"][-1]["event"] == "fallback_used"
+    assert result["trace"][-1]["event"] == "run_completed"
+    assert result["run_metrics"]["error_code"] == "proof_incomplete"

@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
 import math
+import random
+from threading import Event, Lock
 from time import perf_counter
-from typing import Callable
+from typing import Any, Callable, Mapping
 
 from mathforge.evaluation.scoring import ScoreResult, score_response
 from mathforge.harness.fingerprints import request_fingerprint
+from mathforge.harness.metrics import RunMetrics
 from mathforge.parsing.problem_parser import ProblemParser
 
 
@@ -24,14 +27,73 @@ class BenchmarkCase:
     scorer: str | None = None
 
 
+@dataclass(frozen=True)
+class BenchmarkPollution:
+    nonce_seen_in_messages: bool | None = None
+    foreign_nonce_in_messages: bool = False
+    foreign_nonce_in_result: bool = False
+    candidate_ownership_mismatch: bool = False
+    result_mutated_after_return: bool = False
+    probe_error: bool = False
+
+    def to_dict(self) -> dict[str, bool | None]:
+        return {
+            "nonce_seen_in_messages": self.nonce_seen_in_messages,
+            "foreign_nonce_in_messages": self.foreign_nonce_in_messages,
+            "foreign_nonce_in_result": self.foreign_nonce_in_result,
+            "candidate_ownership_mismatch": self.candidate_ownership_mismatch,
+            "result_mutated_after_return": self.result_mutated_after_return,
+            "probe_error": self.probe_error,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> BenchmarkPollution:
+        return cls(
+            nonce_seen_in_messages=_optional_bool(
+                payload.get("nonce_seen_in_messages")
+            ),
+            foreign_nonce_in_messages=bool(
+                payload.get("foreign_nonce_in_messages", False)
+            ),
+            foreign_nonce_in_result=bool(
+                payload.get("foreign_nonce_in_result", False)
+            ),
+            candidate_ownership_mismatch=bool(
+                payload.get("candidate_ownership_mismatch", False)
+            ),
+            result_mutated_after_return=bool(
+                payload.get("result_mutated_after_return", False)
+            ),
+            probe_error=bool(payload.get("probe_error", False)),
+        )
+
+    @property
+    def contaminated(self) -> bool:
+        return (
+            self.nonce_seen_in_messages is False
+            or self.foreign_nonce_in_messages
+            or self.foreign_nonce_in_result
+            or self.candidate_ownership_mismatch
+            or self.result_mutated_after_return
+            or self.probe_error
+        )
+
+
 @dataclass
 class BenchmarkRecord:
     case: BenchmarkCase
-    result: dict
+    result: dict[str, Any]
     latency_seconds: float
     json_valid: bool
     score: ScoreResult
     request_fingerprint: str
+    run_metrics: RunMetrics
+    pollution: BenchmarkPollution = BenchmarkPollution()
+    repetition_index: int = 0
+    random_seed: int = 0
+
+
+PollutionProbe = Callable[[str, tuple[str, ...]], Mapping[str, Any]]
 
 
 def load_jsonl(path) -> list[BenchmarkCase]:
@@ -62,28 +124,67 @@ def run_benchmark(
     solve: Callable[[str, dict], dict],
     *,
     concurrency: int = 1,
+    repetitions: int = 1,
+    seed: int = 0,
+    pollution_probe: PollutionProbe | None = None,
+    late_mutation_grace_seconds: float = 0.0,
 ) -> tuple[list[BenchmarkRecord], dict]:
+    if repetitions < 1:
+        raise ValueError("repetitions must be positive")
+    if late_mutation_grace_seconds < 0:
+        raise ValueError("late mutation grace must be nonnegative")
     parser = ProblemParser()
+    tasks = [
+        (
+            repeat_index * len(cases) + case_index,
+            repeat_index,
+            case_index,
+            case,
+        )
+        for repeat_index in range(repetitions)
+        for case_index, case in enumerate(cases)
+    ]
+    raw_results: dict[int, tuple[dict[str, Any], str]] = {}
+    raw_results_lock = Lock()
+    nonces = {
+        ordinal: _case_nonce(case_index, case, repeat_index, seed)
+        for ordinal, repeat_index, case_index, case in tasks
+    }
 
-    def run_case(index: int, case: BenchmarkCase) -> BenchmarkRecord:
-        nonce = _case_nonce(index, case)
+    def run_case(
+        ordinal: int,
+        repeat_index: int,
+        case_index: int,
+        case: BenchmarkCase,
+    ) -> BenchmarkRecord:
+        nonce = nonces[ordinal]
         fingerprint = request_fingerprint(case.problem, nonce)
         started = perf_counter()
         try:
-            result = solve(
+            raw_result = solve(
                 case.problem,
                 {
                     "idx": case.idx,
                     "benchmark_nonce": nonce,
+                    "benchmark_repetition": repeat_index,
+                    "benchmark_seed": seed,
                 },
             )
-            if not isinstance(result, dict):
+            if not isinstance(raw_result, dict):
                 raise TypeError("solve result must be a JSON object")
-            json.dumps(result)
+            result = _json_copy(raw_result)
             valid = True
         except Exception as error:
-            result = {"final_response": "", "trace": [], "error_type": type(error).__name__}
+            raw_result = {
+                "final_response": "",
+                "trace": [],
+                "error_type": type(error).__name__,
+            }
+            result = _json_copy(raw_result)
             valid = False
+        latency = perf_counter() - started
+        with raw_results_lock:
+            raw_results[ordinal] = (raw_result, _json_digest(raw_result))
         answer_type = case.answer_type or parser.parse(case.problem).answer_type
         score = score_response(
             case.expected_answer,
@@ -91,24 +192,59 @@ def run_benchmark(
             answer_type=answer_type,
             scorer=case.scorer,
         )
+        metrics = _metrics_from_result(result, latency)
         return BenchmarkRecord(
-            case,
-            result,
-            perf_counter() - started,
-            valid,
-            score,
-            fingerprint,
+            case=case,
+            result=result,
+            latency_seconds=latency,
+            json_valid=valid,
+            score=score,
+            request_fingerprint=fingerprint,
+            run_metrics=metrics,
+            repetition_index=repeat_index,
+            random_seed=seed,
         )
 
-    records: list[BenchmarkRecord] = []
+    ordered: dict[int, BenchmarkRecord] = {}
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
         future_by_index = {
-            pool.submit(run_case, index, case): index for index, case in enumerate(cases)
+            pool.submit(run_case, ordinal, repeat_index, case_index, case): ordinal
+            for ordinal, repeat_index, case_index, case in tasks
         }
-        ordered: dict[int, BenchmarkRecord] = {}
         for future in as_completed(future_by_index):
             ordered[future_by_index[future]] = future.result()
-        records = [ordered[index] for index in sorted(ordered)]
+    records = [ordered[index] for index in sorted(ordered)]
+
+    if late_mutation_grace_seconds:
+        Event().wait(late_mutation_grace_seconds)
+    all_nonces = tuple(nonces[index] for index in sorted(nonces))
+    for ordinal, record in enumerate(records):
+        nonce = nonces[ordinal]
+        raw_result, initial_digest = raw_results[ordinal]
+        pollution = BenchmarkPollution(
+            foreign_nonce_in_result=_contains_foreign_nonce(
+                record.result, nonce, all_nonces
+            ),
+            result_mutated_after_return=_json_digest(raw_result) != initial_digest,
+        )
+        if pollution_probe is not None:
+            try:
+                probe_result = pollution_probe(nonce, all_nonces)
+                pollution = replace(
+                    pollution,
+                    nonce_seen_in_messages=_optional_bool(
+                        probe_result.get("nonce_seen_in_messages")
+                    ),
+                    foreign_nonce_in_messages=bool(
+                        probe_result.get("foreign_nonce_in_messages", False)
+                    ),
+                    candidate_ownership_mismatch=bool(
+                        probe_result.get("candidate_ownership_mismatch", False)
+                    ),
+                )
+            except Exception:
+                pollution = replace(pollution, probe_error=True)
+        record.pollution = pollution
     return records, summarize(records)
 
 
@@ -117,114 +253,159 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
     scored = [record for record in expected if record.score.scored]
     correct = [record for record in scored if _is_correct(record)]
     latencies = sorted(record.latency_seconds for record in records)
-    traces = [
-        event
-        for record in records
-        for event in _trace_events(record)
-    ]
-    costs = [_record_cost(record) for record in records]
-    tool_checks = [
-        check
-        for event in traces
-        if event.get("event") == "tool_checks"
-        for check in event.get("checks", [])
-    ]
-    lemma_events = [event for event in traces if event.get("event") == "lemma_loop_completed"]
-    repair_events = [event for event in traces if event.get("event") == "repair_completed"]
-    session_ids = [session_id for record in records if (session_id := _session_id(record))]
-    fingerprints = [_trace_fingerprint(record) for record in records]
-    fingerprint_missing = sum(value is None for value in fingerprints)
+    metrics = [record.run_metrics for record in records]
+    session_ids = [item.session_id for item in metrics if item.session_id]
+    fingerprint_missing = sum(not item.request_fingerprint for item in metrics)
     fingerprint_mismatches = sum(
-        value is not None and value != record.request_fingerprint
-        for record, value in zip(records, fingerprints)
+        bool(item.request_fingerprint)
+        and item.request_fingerprint != record.request_fingerprint
+        for record, item in zip(records, metrics)
     )
     duplicate_sessions = len(session_ids) - len(set(session_ids))
-    context_successes = sum(
-        event.get("event") == "context_view_built" for event in traces
-    )
-    context_failures = sum(
-        event.get("event") == "context_budget_infeasible" for event in traces
-    )
-    context_attempts = context_successes + context_failures
-    context_failure_rate = (
-        context_failures / context_attempts if context_attempts else 0.0
-    )
+    context_attempts = sum(item.context_view_attempts for item in metrics)
+    context_failures = sum(item.context_view_failures for item in metrics)
+    tool_checks = sum(item.tool_checks for item in metrics)
+    lemma_checks = sum(item.lemma_checks for item in metrics)
+    repair_attempts = sum(item.repair_attempts for item in metrics)
+    rag_queries = sum(item.rag_queries for item in metrics)
+    seeds = sorted({record.random_seed for record in records})
+    repetition_indexes = {record.repetition_index for record in records}
+    pollution_records = sum(record.pollution.contaminated for record in records)
     return {
         "case_count": len(records),
         "expected_count": len(expected),
         "scored_count": len(scored),
         "unscored_count": len(expected) - len(scored),
+        "repetitions": len(repetition_indexes),
+        "random_seed": seeds[0] if len(seeds) == 1 else seeds,
         "scoring_failure_rate": (
             sum(record.score.error for record in expected) / len(expected) if expected else 0.0
         ),
         "accuracy": len(correct) / len(scored) if scored else None,
+        "accuracy_wilson_95": _wilson_interval(len(correct), len(scored)),
+        "accuracy_bootstrap_95": _bootstrap_accuracy(
+            scored,
+            seeds[0] if len(seeds) == 1 else 0,
+        ),
         "accuracy_by_subject": _group_accuracy(scored, lambda item: item.case.subject),
         "accuracy_by_problem_type": _group_accuracy(scored, lambda item: item.case.problem_type),
         "average_model_calls": (
-            sum(item[0] for item in costs) / len(records) if records else 0.0
+            sum(item.model_calls for item in metrics) / len(records) if records else 0.0
         ),
         "average_estimated_tokens": (
-            sum(item[1] for item in costs) / len(records) if records else 0.0
+            sum(item.estimated_tokens for item in metrics) / len(records)
+            if records
+            else 0.0
         ),
         "latency_p50_seconds": _percentile(latencies, 0.50),
         "latency_p95_seconds": _percentile(latencies, 0.95),
         "json_failure_rate": (
-            sum(not record.json_valid for record in records) / len(records) if records else 0.0
+            sum(not record.json_valid for record in records) / len(records)
+            if records
+            else 0.0
         ),
         "tool_timeout_rate": (
-            sum(check.get("outcome_reason") == "timeout" for check in tool_checks)
-            / len(tool_checks)
+            sum(item.tool_timeouts for item in metrics) / tool_checks
             if tool_checks
             else 0.0
         ),
         "tool_unknown_rate": (
-            sum(
-                check.get("status") == "unknown"
-                and check.get("outcome_reason") != "timeout"
-                for check in tool_checks
-            )
-            / len(tool_checks)
+            sum(item.tool_unknowns for item in metrics) / tool_checks
             if tool_checks
             else 0.0
         ),
         "tool_error_rate": (
-            sum(
-                check.get("status") == "error"
-                or check.get("outcome_reason") == "error"
-                for check in tool_checks
-            )
-            / len(tool_checks)
+            sum(item.tool_errors for item in metrics) / tool_checks
             if tool_checks
             else 0.0
         ),
         "lemma_error_rate": (
-            sum(float(event.get("error_rate", 0.0)) for event in lemma_events) / len(lemma_events)
-            if lemma_events
+            sum(item.lemma_errors for item in metrics) / lemma_checks
+            if lemma_checks
             else 0.0
         ),
-        "cepc_invariant_failure_rate": context_failure_rate,
-        "context_view_failure_rate": context_failure_rate,
+        "cepc_invariant_failure_rate": (
+            context_failures / context_attempts if context_attempts else 0.0
+        ),
+        "context_view_failure_rate": (
+            context_failures / context_attempts if context_attempts else 0.0
+        ),
         "repair_success_rate": (
-            sum(not event.get("rolled_back", True) for event in repair_events) / len(repair_events)
-            if repair_events
+            sum(item.repair_successes for item in metrics) / repair_attempts
+            if repair_attempts
+            else 0.0
+        ),
+        "rag_hit_rate": (
+            sum(item.rag_hits for item in metrics) / rag_queries
+            if rag_queries
             else 0.0
         ),
         "fallback_rate": (
-            sum(
-                any(
-                    event.get("event") == "fallback_used"
-                    for event in _trace_events(record)
-                )
-                for record in records
-            )
-            / len(records)
+            sum(item.fallback_used for item in metrics) / len(records)
             if records
             else 0.0
         ),
+        "error_code_counts": _error_code_counts(metrics),
         "duplicate_session_count": duplicate_sessions,
         "fingerprint_missing_count": fingerprint_missing,
         "fingerprint_mismatch_count": fingerprint_mismatches,
-        "concurrency_pollution_count": duplicate_sessions + fingerprint_mismatches,
+        "nonce_probe_missing_count": sum(
+            record.pollution.nonce_seen_in_messages is None for record in records
+        ),
+        "nonce_missing_from_messages_count": sum(
+            record.pollution.nonce_seen_in_messages is False for record in records
+        ),
+        "foreign_nonce_in_messages_count": sum(
+            record.pollution.foreign_nonce_in_messages for record in records
+        ),
+        "foreign_nonce_in_result_count": sum(
+            record.pollution.foreign_nonce_in_result for record in records
+        ),
+        "candidate_ownership_mismatch_count": sum(
+            record.pollution.candidate_ownership_mismatch for record in records
+        ),
+        "result_mutation_count": sum(
+            record.pollution.result_mutated_after_return for record in records
+        ),
+        "pollution_probe_error_count": sum(
+            record.pollution.probe_error for record in records
+        ),
+        "concurrency_pollution_count": (
+            duplicate_sessions + fingerprint_mismatches + pollution_records
+        ),
+    }
+
+
+def paired_significance(
+    treatment: list[BenchmarkRecord],
+    control: list[BenchmarkRecord],
+) -> dict[str, int | float]:
+    treatment_by_key = {
+        (record.case.idx, record.repetition_index): record for record in treatment
+    }
+    control_by_key = {
+        (record.case.idx, record.repetition_index): record for record in control
+    }
+    pairs = [
+        (treatment_by_key[key], control_by_key[key])
+        for key in sorted(set(treatment_by_key) & set(control_by_key))
+        if treatment_by_key[key].score.scored and control_by_key[key].score.scored
+    ]
+    wins = sum(_is_correct(left) and not _is_correct(right) for left, right in pairs)
+    losses = sum(not _is_correct(left) and _is_correct(right) for left, right in pairs)
+    ties = len(pairs) - wins - losses
+    discordant = wins + losses
+    p_value = _two_sided_binomial_p_value(wins, losses)
+    return {
+        "pair_count": len(pairs),
+        "wins": wins,
+        "losses": losses,
+        "ties": ties,
+        "accuracy_difference": (
+            (wins - losses) / len(pairs) if pairs else 0.0
+        ),
+        "discordant_count": discordant,
+        "p_value": p_value,
     }
 
 
@@ -248,12 +429,19 @@ def benchmark_record_to_dict(record: BenchmarkRecord) -> dict:
         "json_valid": record.json_valid,
         "score": record.score.to_dict(),
         "request_fingerprint": record.request_fingerprint,
+        "run_metrics": record.run_metrics.to_dict(),
+        "pollution": record.pollution.to_dict(),
+        "repetition_index": record.repetition_index,
+        "random_seed": record.random_seed,
     }
 
 
 def benchmark_record_from_dict(payload: dict) -> BenchmarkRecord:
     case_payload = dict(payload["case"])
     score_payload = dict(payload["score"])
+    result = dict(payload["result"])
+    metrics_payload = payload.get("run_metrics", result.get("run_metrics", {}))
+    metrics = _metrics_from_payload(metrics_payload, result, float(payload["latency_seconds"]))
     return BenchmarkRecord(
         case=BenchmarkCase(
             idx=str(case_payload["idx"]),
@@ -264,11 +452,172 @@ def benchmark_record_from_dict(payload: dict) -> BenchmarkRecord:
             answer_type=case_payload.get("answer_type"),
             scorer=case_payload.get("scorer"),
         ),
-        result=dict(payload["result"]),
+        result=result,
         latency_seconds=float(payload["latency_seconds"]),
         json_valid=bool(payload["json_valid"]),
         score=ScoreResult(**score_payload),
         request_fingerprint=str(payload["request_fingerprint"]),
+        run_metrics=metrics,
+        pollution=BenchmarkPollution.from_dict(payload.get("pollution", {})),
+        repetition_index=int(payload.get("repetition_index", 0)),
+        random_seed=int(payload.get("random_seed", 0)),
+    )
+
+
+def _metrics_from_result(result: dict[str, Any], latency: float) -> RunMetrics:
+    return _metrics_from_payload(result.get("run_metrics", {}), result, latency)
+
+
+def _metrics_from_payload(
+    payload: Any,
+    result: dict[str, Any],
+    latency: float,
+) -> RunMetrics:
+    if isinstance(payload, dict) and payload.get("schema_version") == RunMetrics.SCHEMA_VERSION:
+        return RunMetrics.from_dict(payload)
+    trace = _trace_events(result)
+    session_id = _first_event_value(trace, "session_started", "session_id")
+    fingerprint = _first_event_value(
+        trace, "session_started", "request_fingerprint"
+    )
+    budget_summary = _last_event(trace, "budget_summary")
+    primary_summary = _last_event(trace, "primary_completed")
+    cost_source = payload if isinstance(payload, dict) and payload else budget_summary
+    if not cost_source:
+        cost_source = primary_summary
+    context_successes = sum(
+        event.get("event") == "context_view_built" for event in trace
+    )
+    context_failures = sum(
+        event.get("event") == "context_budget_infeasible" for event in trace
+    )
+    checks = [
+        check
+        for event in trace
+        if event.get("event") == "tool_checks"
+        for check in event.get("checks", [])
+        if isinstance(check, dict)
+    ]
+    repairs = [event for event in trace if event.get("event") == "repair_completed"]
+    lemma_events = [
+        event for event in trace if event.get("event") == "lemma_loop_completed"
+    ]
+    retrievals = [
+        event for event in trace if event.get("event") == "retrieval_completed"
+    ]
+    legacy = payload if isinstance(payload, dict) else {}
+    outcome = str(
+        legacy.get(
+            "outcome",
+            (
+                "error"
+                if result.get("error_type")
+                else "fallback"
+                if _last_event(trace, "fallback_used")
+                else "primary"
+            ),
+        )
+    )
+    if outcome not in {"primary", "fallback", "error"}:
+        outcome = "error"
+    return RunMetrics(
+        session_id=str(legacy.get("session_id", session_id or "")),
+        request_fingerprint=str(
+            legacy.get("request_fingerprint", fingerprint or "")
+        ),
+        model_calls=_nonnegative_int(cost_source.get("model_calls", 0)),
+        estimated_tokens=_nonnegative_int(
+            cost_source.get("estimated_tokens", 0)
+        ),
+        claims=_nonnegative_int(legacy.get("claims", 0)),
+        tool_calls=_nonnegative_int(legacy.get("tool_calls", 0)),
+        isolated_tool_calls=_nonnegative_int(
+            legacy.get("isolated_tool_calls", 0)
+        ),
+        tool_seconds=_nonnegative_float(legacy.get("tool_seconds", 0.0)),
+        evidence_records=_nonnegative_int(
+            legacy.get("evidence_records", 0)
+        ),
+        prompt_chars=_nonnegative_int(legacy.get("prompt_chars", 0)),
+        elapsed_seconds=_nonnegative_float(
+            legacy.get("elapsed_seconds", latency)
+        ),
+        outcome=outcome,
+        final_phase=str(legacy.get("final_phase", "")),
+        error_code=str(legacy.get("error_code", "")),
+        fallback_used=bool(
+            legacy.get("fallback_used", outcome == "fallback")
+        ),
+        context_view_attempts=_nonnegative_int(
+            legacy.get(
+                "context_view_attempts",
+                context_successes + context_failures,
+            )
+        ),
+        context_view_failures=_nonnegative_int(
+            legacy.get("context_view_failures", context_failures)
+        ),
+        tool_checks=_nonnegative_int(legacy.get("tool_checks", len(checks))),
+        tool_timeouts=_nonnegative_int(
+            legacy.get(
+                "tool_timeouts",
+                sum(check.get("outcome_reason") == "timeout" for check in checks),
+            )
+        ),
+        tool_unknowns=_nonnegative_int(
+            legacy.get(
+                "tool_unknowns",
+                sum(
+                    check.get("status") == "unknown"
+                    and check.get("outcome_reason") != "timeout"
+                    for check in checks
+                ),
+            )
+        ),
+        tool_errors=_nonnegative_int(
+            legacy.get(
+                "tool_errors",
+                sum(
+                    check.get("status") == "error"
+                    or check.get("outcome_reason") == "error"
+                    for check in checks
+                ),
+            )
+        ),
+        lemma_checks=_nonnegative_int(
+            legacy.get(
+                "lemma_checks",
+                sum(_nonnegative_int(event.get("checked_count", 0)) for event in lemma_events),
+            )
+        ),
+        lemma_errors=_nonnegative_int(
+            legacy.get(
+                "lemma_errors",
+                sum(_nonnegative_int(event.get("error_count", 0)) for event in lemma_events),
+            )
+        ),
+        repair_attempts=_nonnegative_int(
+            legacy.get("repair_attempts", len(repairs))
+        ),
+        repair_successes=_nonnegative_int(
+            legacy.get(
+                "repair_successes",
+                sum(not event.get("rolled_back", True) for event in repairs),
+            )
+        ),
+        rag_queries=_nonnegative_int(
+            legacy.get("rag_queries", len(retrievals))
+        ),
+        rag_hits=_nonnegative_int(
+            legacy.get(
+                "rag_hits",
+                sum(
+                    bool(event.get("card_ids", []))
+                    for event in retrievals
+                    if isinstance(event.get("card_ids", []), list)
+                ),
+            )
+        ),
     )
 
 
@@ -296,69 +645,137 @@ def _percentile(values: list[float], fraction: float) -> float:
     return values[index]
 
 
-def _case_nonce(index: int, case: BenchmarkCase) -> str:
-    payload = f"{index}\0{case.idx}\0{case.problem}".encode("utf-8")
+def _wilson_interval(successes: int, total: int) -> dict[str, float] | None:
+    if total == 0:
+        return None
+    z = 1.959963984540054
+    proportion = successes / total
+    denominator = 1 + z * z / total
+    center = (proportion + z * z / (2 * total)) / denominator
+    margin = (
+        z
+        * math.sqrt(
+            proportion * (1 - proportion) / total
+            + z * z / (4 * total * total)
+        )
+        / denominator
+    )
+    return {"lower": max(0.0, center - margin), "upper": min(1.0, center + margin)}
+
+
+def _bootstrap_accuracy(
+    records: list[BenchmarkRecord],
+    seed: int,
+    samples: int = 1000,
+) -> dict[str, float] | None:
+    if not records:
+        return None
+    values = [1.0 if _is_correct(record) else 0.0 for record in records]
+    generator = random.Random(seed)
+    estimates = sorted(
+        sum(generator.choice(values) for _ in values) / len(values)
+        for _ in range(samples)
+    )
+    return {
+        "lower": estimates[math.floor(0.025 * (samples - 1))],
+        "upper": estimates[math.ceil(0.975 * (samples - 1))],
+    }
+
+
+def _two_sided_binomial_p_value(wins: int, losses: int) -> float:
+    total = wins + losses
+    if total == 0:
+        return 1.0
+    tail = min(wins, losses)
+    probability = sum(
+        math.comb(total, value) for value in range(tail + 1)
+    ) / (2**total)
+    return min(1.0, 2 * probability)
+
+
+def _case_nonce(
+    index: int,
+    case: BenchmarkCase,
+    repetition_index: int = 0,
+    seed: int = 0,
+) -> str:
+    payload = (
+        f"{seed}\0{repetition_index}\0{index}\0{case.idx}\0{case.problem}"
+    ).encode("utf-8")
     return sha256(payload).hexdigest()[:24]
 
 
-def _record_cost(record: BenchmarkRecord) -> tuple[int, int]:
-    run_metrics = record.result.get("run_metrics", {})
-    if isinstance(run_metrics, dict) and (
-        "model_calls" in run_metrics or "estimated_tokens" in run_metrics
-    ):
-        return (
-            _nonnegative_int(run_metrics.get("model_calls", 0)),
-            _nonnegative_int(run_metrics.get("estimated_tokens", 0)),
-        )
-    trace = _trace_events(record)
-    summaries = [
-        event
-        for event in trace
-        if isinstance(event, dict) and event.get("event") == "budget_summary"
-    ]
-    if summaries:
-        return (
-            _nonnegative_int(summaries[-1].get("model_calls", 0)),
-            _nonnegative_int(summaries[-1].get("estimated_tokens", 0)),
-        )
-    completed = [
-        event
-        for event in trace
-        if isinstance(event, dict) and event.get("event") == "primary_completed"
-    ]
-    if completed:
-        return (
-            _nonnegative_int(completed[-1].get("model_calls", 0)),
-            _nonnegative_int(completed[-1].get("estimated_tokens", 0)),
-        )
-    return 0, 0
-
-
-def _session_id(record: BenchmarkRecord) -> str | None:
-    for event in _trace_events(record):
-        if isinstance(event, dict) and event.get("event") == "session_started":
-            value = event.get("session_id")
-            return str(value) if value else None
-    return None
-
-
-def _trace_fingerprint(record: BenchmarkRecord) -> str | None:
-    for event in _trace_events(record):
-        if event.get("event") == "session_started":
-            value = event.get("request_fingerprint")
-            return str(value) if value else None
-    return None
-
-
-def _trace_events(record: BenchmarkRecord) -> list[dict]:
-    trace = record.result.get("trace", [])
+def _trace_events(result: dict[str, Any]) -> list[dict[str, Any]]:
+    trace = result.get("trace", [])
     if not isinstance(trace, list):
         return []
     return [event for event in trace if isinstance(event, dict)]
 
 
-def _nonnegative_int(value) -> int:
+def _last_event(events: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    matches = [event for event in events if event.get("event") == name]
+    return matches[-1] if matches else {}
+
+
+def _first_event_value(
+    events: list[dict[str, Any]],
+    event_name: str,
+    field_name: str,
+) -> str | None:
+    for event in events:
+        if event.get("event") == event_name and event.get(field_name):
+            return str(event[field_name])
+    return None
+
+
+def _contains_foreign_nonce(
+    result: dict[str, Any],
+    own_nonce: str,
+    all_nonces: tuple[str, ...],
+) -> bool:
+    serialized = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
+    return any(nonce != own_nonce and nonce in serialized for nonce in all_nonces)
+
+
+def _json_copy(value: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))
+
+
+def _json_digest(value: dict[str, Any]) -> str:
+    try:
+        serialized = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        serialized = repr(value)
+    return sha256(serialized.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _optional_bool(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _nonnegative_int(value: Any) -> int:
     try:
         return max(0, int(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _nonnegative_float(value: Any) -> float:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _error_code_counts(metrics: list[RunMetrics]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in metrics:
+        if item.error_code:
+            counts[item.error_code] = counts.get(item.error_code, 0) + 1
+    return dict(sorted(counts.items()))

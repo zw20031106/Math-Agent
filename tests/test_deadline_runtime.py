@@ -163,7 +163,8 @@ def test_hard_deadline_returns_fallback_within_tolerance():
 
     assert elapsed < 0.2
     assert result["final_response"].strip()
-    assert result["trace"][-1]["event"] == "fallback_used"
+    assert result["trace"][-1]["event"] == "run_completed"
+    assert any(event["event"] == "fallback_used" for event in result["trace"])
     fanout = next(
         event for event in result["trace"] if event["event"] == "candidate_fanout_completed"
     )
@@ -227,6 +228,10 @@ def test_eight_problem_slow_client_p95_and_returned_traces_are_stable():
 
     assert p95 < 0.2
     assert len(session_ids) == 8
-    assert all(item[1]["trace"][-1]["event"] == "fallback_used" for item in completed)
+    assert all(item[1]["trace"][-1]["event"] == "run_completed" for item in completed)
+    assert all(
+        any(event["event"] == "fallback_used" for event in item[1]["trace"])
+        for item in completed
+    )
     sleep(0.35)
     assert traces == [item[1]["trace"] for item in completed]

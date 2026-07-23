@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### S4
+
+- Added stable safe failure codes, an always-emitted `run_completed` terminal
+  event, and opt-in in-memory/JSONL debug sinks that keep sanitized stack frames
+  and internal events outside the judge response.
+- Replaced ad-hoc runtime counters with a versioned, validated `RunMetrics`
+  contract containing cost, terminal state, context, tool, lemma, repair, RAG,
+  session, and request-isolation fields independently of bounded traces.
+- Upgraded benchmark artifacts to schema 3.0. Per-case metrics and pollution
+  evidence now round-trip independently, and every summary value is recomputed
+  from records rather than inferred from truncated judge traces.
+- Added seeded repetitions, Wilson and bootstrap accuracy intervals, paired
+  exact significance analysis, actual model-message nonce probes, foreign-result
+  detection, candidate-ownership checks, and post-return mutation detection.
+- Added low/medium/high golden E2E tests, 8-way actual-message isolation, 16-way
+  fault injection, prompt/schema fuzz checks, and formal Ruff, Mypy, global
+  branch-coverage, and critical-module coverage gates.
+
 ### S3
 
 - Upgraded core contracts to schema version 1.2 with a controlled

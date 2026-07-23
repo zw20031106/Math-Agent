@@ -7,10 +7,14 @@ def test_provider_failure_returns_non_empty_fallback() -> None:
     result = ReasoningAgent(FakeClient(fail=True)).solve("hard problem", {})
     assert result["final_response"].strip()
     assert result["trace"][-1] == {
-        "event": "fallback_used",
-        "reason": "phase_failed",
-        "failed_phase": "context_ready",
+        "event": "run_completed",
+        "outcome": "fallback",
+        "error_code": "all_candidates_failed",
+        "final_phase": "fallback_completed",
     }
+    fallback = next(event for event in result["trace"] if event["event"] == "fallback_used")
+    assert fallback["reason"] == "all_candidates_failed"
+    assert fallback["failed_phase"] == "context_ready"
 
 
 def test_empty_problem_still_returns_non_empty_fallback() -> None:

@@ -1057,11 +1057,34 @@ S3（C15–C19、C23）已完成工程实现：
 `docs/S3_IMPLEMENTATION_STATUS_2026-07-23.md` 和
 `docs/ADR_001_S3_DETERMINISTIC_LEMMA_CURATOR.md`。
 
-## 17. 下一步
+## 17. S4 实施状态
 
-下一开发阶段为 S4（C20/C21/C22）：终态可诊断性、每题 Benchmark
-RunMetrics/成本记录、真实并发污染探针、重复实验统计，以及 Ruff/Mypy/Coverage
-正式门禁配置。
+S4（C20/C21/C22）已完成工程实现：
+
+1. 顶层失败统一映射为安全错误码，judge Trace 不再暴露原始异常；
+2. 成功与 fallback 路径均以 `run_completed` 记录 outcome、error code 和 final
+   phase；
+3. 新增可选 InMemory/JSONL debug sink，在 judge 输出之外保存脱敏 stack
+   frames 和 internal events；
+4. `RunMetrics 1.0` 独立于受限 Trace 保存成本、终态、context、tool、lemma、
+   repair、RAG 和并发隔离字段；
+5. Benchmark schema 升级至 3.0，summary 只从每题 records 重算；
+6. Benchmark 支持 repetitions、seed、Wilson/bootstrap 置信区间和配对精确
+   显著性；
+7. 并发探针检查实际模型 messages 中的 nonce、外题 nonce、候选归属、输出/
+   Trace 串题和返回后变异；
+8. 低/中/高风险黄金 E2E、8 题实际消息探针、16 并发故障注入和
+   Prompt/Schema fuzz 已加入测试；
+9. Ruff、Mypy、全局分支覆盖率及 Runtime/Completion/Evidence/Config/Formatter
+   模块门槛已正式配置。
+
+详细实现与验收记录见
+`docs/S4_IMPLEMENTATION_STATUS_2026-07-23.md`。
+
+## 18. 下一步
+
+下一开发阶段为 S5（C24–C26）：RAG 内容治理、完整 benchmark artifact
+provenance、MCP 生命周期，以及真实 A0–A10 重复消融和配置冻结。
 
 `config/competition.json` 仍保持 `candidate-unvalidated`；在真实重复消融前
-不得标记 frozen，也不启动最终 A0–A10 配置结论。
+不得标记 frozen。
