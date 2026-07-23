@@ -10,7 +10,11 @@
     "common_failures": ["accepting an extraneous root", "dividing by a possibly zero expression"],
     "source_type": "project_skill",
     "source_ref": "skills/domains/algebra.md",
-    "trust_level": "reviewed"
+    "trust_level": "reviewed",
+    "source_version": "mathforge-skill-contract-v1",
+    "reviewer": "project-maintainer",
+    "review_date": "2026-07-23",
+    "content_hash": "8f01d12f7909023b86bfbde0bf9935442513dc7fc1da9d322855f92a40120bf8"
   },
   {
     "id": "skill-geometry-nondegeneracy",
@@ -23,7 +27,11 @@
     "common_failures": ["relying on an unscaled diagram", "using a theorem in a degenerate case"],
     "source_type": "project_skill",
     "source_ref": "skills/domains/geometry.md",
-    "trust_level": "reviewed"
+    "trust_level": "reviewed",
+    "source_version": "mathforge-skill-contract-v1",
+    "reviewer": "project-maintainer",
+    "review_date": "2026-07-23",
+    "content_hash": "7b9f947abdc765c6100faf7bc8532e1e6e4e53bb16d2de5a3d64e581a5836537"
   },
   {
     "id": "skill-number-theory-integrality",
@@ -36,7 +44,11 @@
     "common_failures": ["cancelling a nonunit modulo a composite modulus"],
     "source_type": "project_skill",
     "source_ref": "skills/domains/number-theory.md",
-    "trust_level": "reviewed"
+    "trust_level": "reviewed",
+    "source_version": "mathforge-skill-contract-v1",
+    "reviewer": "project-maintainer",
+    "review_date": "2026-07-23",
+    "content_hash": "8b3db88f58ec35d8907a22e8ddfdb2110d7db9fd0f17985491041ec901b2e458"
   },
   {
     "id": "skill-combinatorics-disjointness",
@@ -49,7 +61,11 @@
     "common_failures": ["double counting", "mixing ordered and unordered objects"],
     "source_type": "project_skill",
     "source_ref": "skills/domains/combinatorics.md",
-    "trust_level": "reviewed"
+    "trust_level": "reviewed",
+    "source_version": "mathforge-skill-contract-v1",
+    "reviewer": "project-maintainer",
+    "review_date": "2026-07-23",
+    "content_hash": "ab79e21f9930fbeef989db9dd98a2d9ad791fe7feb8d569c3646563a10572be7"
   },
   {
     "id": "skill-probability-normalization",
@@ -62,7 +78,11 @@
     "common_failures": ["conditioning on a zero-probability event", "assuming independence"],
     "source_type": "project_skill",
     "source_ref": "skills/domains/probability.md",
-    "trust_level": "reviewed"
+    "trust_level": "reviewed",
+    "source_version": "mathforge-skill-contract-v1",
+    "reviewer": "project-maintainer",
+    "review_date": "2026-07-23",
+    "content_hash": "2756fe3483ddb702d5ffefcce6ec5d3794a13e706947ff6c099f9e27e0162d95"
   },
   {
     "id": "skill-calculus-interchange",
@@ -75,7 +95,11 @@
     "common_failures": ["treating an interchange as a formal algebraic step"],
     "source_type": "project_skill",
     "source_ref": "skills/domains/calculus.md",
-    "trust_level": "reviewed"
+    "trust_level": "reviewed",
+    "source_version": "mathforge-skill-contract-v1",
+    "reviewer": "project-maintainer",
+    "review_date": "2026-07-23",
+    "content_hash": "c15c5a6782d865b99179e5697666d5f3a10d70a96a9bc6f917d431db4a5400fb"
   },
   {
     "id": "skill-linear-algebra-dimensions",
@@ -88,7 +112,11 @@
     "common_failures": ["confusing eigenvalues with singular values", "assuming a square matrix is invertible"],
     "source_type": "project_skill",
     "source_ref": "skills/domains/linear-algebra.md",
-    "trust_level": "reviewed"
+    "trust_level": "reviewed",
+    "source_version": "mathforge-skill-contract-v1",
+    "reviewer": "project-maintainer",
+    "review_date": "2026-07-23",
+    "content_hash": "a20994e3d861d4446692666b289edc8a5422144111d79f994949bb50bd3e2a78"
   },
   {
     "id": "skill-differential-equations-substitution",
@@ -101,6 +129,10 @@
     "common_failures": ["dropping a branch", "ignoring the interval of existence"],
     "source_type": "project_skill",
     "source_ref": "skills/domains/differential-equations.md",
-    "trust_level": "reviewed"
+    "trust_level": "reviewed",
+    "source_version": "mathforge-skill-contract-v1",
+    "reviewer": "project-maintainer",
+    "review_date": "2026-07-23",
+    "content_hash": "4d2633bf16ea8cd26f308a6e7e9735f4212a6fe4eb4d204be61424f38a96719a"
   }
 ]

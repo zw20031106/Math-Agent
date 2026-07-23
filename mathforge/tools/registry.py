@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import inspect
 from typing import Any, Callable
 
 from mathforge.tools.formatting import answer_type_check, latex_syntax_check
@@ -69,6 +68,63 @@ _DEFINITIONS = (
     ToolDefinition("answer_type_check", answer_type_check, False, "basic answer-shape conformance", "does not prove correctness"),
 )
 
+_INPUT_SCHEMAS = {
+    "safe_parse_expression": {
+        "expression": {"type": "string"},
+    },
+    "symbolic_equivalence": {
+        "left": {"type": "string"},
+        "right": {"type": "string"},
+        "assumptions": {"type": "array", "items": {"type": "string"}},
+        "domains": {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+        },
+    },
+    "simplify_expression": {
+        "expression": {"type": "string"},
+    },
+    "numerical_residual": {
+        "left": {"type": "string"},
+        "right": {"type": "string"},
+        "tolerance": {"type": "number"},
+        "samples": {"type": "array", "items": {"type": "number"}},
+    },
+    "matrix_shape_check": {
+        "matrix": {
+            "anyOf": [
+                {"type": "array", "items": {"type": "array"}},
+                {"type": "string"},
+            ]
+        },
+    },
+    "density_normalization": {
+        "expression": {"type": "string"},
+        "variable": {"type": "string"},
+        "lower": {"type": "string"},
+        "upper": {"type": "string"},
+    },
+    "small_case_enumeration": {
+        "expression": {"type": "string"},
+        "variable": {"type": "string"},
+        "values": {"type": "array", "items": {"type": "integer"}},
+        "expected": {"type": "string"},
+    },
+    "latex_syntax_check": {
+        "text": {"type": "string"},
+    },
+    "answer_type_check": {
+        "answer": {"type": "string"},
+        "answer_type": {"type": "string"},
+    },
+}
+
+_OPTIONAL_ARGUMENTS = {
+    "symbolic_equivalence": {"assumptions", "domains"},
+    "numerical_residual": {"right", "tolerance", "samples"},
+    "small_case_enumeration": {"expected"},
+}
+
 
 class ToolRegistry:
     def __init__(self) -> None:
@@ -86,15 +142,12 @@ class ToolRegistry:
     def mcp_schemas(self) -> list[dict]:
         schemas: list[dict] = []
         for definition in sorted(self._definitions.values(), key=lambda item: item.name):
-            signature = inspect.signature(definition.function)
-            properties: dict[str, dict] = {}
-            required: list[str] = []
-            for name, parameter in signature.parameters.items():
-                if name == "kwargs":
-                    continue
-                properties[name] = {"description": f"Argument {name}"}
-                if parameter.default is inspect.Parameter.empty:
-                    required.append(name)
+            properties = _INPUT_SCHEMAS[definition.name]
+            required = [
+                name
+                for name in properties
+                if name not in _OPTIONAL_ARGUMENTS.get(definition.name, set())
+            ]
             schemas.append(
                 {
                     "name": definition.name,
@@ -104,7 +157,13 @@ class ToolRegistry:
                     ),
                     "inputSchema": {
                         "type": "object",
-                        "properties": properties,
+                        "properties": {
+                            name: {
+                                **schema,
+                                "description": f"Argument {name}",
+                            }
+                            for name, schema in properties.items()
+                        },
                         "required": required,
                         "additionalProperties": False,
                     },

@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+from contextlib import closing
 import json
 from pathlib import Path
 import re
 import sqlite3
 
-from mathforge.retrieval.schemas import KnowledgeCard
+from mathforge.retrieval.schemas import KnowledgeCard, SearchHit
+
+
+_TRUST_PRIORITY = {
+    "verified": 0,
+    "reviewed": 1,
+    "conflicted": 2,
+}
 
 
 class Retriever:
@@ -22,11 +30,32 @@ class Retriever:
         role: str = "PrimarySolver",
         top_k: int = 3,
     ) -> list[KnowledgeCard]:
+        return [
+            hit.card
+            for hit in self.search(
+                query,
+                subject=subject,
+                card_type=card_type,
+                role=role,
+                top_k=top_k,
+            )
+        ]
+
+    def search(
+        self,
+        query: str,
+        *,
+        subject: str | None = None,
+        card_type: str | None = None,
+        role: str = "PrimarySolver",
+        top_k: int = 3,
+    ) -> list[SearchHit]:
         if not self._database.exists():
             return []
         match_query = self._match_query(query)
         if not match_query:
             return []
+        result_limit = min(max(1, top_k), self._max_top_k)
         trust_levels = ("verified", "reviewed", "conflicted") if role == "VerifierSkeptic" else ("verified", "reviewed")
         placeholders = ",".join("?" for _ in trust_levels)
         sql = f"""
@@ -43,24 +72,40 @@ class Retriever:
         if card_type:
             sql += " AND c.type = ?"
             parameters.append(card_type)
-        sql += " ORDER BY rank ASC, c.trust_level ASC, c.id ASC LIMIT ?"
-        parameters.append(min(max(1, top_k * 3), self._max_top_k * 3))
+        sql += """
+            ORDER BY
+              CASE c.trust_level
+                WHEN 'verified' THEN 0
+                WHEN 'reviewed' THEN 1
+                WHEN 'conflicted' THEN 2
+                ELSE 3
+              END ASC,
+              rank ASC,
+              c.id ASC
+        """
         try:
             uri = f"{self._database.resolve().as_uri()}?mode=ro"
-            with sqlite3.connect(uri, uri=True) as connection:
+            with closing(sqlite3.connect(uri, uri=True)) as connection:
                 rows = connection.execute(sql, parameters).fetchall()
         except (sqlite3.Error, OSError):
             return []
-        cards = [self._row_to_card(row) for row in rows]
-        cards.sort(key=lambda card: (-self._condition_overlap(query, card), card.id))
-        deduplicated: list[KnowledgeCard] = []
+        hits = [self._row_to_hit(query, row) for row in rows]
+        hits.sort(
+            key=lambda hit: (
+                hit.trust_priority,
+                -hit.condition_score,
+                hit.bm25_score,
+                hit.card.id,
+            )
+        )
+        deduplicated: list[SearchHit] = []
         statements: set[str] = set()
-        for card in cards:
-            normalized = " ".join(card.statement.lower().split())
+        for hit in hits:
+            normalized = " ".join(hit.card.statement.lower().split())
             if normalized not in statements:
                 statements.add(normalized)
-                deduplicated.append(card)
-            if len(deduplicated) >= min(top_k, self._max_top_k):
+                deduplicated.append(hit)
+            if len(deduplicated) >= result_limit:
                 break
         return deduplicated
 
@@ -75,8 +120,8 @@ class Retriever:
         return sum(condition.lower() in lowered for condition in card.preconditions)
 
     @staticmethod
-    def _row_to_card(row: tuple) -> KnowledgeCard:
-        return KnowledgeCard(
+    def _row_to_hit(query: str, row: tuple) -> SearchHit:
+        card = KnowledgeCard(
             id=row[0],
             subject=row[1],
             type=row[2],
@@ -88,4 +133,14 @@ class Retriever:
             source_type=row[8],
             source_ref=row[9],
             trust_level=row[10],
+            source_version=row[11],
+            reviewer=row[12],
+            review_date=row[13],
+            content_hash=row[14],
+        )
+        return SearchHit(
+            card=card,
+            bm25_score=float(row[15]),
+            trust_priority=_TRUST_PRIORITY[card.trust_level],
+            condition_score=Retriever._condition_overlap(query, card),
         )

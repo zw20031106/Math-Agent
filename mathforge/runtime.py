@@ -226,21 +226,35 @@ class MathForgeHarness:
                 session.route_plan.use_rag
                 and session.budget.deadline.optional_work_allowed()
             ):
-                cards = self._retriever.retrieve(
+                retrieval_hits = self._retriever.search(
                     session.problem_ir.normalized_problem,
                     subject=session.route_plan.primary_subject,
                     role="PrimarySolver",
                     top_k=3,
                 )
+                cards = [hit.card for hit in retrieval_hits]
                 if cards:
                     rag_context = "\n\n".join(
                         f"## Reviewed knowledge: {card.title}\n{card.statement}\n"
                         f"Conditions: {', '.join(card.preconditions) or 'none'}\n"
-                        f"Source: {card.source_ref}"
+                        f"Source: {card.source_ref} @ {card.source_version}"
                         for card in cards
                     )
                     skill_context = f"{skill_context}\n\n{rag_context}"[: self._config.skill_char_budget]
-                trace.add("retrieval_completed", card_ids=[card.id for card in cards])
+                trace.add(
+                    "retrieval_completed",
+                    card_ids=[card.id for card in cards],
+                    ranking=[
+                        {
+                            "card_id": hit.card.id,
+                            "trust_level": hit.card.trust_level,
+                            "condition_score": hit.condition_score,
+                            "bm25_score": round(hit.bm25_score, 8),
+                            "source_version": hit.card.source_version,
+                        }
+                        for hit in retrieval_hits
+                    ],
+                )
             elif session.route_plan.use_rag:
                 trace.add(
                     "deadline_finalize",
