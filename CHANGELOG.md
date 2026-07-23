@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Public output contract
+
+- Restricted `ReasoningAgent.solve()` to the flat public fields `id`,
+  `final_response`, and `trace`; internal metrics and provenance remain on the
+  deterministic Harness result for evaluation.
+- Added a per-case runner that atomically writes `<id>.json` as soon as each
+  case completes, without waiting for slower concurrent cases or nesting fields
+  under `result`.
+- Kept the official `main.py` and `llm_client.py` byte-frozen.
+
 ### S5
 
 - Made reviewed SQLite FTS5 construction atomic: cards are validated and built

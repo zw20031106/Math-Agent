@@ -128,6 +128,7 @@ def run_benchmark(
     seed: int = 0,
     pollution_probe: PollutionProbe | None = None,
     late_mutation_grace_seconds: float = 0.0,
+    on_record_completed: Callable[[BenchmarkRecord], None] | None = None,
 ) -> tuple[list[BenchmarkRecord], dict]:
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
@@ -212,7 +213,10 @@ def run_benchmark(
             for ordinal, repeat_index, case_index, case in tasks
         }
         for future in as_completed(future_by_index):
-            ordered[future_by_index[future]] = future.result()
+            record = future.result()
+            ordered[future_by_index[future]] = record
+            if on_record_completed is not None:
+                on_record_completed(record)
     records = [ordered[index] for index in sorted(ordered)]
 
     if late_mutation_grace_seconds:

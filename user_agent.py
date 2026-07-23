@@ -1,4 +1,8 @@
 from mathforge.config import HarnessConfig, load_competition_config
+from mathforge.output.public_result import (
+    build_public_result,
+    identifier_from_metadata,
+)
 from mathforge.runtime import MathForgeHarness
 
 
@@ -16,4 +20,5 @@ class ReasoningAgent:
         )
 
     def solve(self, problem: str, metadata: dict) -> dict:
-        return self._harness.solve(problem, metadata)
+        result = self._harness.solve(problem, metadata)
+        return build_public_result(identifier_from_metadata(metadata), result)

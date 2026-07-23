@@ -26,6 +26,34 @@ StdIO MCP adapter is also disabled.
 The injected official client is the only model interface. No API keys, alternate
 model clients, native function calling, or network retrieval are used.
 
+## Public output
+
+`ReasoningAgent.solve(problem, metadata)` returns exactly one flat public
+mapping:
+
+```json
+{
+  "id": 7,
+  "final_response": "Final answer: ...",
+  "trace": []
+}
+```
+
+`id` is read from `metadata.id`, falling back to `metadata.idx`. Internal
+`MathForgeHarness` results retain metrics and provenance for evaluation, but
+those fields are not exposed by the public agent.
+
+For one atomic JSON file per input case, written immediately when that case
+finishes, use:
+
+```bash
+python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --concurrency 4 --model-identifier public-model-name
+```
+
+Files are named `<id>.json` and contain exactly `id`, `final_response`, and
+`trace`, without a `result` wrapper. The official `main.py` remains byte-frozen
+and retains the competition sample's `idx/status` wrapper.
+
 ## Verification
 
 ```bash
@@ -70,10 +98,11 @@ wheelhouse; installation and the smoke test are offline.
 Per-problem defaults are four model calls, 24,000 estimated output tokens, a
 12-minute soft deadline, a 13-minute exploration cutoff, and a 14.5-minute hard
 finalization deadline. Every failure path returns a non-empty deterministic fallback.
-Each result also carries structured call/token/outcome metrics independently of
-the bounded judge trace, plus versioned code/config/prompt/skill/RAG/tool/model
-provenance. Runtime failures expose only stable safe error codes in the judge
-response. Local diagnostics are opt-in through an injected
+Each internal Harness result also carries structured call/token/outcome metrics
+independently of the bounded judge trace, plus versioned
+code/config/prompt/skill/RAG/tool/model provenance. Runtime failures expose only
+stable safe error codes in the judge response. Local diagnostics are opt-in
+through an injected
 `InMemoryDebugSink` or `JsonlDebugSink`; neither is enabled by the public entry
 point.
 
