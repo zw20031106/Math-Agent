@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from threading import BoundedSemaphore
-from typing import Any
+from threading import BoundedSemaphore, Event, Thread
+from typing import Any, TYPE_CHECKING
+
+from mathforge.harness.errors import BudgetExceeded
+
+if TYPE_CHECKING:
+    from mathforge.harness.deadline import DeadlineController
 
 
 class ModelCallGate:
@@ -12,9 +17,39 @@ class ModelCallGate:
             raise ValueError("max_concurrency must be positive")
         self._semaphore = BoundedSemaphore(max_concurrency)
 
-    def call(self, function, /, **kwargs):
-        with self._semaphore:
-            return function(**kwargs)
+    def call(self, function, /, *, deadline=None, **kwargs):
+        if deadline is None:
+            with self._semaphore:
+                return function(**kwargs)
+        timeout = deadline.remaining_for_model_call()
+        if timeout <= 0 or not self._semaphore.acquire(timeout=timeout):
+            raise BudgetExceeded("model concurrency wait exceeded deadline")
+        if not deadline.can_start_model_call():
+            self._semaphore.release()
+            raise BudgetExceeded("model call deadline reached")
+
+        done = Event()
+        outcome: dict[str, Any] = {}
+
+        def invoke() -> None:
+            try:
+                outcome["value"] = function(**kwargs)
+            except BaseException as exc:
+                outcome["error"] = exc
+            finally:
+                self._semaphore.release()
+                done.set()
+
+        Thread(
+            target=invoke,
+            name="mathforge-model-call",
+            daemon=True,
+        ).start()
+        if not done.wait(deadline.remaining_for_model_call()):
+            raise BudgetExceeded("model response exceeded deadline")
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome.get("value")
 
 
 class OfficialClientProvider:
@@ -32,9 +67,11 @@ class OfficialClientProvider:
         messages: list[dict[str, str]],
         temperature: float,
         max_tokens: int,
+        deadline: "DeadlineController | None" = None,
     ) -> str:
         response = self._gate.call(
             self._chat,
+            deadline=deadline,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,

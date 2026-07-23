@@ -43,7 +43,7 @@ class LLMFinalizer:
         context_view: RoleContextView | None = None,
     ) -> FinalizationResult:
         try:
-            budget.consume()
+            budget.consume(optional=True)
             selected = (
                 f"Authorized finalizer context:\n{context_view.to_prompt_json()}"
                 if context_view is not None
@@ -64,7 +64,10 @@ class LLMFinalizer:
                 ),
                 temperature=0.0,
                 max_tokens=max_tokens,
+                deadline=budget.deadline,
             )
+            if budget.deadline.must_finalize():
+                return FinalizationResult(deterministic_text, False, "finalize_cutoff")
             budget.record_tokens(max(1, len(response) // 4))
             finalized = self._parser.parse(
                 response,

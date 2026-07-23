@@ -22,10 +22,11 @@ def test_deadline_order_and_exploration_cutoff(monkeypatch):
         soft_deadline_seconds=1,
         exploration_deadline_seconds=2,
         hard_deadline_seconds=3,
+        deterministic_finalize_reserve_seconds=0.25,
     )
-    monkeypatch.setattr(budget, "_elapsed", lambda: 2.5)
+    monkeypatch.setattr(budget.deadline, "elapsed_seconds", lambda: 2.5)
     assert budget.soft_expired()
     assert not budget.can_start_exploration()
     assert not budget.must_finalize()
-    monkeypatch.setattr(budget, "_elapsed", lambda: 3.0)
+    monkeypatch.setattr(budget.deadline, "elapsed_seconds", lambda: 2.75)
     assert budget.must_finalize()

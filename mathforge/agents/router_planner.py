@@ -7,6 +7,7 @@ from typing import Callable
 
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
+from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.schemas import ProblemIR, RoutePlan
 
 
@@ -161,5 +162,5 @@ class RouterPlanner:
                 candidate_count={"low": 1, "medium": 2, "high": 3}[risk],
                 method_families=method_families_for(primary, problem.problem_type),
             )
-        except (ValueError, TypeError, json.JSONDecodeError, RuntimeError):
+        except (BudgetExceeded, ValueError, TypeError, json.JSONDecodeError, RuntimeError):
             return rule_plan

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
+from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
 from mathforge.parsing.solution_parser import SolutionParser
@@ -95,15 +96,19 @@ class SolverExecutor:
         *,
         temperature: float,
         max_tokens: int,
+        optional: bool = False,
     ) -> CandidateSolution:
-        budget.consume()
+        budget.consume(optional=optional)
         response = self._provider.chat(
             messages=solver.build_messages(request),
             temperature=temperature,
             max_tokens=max_tokens,
+            deadline=budget.deadline,
         )
         if not response.strip():
             raise ValueError("empty solver response")
+        if budget.deadline.must_finalize():
+            raise BudgetExceeded("solver response arrived after finalize cutoff")
         budget.record_tokens(max(1, len(response) // 4))
         candidate = self._parser.parse(
             response,

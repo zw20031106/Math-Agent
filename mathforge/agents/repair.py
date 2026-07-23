@@ -41,7 +41,7 @@ class RepairAgent:
             if record.candidate_id == candidate.candidate_id
             and record.claim_id in affected_claim_ids
         ]
-        budget.consume()
+        budget.consume(optional=True)
         user = (
             f"Problem:\n{problem.normalized_problem}\n\n"
             + (
@@ -64,7 +64,10 @@ class RepairAgent:
             ),
             temperature=0.1,
             max_tokens=max_tokens,
+            deadline=budget.deadline,
         )
+        if budget.deadline.must_finalize():
+            raise RuntimeError("repair response arrived after finalize cutoff")
         budget.record_tokens(max(1, len(response) // 4))
         return self._parser.parse(
             response,

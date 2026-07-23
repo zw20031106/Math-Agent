@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 
 from mathforge.agents.solver import (
@@ -13,6 +13,7 @@ from mathforge.agents.router_planner import method_families_for
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
+from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
 from mathforge.verification.methods import candidate_method_signature
 
@@ -106,24 +107,46 @@ class CandidateOrchestrator:
 
         ordered: dict[int, CandidateSolution] = {}
         failures: list[BranchFailure] = []
-        with ThreadPoolExecutor(max_workers=count, thread_name_prefix="mathforge-solver") as pool:
-            futures = {
-                pool.submit(
-                    self._executor.execute,
-                    solver,
-                    request,
-                    budget,
-                    temperature=temperature if index == 0 else max(temperature, 0.35),
-                    max_tokens=max_tokens,
-                ): (index, request.candidate_id)
-                for index, solver, request in branches
-            }
-            for future in as_completed(futures):
-                index, candidate_id = futures[future]
-                try:
-                    ordered[index] = future.result()
-                except Exception:
-                    failures.append(BranchFailure(candidate_id, "solver_branch_failed"))
+        pool = ThreadPoolExecutor(max_workers=count, thread_name_prefix="mathforge-solver")
+        futures = {
+            pool.submit(
+                self._executor.execute,
+                solver,
+                request,
+                budget,
+                temperature=temperature if index == 0 else max(temperature, 0.35),
+                max_tokens=max_tokens,
+                optional=index > 0,
+            ): (index, request.candidate_id)
+            for index, solver, request in branches
+        }
+        pending = set(futures)
+        try:
+            while pending:
+                timeout = budget.deadline.remaining_for_model_call()
+                if timeout <= 0:
+                    break
+                completed, pending = wait(
+                    pending,
+                    timeout=timeout,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not completed:
+                    break
+                for future in completed:
+                    index, candidate_id = futures[future]
+                    try:
+                        ordered[index] = future.result()
+                    except BudgetExceeded:
+                        failures.append(BranchFailure(candidate_id, "deadline_cutoff"))
+                    except Exception:
+                        failures.append(BranchFailure(candidate_id, "solver_branch_failed"))
+            for future in pending:
+                _, candidate_id = futures[future]
+                future.cancel()
+                failures.append(BranchFailure(candidate_id, "deadline_cutoff"))
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
         candidates = [ordered[index] for index in sorted(ordered)]
         seen: set[tuple] = set()

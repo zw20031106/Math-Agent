@@ -20,6 +20,7 @@ class HarnessConfig:
     soft_deadline_seconds: float = 720.0
     exploration_deadline_seconds: float = 780.0
     hard_deadline_seconds: float = 870.0
+    deterministic_finalize_reserve_seconds: float = 5.0
     trace_max_chars: int = 12000
     enable_router: bool = True
     enable_skills: bool = True

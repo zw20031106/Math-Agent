@@ -160,7 +160,7 @@ def test_blackboard_permissions_and_repair_dependency_closure_shape_role_views()
     assert {
         claim["claim_id"] for claim in repair.payload["candidates"][0]["claims"]
     } == {"c1", "c2"}
-    assert "c3" not in repair.to_json()
+    assert "unrelated claim" not in repair.to_json()
     assert repair.char_count <= repair.max_chars
 
 

@@ -100,6 +100,9 @@ class MathForgeHarness:
                 soft_deadline_seconds=self._config.soft_deadline_seconds,
                 exploration_deadline_seconds=self._config.exploration_deadline_seconds,
                 hard_deadline_seconds=self._config.hard_deadline_seconds,
+                deterministic_finalize_reserve_seconds=(
+                    self._config.deterministic_finalize_reserve_seconds
+                ),
             ),
         )
         trace = TraceBuilder(session.trace_events, max_chars=self._config.trace_max_chars)
@@ -137,8 +140,21 @@ class MathForgeHarness:
                 router_enabled = False
             session.route_plan = self._router.plan(
                 session.problem_ir,
-                llm_chat=self._provider.chat if router_enabled else None,
-                consume_call=session.budget.consume if router_enabled else None,
+                llm_chat=(
+                    (
+                        lambda **kwargs: self._provider.chat(
+                            deadline=session.budget.deadline,
+                            **kwargs,
+                        )
+                    )
+                    if router_enabled
+                    else None
+                ),
+                consume_call=(
+                    (lambda: session.budget.consume(optional=True))
+                    if router_enabled
+                    else None
+                ),
                 record_tokens=(
                     session.budget.record_tokens if router_enabled else None
                 ),
@@ -167,7 +183,24 @@ class MathForgeHarness:
                 session.route_plan = replace(session.route_plan, use_lemma_loop=False)
             if not self._config.enable_rag:
                 session.route_plan = replace(session.route_plan, use_rag=False)
-            if not session.budget.can_start_exploration() and session.route_plan.candidate_count > 1:
+            if session.budget.soft_expired():
+                session.route_plan = replace(
+                    session.route_plan,
+                    candidate_count=1,
+                    max_reasoning_rounds=1,
+                    use_rag=False,
+                    use_lemma_loop=False,
+                    use_llm_finalizer=False,
+                )
+                trace.add(
+                    "deadline_finalize",
+                    stage="soft_cutoff",
+                    disabled=["alternatives", "rag", "lemma", "repair", "finalizer"],
+                )
+            elif (
+                not session.budget.can_start_exploration()
+                and session.route_plan.candidate_count > 1
+            ):
                 session.route_plan = replace(
                     session.route_plan,
                     candidate_count=1,
@@ -189,7 +222,10 @@ class MathForgeHarness:
                 if self._config.enable_skills
                 else ""
             )
-            if session.route_plan.use_rag:
+            if (
+                session.route_plan.use_rag
+                and session.budget.deadline.optional_work_allowed()
+            ):
                 cards = self._retriever.retrieve(
                     session.problem_ir.normalized_problem,
                     subject=session.route_plan.primary_subject,
@@ -205,6 +241,12 @@ class MathForgeHarness:
                     )
                     skill_context = f"{skill_context}\n\n{rag_context}"[: self._config.skill_char_budget]
                 trace.add("retrieval_completed", card_ids=[card.id for card in cards])
+            elif session.route_plan.use_rag:
+                trace.add(
+                    "deadline_finalize",
+                    stage="before_rag",
+                    disabled=["rag"],
+                )
             trace.add(
                 "route_planned",
                 primary_subject=session.route_plan.primary_subject,
@@ -241,9 +283,13 @@ class MathForgeHarness:
                 "candidate_fanout_completed",
                 completed=[candidate.candidate_id for candidate in fanout.candidates],
                 failed=[failure.candidate_id for failure in fanout.failures],
+                failures=[failure.to_dict() for failure in fanout.failures],
             )
             if not fanout.candidates:
                 raise RuntimeError("all solver branches failed")
+            if session.budget.must_finalize():
+                trace.add("deadline_finalize", stage="after_fanout")
+                raise RuntimeError("deterministic finalize reserve reached")
             ledger = EvidenceLedger(session.evidence)
             tool_results = []
             if self._config.enable_tools:
@@ -277,7 +323,21 @@ class MathForgeHarness:
                         },
                     )
             active_candidates = list(fanout.candidates)
-            if self._config.enable_repair and self._config.enable_evidence:
+            if (
+                self._config.enable_repair
+                and self._config.enable_evidence
+                and not session.budget.deadline.optional_work_allowed()
+            ):
+                trace.add(
+                    "deadline_finalize",
+                    stage="before_repair",
+                    disabled=["repair"],
+                )
+            if (
+                self._config.enable_repair
+                and self._config.enable_evidence
+                and session.budget.deadline.optional_work_allowed()
+            ):
                 repair_service = ClaimRepairService()
                 repaired_candidates = []
                 for item in active_candidates:
@@ -375,6 +435,18 @@ class MathForgeHarness:
                     used_llm=verifier_result.used_llm,
                     finding_count=len(verifier_result.findings),
                     reason=verifier_result.reason,
+                )
+            if not session.budget.deadline.optional_work_allowed():
+                session.route_plan = replace(
+                    session.route_plan,
+                    max_reasoning_rounds=1,
+                    use_lemma_loop=False,
+                    use_llm_finalizer=False,
+                )
+                trace.add(
+                    "deadline_finalize",
+                    stage="before_lemma",
+                    disabled=["lemma", "finalizer"],
                 )
             lemma_result = self._lemma_loop.run(
                 session.route_plan,
@@ -482,7 +554,11 @@ class MathForgeHarness:
             final_response = self._formatter.format(candidate, session.problem_ir)
             if not final_response.strip():
                 raise ValueError("empty formatted response")
-            if self._config.enable_finalizer and session.route_plan.use_llm_finalizer:
+            if (
+                self._config.enable_finalizer
+                and session.route_plan.use_llm_finalizer
+                and session.budget.deadline.optional_work_allowed()
+            ):
                 try:
                     finalizer_context = self._build_role_context(
                         session,
@@ -513,6 +589,15 @@ class MathForgeHarness:
                         used_llm=finalization.used_llm,
                         reason=finalization.reason,
                     )
+            elif (
+                self._config.enable_finalizer
+                and session.route_plan.use_llm_finalizer
+            ):
+                trace.add(
+                    "finalization_completed",
+                    used_llm=False,
+                    reason="soft_deadline",
+                )
             trace.add(
                 "budget_summary",
                 model_calls=session.budget.used_calls,
@@ -710,6 +795,7 @@ class MathForgeHarness:
             session.budget,
             temperature=self._config.primary_temperature,
             max_tokens=self._config.primary_max_tokens,
+            optional=True,
         )
         if self._config.enable_tools and self._config.enable_evidence:
             self._claim_verifier.verify(
