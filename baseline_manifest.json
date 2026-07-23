@@ -1,8 +1,0 @@
-{
-  "repository": "InternLM/Challenge-Cup-2026",
-  "files": {
-    "main.py": "cb47bfd0a791ce0690ab0881554922543100c8f3",
-    "llm_client.py": "e5762a050029a3b5673ca91bf6a2153289fcf4aa",
-    "user_agent.py": "b230a6d427b0c6908c9533f2bc67838dbd9257a1"
-  }
-}
