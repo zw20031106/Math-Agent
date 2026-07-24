@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### S6-D
+
+- Upgraded `ProblemIR` to schema 1.3, reworked problem parsing around the final
+  requested target rather than nouns anywhere in the input, and added
+  host-owned `target_phrase` plus
+  `parser_confidence` to `ProblemIR` and public Trace 2.0 parsing events.
+- Expanded answer types with vector, tuple, polynomial, and algebraic
+  structure outputs while retaining expression as the conservative scalar
+  fallback. Matrix, interval, integer, and “explanatory variable” input terms
+  no longer dictate the requested output shape.
+- Added safe vector/tuple/polynomial/algebraic-structure scorers, broader
+  restricted LaTeX normalization, and stable invalid-actual reason codes.
+- Made JSONL loading accept `answer` as an `expected_answer` compatibility
+  alias and fail when both fields conflict.
+- Added a mandatory benchmark preflight for complete/parseable expected
+  answers and at least 95% automatic-scoring coverage; benchmark artifact
+  schema 3.4 records the preflight result.
+- Added a reviewed 88-case normalized gold dataset. It has 88 expected
+  answers, 100% parser type agreement, zero invalid expected answers, and
+  100% automatic scorer coverage; all 19 previously reproduced parser
+  counterexamples are regression-tested.
+
 ### S6-C
 
 - Added Trace schema 2.0 with host-owned contiguous sequence numbers,

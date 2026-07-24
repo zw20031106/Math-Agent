@@ -13,7 +13,12 @@ if str(ROOT) not in sys.path:
 
 from llm_client import InternChatClient  # noqa: E402
 from mathforge.agents.registry import PromptContractLoader, SkillRegistry  # noqa: E402
-from mathforge.benchmark import benchmark_record_to_dict, load_jsonl, run_benchmark  # noqa: E402
+from mathforge.benchmark import (  # noqa: E402
+    benchmark_record_to_dict,
+    load_jsonl,
+    preflight_benchmark_cases,
+    run_benchmark,
+)
 from mathforge.config import HarnessConfig, load_competition_config  # noqa: E402
 from mathforge.evaluation.artifacts import finalize_artifact  # noqa: E402
 from mathforge.model_identity import require_exact_intern_model  # noqa: E402
@@ -23,7 +28,7 @@ from mathforge.runtime import MathForgeHarness  # noqa: E402
 from mathforge.tools.registry import ToolRegistry  # noqa: E402
 
 
-BENCHMARK_SCHEMA_VERSION = "3.3"
+BENCHMARK_SCHEMA_VERSION = "3.4"
 
 
 def build_benchmark_metadata(
@@ -72,6 +77,7 @@ def main() -> int:
         model_identity=model_identity,
     )
     cases = load_jsonl(args.input)
+    preflight = preflight_benchmark_cases(cases)
     records, summary = run_benchmark(
         cases,
         harness.solve,
@@ -85,6 +91,7 @@ def main() -> int:
             args.config,
         ),
         "config": args.config.as_posix(),
+        "preflight": preflight.to_dict(),
         "summary": summary,
         "records": [benchmark_record_to_dict(record) for record in records],
     })

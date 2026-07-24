@@ -20,4 +20,29 @@ class AnswerValidator:
             or re.fullmatch(r"\\frac\{[+-]?\d+\}\{\d+\}", answer)
         ):
             errors.append("invalid_fraction")
+        elif problem.answer_type == "vector" and not (
+            "," in answer
+            and (
+                re.match(r"^\s*[\[(]", answer)
+                or re.search(r"\^(?:\{?T\}?|\\top)\s*$", answer, re.I)
+            )
+        ):
+            errors.append("invalid_vector")
+        elif problem.answer_type == "tuple" and "," not in answer:
+            errors.append("invalid_tuple")
+        elif problem.answer_type == "interval" and not re.match(
+            r"^\s*[\[(].*[\])]\s*$",
+            answer,
+        ):
+            errors.append("invalid_interval")
+        elif problem.answer_type == "set" and not (
+            ("{" in answer and "}" in answer)
+            or (r"\{" in answer and r"\}" in answer)
+        ):
+            errors.append("invalid_set")
+        elif problem.answer_type == "matrix" and not (
+            r"\begin" in answer
+            or re.match(r"^\s*\[\s*[\[(]", answer)
+        ):
+            errors.append("invalid_matrix")
         return errors

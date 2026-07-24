@@ -253,6 +253,8 @@ class MathForgeHarness:
                 "problem_parsed",
                 problem_type=session.problem_ir.problem_type,
                 answer_type=session.problem_ir.answer_type,
+                target_phrase=session.problem_ir.target_phrase,
+                parser_confidence=session.problem_ir.parser_confidence,
                 assumptions=session.problem_ir.assumptions,
                 domains=session.problem_ir.domains,
                 risk_flags=session.problem_ir.risk_flags,

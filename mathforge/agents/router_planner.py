@@ -133,7 +133,7 @@ class RouterRuleEngine:
             skills.append(auxiliary)
         skills.extend(["proof-obligation" if problem.problem_type == "proof" else "answer-normalization"])
         tools = ["answer_type_check"]
-        if problem.answer_type == "expression":
+        if problem.answer_type in {"expression", "polynomial"}:
             tools.append("symbolic_equivalence")
         plan = RoutePlan(
             primary_subject=primary,

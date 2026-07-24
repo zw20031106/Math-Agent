@@ -17,7 +17,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from llm_client import InternChatClient  # noqa: E402
-from mathforge.benchmark import BenchmarkRecord, load_jsonl, run_benchmark  # noqa: E402
+from mathforge.benchmark import (  # noqa: E402
+    BenchmarkRecord,
+    load_jsonl,
+    preflight_benchmark_cases,
+    run_benchmark,
+)
 from mathforge.harness.fingerprints import request_fingerprint  # noqa: E402
 from mathforge.harness.metrics import RunMetrics  # noqa: E402
 from mathforge.harness.trace import TraceBuilder  # noqa: E402
@@ -167,8 +172,10 @@ def main() -> int:
         path = write_case_output(record, args.output_dir)
         print(f"Wrote {path}", flush=True)
 
+    cases = load_jsonl(args.input)
+    preflight_benchmark_cases(cases)
     _, summary = run_benchmark(
-        load_jsonl(args.input),
+        cases,
         wall_clock_runner.solve,
         concurrency=args.concurrency,
         seed=args.seed,

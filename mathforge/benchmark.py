@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from hashlib import sha256
@@ -25,6 +26,28 @@ class BenchmarkCase:
     problem_type: str = "unknown"
     answer_type: str | None = None
     scorer: str | None = None
+
+
+@dataclass(frozen=True)
+class BenchmarkPreflight:
+    case_count: int
+    expected_count: int
+    auto_scored_count: int
+    manual_count: int
+    invalid_expected_count: int
+    auto_score_coverage: float
+    invalid_reasons: dict[str, str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "case_count": self.case_count,
+            "expected_count": self.expected_count,
+            "auto_scored_count": self.auto_scored_count,
+            "manual_count": self.manual_count,
+            "invalid_expected_count": self.invalid_expected_count,
+            "auto_score_coverage": self.auto_score_coverage,
+            "invalid_reasons": dict(self.invalid_reasons),
+        }
 
 
 @dataclass(frozen=True)
@@ -103,12 +126,31 @@ def load_jsonl(path) -> list[BenchmarkCase]:
             if not line.strip():
                 continue
             item = json.loads(line)
+            has_expected = "expected_answer" in item
+            has_answer = "answer" in item
+            if (
+                has_expected
+                and has_answer
+                and str(item["expected_answer"]).strip()
+                != str(item["answer"]).strip()
+            ):
+                raise ValueError(
+                    "conflicting expected_answer and answer "
+                    f"at JSONL line {line_number + 1}"
+                )
+            expected = (
+                item["expected_answer"]
+                if has_expected
+                else item["answer"]
+                if has_answer
+                else None
+            )
             cases.append(
                 BenchmarkCase(
                     idx=str(item.get("idx", line_number)),
                     problem=str(item["problem"]),
                     expected_answer=(
-                        str(item["expected_answer"]) if "expected_answer" in item else None
+                        str(expected) if expected is not None else None
                     ),
                     subject=str(item.get("subject", "unknown")),
                     problem_type=str(item.get("problem_type", "unknown")),
@@ -117,6 +159,68 @@ def load_jsonl(path) -> list[BenchmarkCase]:
                 )
             )
     return cases
+
+
+def preflight_benchmark_cases(
+    cases: list[BenchmarkCase],
+    *,
+    require_expected: bool = True,
+    minimum_auto_score_coverage: float = 0.95,
+) -> BenchmarkPreflight:
+    if not 0.0 <= minimum_auto_score_coverage <= 1.0:
+        raise ValueError("minimum auto-score coverage must be in [0, 1]")
+    parser = ProblemParser()
+    invalid: dict[str, str] = {}
+    expected_count = 0
+    auto_scored_count = 0
+    manual_count = 0
+    seen_ids: set[str] = set()
+    for case in cases:
+        if case.idx in seen_ids:
+            invalid[case.idx] = "duplicate_case_id"
+            continue
+        seen_ids.add(case.idx)
+        if case.expected_answer is None or not str(case.expected_answer).strip():
+            if require_expected:
+                invalid[case.idx] = "missing_expected_answer"
+            continue
+        expected_count += 1
+        parsed_type = case.answer_type or parser.parse(case.problem).answer_type
+        probe = score_response(
+            case.expected_answer,
+            f"Final answer: {case.expected_answer}",
+            answer_type=parsed_type,
+            scorer=case.scorer,
+        )
+        if probe.error or probe.reason.startswith("invalid_expected"):
+            invalid[case.idx] = probe.reason
+        elif probe.scored:
+            auto_scored_count += 1
+        else:
+            manual_count += 1
+    denominator = expected_count or len(cases)
+    coverage = auto_scored_count / denominator if denominator else 0.0
+    result = BenchmarkPreflight(
+        case_count=len(cases),
+        expected_count=expected_count,
+        auto_scored_count=auto_scored_count,
+        manual_count=manual_count,
+        invalid_expected_count=len(invalid),
+        auto_score_coverage=coverage,
+        invalid_reasons=invalid,
+    )
+    if invalid:
+        details = ", ".join(
+            f"{case_id}:{reason}"
+            for case_id, reason in sorted(invalid.items())
+        )
+        raise ValueError(f"benchmark preflight failed: {details}")
+    if coverage < minimum_auto_score_coverage:
+        raise ValueError(
+            "benchmark auto-score coverage below threshold: "
+            f"{coverage:.6f} < {minimum_auto_score_coverage:.6f}"
+        )
+    return result
 
 
 def run_benchmark(
@@ -280,6 +384,21 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
         "expected_count": len(expected),
         "scored_count": len(scored),
         "unscored_count": len(expected) - len(scored),
+        "manual_count": sum(
+            record.score.reason == "manual_or_rubric_scoring_required"
+            for record in expected
+        ),
+        "invalid_expected_count": sum(
+            record.score.error
+            and record.score.reason.startswith("invalid_expected")
+            for record in expected
+        ),
+        "auto_score_coverage": (
+            len(scored) / len(expected) if expected else 0.0
+        ),
+        "score_reason_counts": dict(
+            sorted(Counter(record.score.reason for record in expected).items())
+        ),
         "repetitions": len(repetition_indexes),
         "random_seed": seeds[0] if len(seeds) == 1 else seeds,
         "scoring_failure_rate": (

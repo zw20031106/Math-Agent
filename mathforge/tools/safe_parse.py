@@ -15,8 +15,9 @@ _FUNCTIONS = {
     "sin": sympy.sin,
     "sqrt": sympy.sqrt,
     "tan": sympy.tan,
+    "zeta": sympy.zeta,
 }
-_CONSTANTS = {"E": sympy.E, "pi": sympy.pi}
+_CONSTANTS = {"E": sympy.E, "I": sympy.I, "pi": sympy.pi}
 _BINARY = {
     ast.Add: lambda left, right: left + right,
     ast.Sub: lambda left, right: left - right,

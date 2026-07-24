@@ -47,7 +47,7 @@ def equivalent_answers(
     )
     if high_risk and not assumptions and not domains:
         return EquivalenceStatus.UNKNOWN
-    if answer_type != "expression":
+    if answer_type not in {"expression", "polynomial"}:
         return (
             EquivalenceStatus.UNKNOWN
             if high_risk

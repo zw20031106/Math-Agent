@@ -14,6 +14,7 @@ from mathforge.harness.state import (
 
 
 CORE_SCHEMA_VERSION = "1.2"
+PROBLEM_IR_SCHEMA_VERSION = "1.3"
 CANDIDATE_SCHEMA_VERSION = "2.0"
 MAX_CLAIMS = 64
 MAX_METHOD_STEPS = 64
@@ -47,9 +48,13 @@ class AnswerType(str, Enum):
     INTEGER = "integer"
     FRACTION = "fraction"
     EXPRESSION = "expression"
+    VECTOR = "vector"
+    TUPLE = "tuple"
     SET = "set"
     INTERVAL = "interval"
     MATRIX = "matrix"
+    POLYNOMIAL = "polynomial"
+    ALGEBRAIC_STRUCTURE = "algebraic_structure"
     TEXT = "text"
 
 
@@ -205,7 +210,7 @@ def _require_string_fields(
 
 @dataclass
 class ProblemIR:
-    SCHEMA_VERSION: ClassVar[str] = CORE_SCHEMA_VERSION
+    SCHEMA_VERSION: ClassVar[str] = PROBLEM_IR_SCHEMA_VERSION
 
     raw_problem: str
     normalized_problem: str
@@ -216,9 +221,11 @@ class ProblemIR:
     assumptions: list[str] = field(default_factory=list)
     domains: dict[str, str] = field(default_factory=dict)
     requested_output: str = ""
+    target_phrase: str = ""
+    parser_confidence: float = 0.0
     options: list[str] = field(default_factory=list)
     risk_flags: list[str] = field(default_factory=list)
-    schema_version: str = CORE_SCHEMA_VERSION
+    schema_version: str = PROBLEM_IR_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
         return {
@@ -232,6 +239,8 @@ class ProblemIR:
             "assumptions": list(self.assumptions),
             "domains": dict(self.domains),
             "requested_output": self.requested_output,
+            "target_phrase": self.target_phrase,
+            "parser_confidence": self.parser_confidence,
             "options": list(self.options),
             "risk_flags": list(self.risk_flags),
         }
@@ -245,6 +254,7 @@ class ProblemIR:
             self.problem_type,
             self.answer_type,
             self.requested_output,
+            self.target_phrase,
         )
         if any(not isinstance(value, str) for value in string_fields):
             raise SchemaValidationError("ProblemIR string field has invalid type")
@@ -252,6 +262,11 @@ class ProblemIR:
             raise SchemaValidationError(f"invalid problem type: {self.problem_type}")
         if self.answer_type not in {item.value for item in AnswerType}:
             raise SchemaValidationError(f"invalid answer type: {self.answer_type}")
+        if (
+            type(self.parser_confidence) not in {int, float}
+            or not 0.0 <= float(self.parser_confidence) <= 1.0
+        ):
+            raise SchemaValidationError("invalid parser confidence")
         for name, value in (
             ("symbols", self.symbols),
             ("assumptions", self.assumptions),
@@ -294,6 +309,8 @@ class ProblemIR:
             "assumptions",
             "domains",
             "requested_output",
+            "target_phrase",
+            "parser_confidence",
             "options",
             "risk_flags",
         }
@@ -306,6 +323,7 @@ class ProblemIR:
             "problem_type",
             "answer_type",
             "requested_output",
+            "target_phrase",
             ),
             "ProblemIR",
         )
@@ -315,6 +333,14 @@ class ProblemIR:
         raw_domains = payload.get("domains")
         if not isinstance(raw_domains, dict):
             raise SchemaValidationError("ProblemIR.domains must be an object")
+        raw_parser_confidence = payload.get("parser_confidence")
+        if not isinstance(raw_parser_confidence, (int, float)) or isinstance(
+            raw_parser_confidence,
+            bool,
+        ):
+            raise SchemaValidationError(
+                "ProblemIR.parser_confidence must be numeric"
+            )
         problem = cls(
             raw_problem=strings["raw_problem"],
             normalized_problem=strings["normalized_problem"],
@@ -331,6 +357,8 @@ class ProblemIR:
             ),
             domains=dict(raw_domains),
             requested_output=strings["requested_output"],
+            target_phrase=strings["target_phrase"],
+            parser_confidence=float(raw_parser_confidence),
             options=_require_string_list(payload.get("options"), "ProblemIR.options"),
             risk_flags=_require_string_list(
                 payload.get("risk_flags"),
