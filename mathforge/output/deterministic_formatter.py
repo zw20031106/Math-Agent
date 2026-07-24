@@ -15,7 +15,9 @@ class DeterministicFormatter:
     def format(self, candidate: CandidateSolution, problem: ProblemIR) -> str:
         del problem
         answer = candidate.final_answer.strip()
-        solution = candidate.solution_text.strip()
+        solution = candidate.solution_text.strip() or "\n".join(
+            candidate.public_solution_steps
+        ).strip()
         if not solution:
             return answer
         if candidate.parse_status.split(":", 1)[0] == "raw_text":

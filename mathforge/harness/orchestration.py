@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from typing import Callable
 
 from mathforge.agents.solver import (
     AlternativeSolver,
@@ -15,6 +16,7 @@ from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
+from mathforge.harness.fingerprints import semantic_fingerprint
 from mathforge.verification.methods import candidate_method_signature
 
 
@@ -52,6 +54,7 @@ class CandidateOrchestrator:
         temperature: float,
         max_tokens: int,
         context_views: dict[str, RoleContextView] | None = None,
+        event_callback: Callable[..., None] | None = None,
     ) -> FanoutResult:
         views = context_views or {}
         count = max(1, min(3, route.candidate_count))
@@ -105,6 +108,14 @@ class CandidateOrchestrator:
                 )
             )
 
+        if event_callback is not None:
+            for _, solver, request in branches:
+                event_callback(
+                    "candidate_generation_started",
+                    candidate_id=request.candidate_id,
+                    role=solver.role,
+                    planned_method_family=request.method_family,
+                )
         ordered: dict[int, CandidateSolution] = {}
         failures: list[BranchFailure] = []
         pool = ThreadPoolExecutor(max_workers=count, thread_name_prefix="mathforge-solver")
@@ -136,15 +147,49 @@ class CandidateOrchestrator:
                 for future in completed:
                     index, candidate_id = futures[future]
                     try:
-                        ordered[index] = future.result()
+                        candidate = future.result()
                     except BudgetExceeded:
-                        failures.append(BranchFailure(candidate_id, "deadline_cutoff"))
+                        reason = "deadline_cutoff"
+                        failures.append(BranchFailure(candidate_id, reason))
+                        if event_callback is not None:
+                            event_callback(
+                                "candidate_generation_failed",
+                                **candidate_failure_trace_payload(
+                                    candidate_id,
+                                    reason,
+                                ),
+                            )
                     except Exception:
-                        failures.append(BranchFailure(candidate_id, "solver_branch_failed"))
+                        reason = "solver_branch_failed"
+                        failures.append(BranchFailure(candidate_id, reason))
+                        if event_callback is not None:
+                            event_callback(
+                                "candidate_generation_failed",
+                                **candidate_failure_trace_payload(
+                                    candidate_id,
+                                    reason,
+                                ),
+                            )
+                    else:
+                        ordered[index] = candidate
+                        if event_callback is not None:
+                            event_callback(
+                                "candidate_generated",
+                                **candidate_trace_payload(candidate),
+                            )
             for future in pending:
                 _, candidate_id = futures[future]
                 future.cancel()
-                failures.append(BranchFailure(candidate_id, "deadline_cutoff"))
+                reason = "deadline_cutoff"
+                failures.append(BranchFailure(candidate_id, reason))
+                if event_callback is not None:
+                    event_callback(
+                        "candidate_generation_failed",
+                        **candidate_failure_trace_payload(
+                            candidate_id,
+                            reason,
+                        ),
+                    )
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 
@@ -159,3 +204,46 @@ class CandidateOrchestrator:
                 seen.add(signature)
         failures.sort(key=lambda item: item.candidate_id)
         return FanoutResult(candidates, failures)
+
+
+def public_candidate_content(candidate: CandidateSolution) -> dict:
+    return {
+        "public_solution_steps": list(candidate.public_solution_steps),
+        "final_answer": candidate.final_answer,
+        "assumptions": list(candidate.assumptions),
+        "theorems": list(candidate.theorems),
+        "claims": [claim.to_dict() for claim in candidate.claims],
+        "method_steps": [step.to_dict() for step in candidate.method_steps],
+        "unresolved_obligations": list(candidate.unresolved_obligations),
+    }
+
+
+def candidate_trace_payload(candidate: CandidateSolution) -> dict:
+    return {
+        "candidate_id": candidate.candidate_id,
+        "status": "generated",
+        "role": candidate.role,
+        "method": candidate.method,
+        "planned_method_family": candidate.planned_method_family,
+        "parse_status": candidate.parse_status,
+        "contract_deviations": list(candidate.contract_deviations),
+        "content": public_candidate_content(candidate),
+        "content_digest": semantic_fingerprint(candidate.to_dict()),
+    }
+
+
+def candidate_failure_trace_payload(
+    candidate_id: str,
+    reason: str,
+) -> dict:
+    return {
+        "candidate_id": candidate_id,
+        "status": "failed",
+        "method": "unavailable",
+        "reason": reason,
+        "content": {
+            "public_solution_steps": [],
+            "final_answer": "",
+            "claims": [],
+        },
+    }

@@ -16,13 +16,17 @@ def test_judge_trace_filters_unknown_events_secrets_and_paths():
         note=r"C:\\private\\answer.txt",
     )
     assert len(trace.internal_events) == 2
-    assert trace.build() == [
-        {
-            "event": "route_planned",
-            "primary_subject": "algebra",
-            "note": "[local-path]",
-        }
-    ]
+    built = trace.build()
+    assert len(built) == 1
+    assert built[0] == {
+        "schema_version": "2.0",
+        "seq": 1,
+        "elapsed_ms": built[0]["elapsed_ms"],
+        "event": "route_planned",
+        "stage": "routing",
+        "primary_subject": "algebra",
+        "note": "[local-path]",
+    }
 
 
 def test_judge_trace_size_is_bounded():
@@ -44,13 +48,16 @@ def test_cost_tokens_are_not_redacted_as_credentials():
         client_secret="secret",
         private_token="secret",
     )
-    assert trace.build() == [
-        {
-            "event": "budget_summary",
-            "model_calls": 2,
-            "estimated_tokens": 128,
-        }
-    ]
+    built = trace.build()
+    assert built[0] == {
+        "schema_version": "2.0",
+        "seq": 1,
+        "elapsed_ms": built[0]["elapsed_ms"],
+        "event": "budget_summary",
+        "stage": "finalization",
+        "model_calls": 2,
+        "estimated_tokens": 128,
+    }
 
 
 def test_terminal_trace_events_survive_event_pressure():
@@ -66,7 +73,7 @@ def test_terminal_trace_events_survive_event_pressure():
         "budget_summary",
         "fallback_used",
     ]
-    assert len(json.dumps(trace.build())) <= 240
+    assert len(json.dumps(trace.build())) > 240
 
 
 def test_run_completed_is_the_final_terminal_event_under_trace_pressure():
@@ -84,4 +91,4 @@ def test_run_completed_is_the_final_terminal_event_under_trace_pressure():
         final_phase="fallback_completed",
     )
     assert trace.build()[-1]["event"] == "run_completed"
-    assert len(json.dumps(trace.build())) <= 320
+    assert len(json.dumps(trace.build())) > 320

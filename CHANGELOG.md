@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### S6-C
+
+- Added Trace schema 2.0 with host-owned contiguous sequence numbers,
+  nondecreasing elapsed milliseconds, stable event stages, JSON round-trip
+  validation, and an always-final `run_completed` event.
+- Added immediate candidate start/success/failure events, structured public
+  solution steps, Candidate/Claim-bound evidence summaries, repair proposals,
+  transparent lexicographic arbitration details, and the complete selected
+  public solution.
+- Upgraded `CandidateSolution` to schema 2.0 with
+  `public_solution_steps`; non-selected and failed candidates never expose
+  their full raw `solution_text`.
+- Added trace integrity gates for generation terminals, evidence terminals,
+  repair and arbitration references, selected-candidate consistency,
+  final-response consistency, and cross-session/cross-candidate pollution.
+- Removed sanitizer length slicing while retaining recursive secret,
+  authorization, traceback, nonce, and absolute-path cleaning. Zero trace
+  limits preserve all allowed content and events.
+- Upgraded the per-case wall-clock timeout path to emit a complete Trace 2.0
+  terminal sequence, and validate Trace 2.0 again at the flat public-output
+  boundary.
+
 ### S6-B
 
 - Upgraded the configuration schema to 1.2 and made `0` the explicit sentinel

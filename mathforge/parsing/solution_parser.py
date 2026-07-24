@@ -45,6 +45,7 @@ class SolutionParser:
             method="unspecified",
             final_answer=answer,
             answer_type=answer_type,
+            public_solution_steps=self._derive_public_steps(text, answer),
             solution_text=text,
             parse_status=parse_status,
         )
@@ -98,6 +99,7 @@ class SolutionParser:
         allowed_fields = host_fields | {
             "method",
             "method_steps",
+            "public_solution_steps",
             "solution_text",
             "final_answer",
             "assumptions",
@@ -261,6 +263,17 @@ class SolutionParser:
         ).strip()
         if not final_answer:
             final_answer = SolutionParser._extract_answer(solution_text)
+        public_solution_steps = SolutionParser._model_string_list(
+            payload,
+            "public_solution_steps",
+            deviations,
+        )
+        if not public_solution_steps:
+            public_solution_steps = SolutionParser._derive_public_steps(
+                solution_text,
+                final_answer,
+                claims=claims,
+            )
         candidate = CandidateSolution(
             candidate_id=candidate_id,
             role=role,
@@ -283,6 +296,7 @@ class SolutionParser:
                 deviations,
             ),
             claims=claims,
+            public_solution_steps=public_solution_steps,
             solution_text=solution_text,
             unresolved_obligations=SolutionParser._model_string_list(
                 payload,
@@ -295,6 +309,33 @@ class SolutionParser:
         )
         candidate.validate()
         return candidate
+
+    @staticmethod
+    def _derive_public_steps(
+        solution_text: str,
+        final_answer: str,
+        *,
+        claims: list[Claim] | None = None,
+    ) -> list[str]:
+        steps = [
+            line.strip()
+            for line in solution_text.splitlines()
+            if line.strip()
+            and not re.fullmatch(
+                r"(?:(?:final\s*)?answer|最终答案|答案)\s*[:：].*",
+                line.strip(),
+                re.IGNORECASE,
+            )
+        ]
+        if not steps:
+            steps = [
+                claim.statement.strip()
+                for claim in claims or []
+                if claim.statement.strip()
+            ]
+        if not steps and final_answer.strip():
+            steps = [f"Final answer: {final_answer.strip()}"]
+        return steps
 
     @staticmethod
     def _model_string(

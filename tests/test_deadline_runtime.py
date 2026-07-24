@@ -191,7 +191,8 @@ def test_soft_cutoff_disables_optional_runtime_stages_before_they_start():
     cutoff = next(
         event
         for event in result["trace"]
-        if event["event"] == "deadline_finalize" and event["stage"] == "soft_cutoff"
+        if event["event"] == "deadline_finalize"
+        and event["checkpoint"] == "soft_cutoff"
     )
     assert cutoff["disabled"] == [
         "alternatives",

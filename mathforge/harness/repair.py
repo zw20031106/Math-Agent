@@ -307,6 +307,10 @@ class ClaimRepairService:
                         ),
                     )
                 )
+        rebuilt_solution = ClaimRepairService._rebuild_solution(
+            merged_claims,
+            patch.final_answer or original.final_answer,
+        )
         proposed = CandidateSolution(
             candidate_id=f"{original.candidate_id}-v{original.version + 1}",
             role=original.role,
@@ -316,10 +320,10 @@ class ClaimRepairService:
             assumptions=list(original.assumptions),
             theorems=list(original.theorems),
             claims=merged_claims,
-            solution_text=ClaimRepairService._rebuild_solution(
-                merged_claims,
-                patch.final_answer or original.final_answer,
-            ),
+            public_solution_steps=[
+                claim.statement for claim in merged_claims if claim.statement.strip()
+            ],
+            solution_text=rebuilt_solution,
             unresolved_obligations=list(original.unresolved_obligations),
             parse_status=patch.parse_status,
             version=original.version + 1,

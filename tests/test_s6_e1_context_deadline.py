@@ -328,12 +328,17 @@ def test_runner_timeout_is_terminal_atomic_and_late_result_cannot_overwrite(tmp_
 
     assert elapsed < 0.08
     assert set(payload) == {"id", "final_response", "trace"}
-    assert payload["trace"][-1] == {
-        "event": "run_completed",
-        "outcome": "timeout",
-        "final_phase": "timeout_completed",
-        "error_code": "per_case_wall_clock_exceeded",
-    }
+    assert payload["trace"][-1]["event"] == "run_completed"
+    assert payload["trace"][-1]["outcome"] == "timeout"
+    assert payload["trace"][-1]["final_phase"] == "timeout_completed"
+    assert (
+        payload["trace"][-1]["error_code"]
+        == "per_case_wall_clock_exceeded"
+    )
+    assert all(
+        event["schema_version"] == "2.0"
+        for event in payload["trace"]
+    )
     assert records[0].run_metrics.per_case_wall_clock_timeout_count == 1
     assert summary["per_case_wall_clock_timeout_count"] == 1
     assert summary["timeout_rate"] == 1.0

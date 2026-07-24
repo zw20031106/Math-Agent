@@ -24,9 +24,36 @@ class EvidenceLedger:
         self,
         records: list[EvidenceRecord] | None = None,
         budget: CallBudget | None = None,
+        candidates: list[CandidateSolution] | None = None,
     ) -> None:
         self._records = records if records is not None else []
         self._budget = budget
+        self._candidate_claims: dict[str, set[str]] = {}
+        for candidate in candidates or []:
+            self.register_candidate(candidate)
+
+    def register_candidate(self, candidate: CandidateSolution) -> None:
+        claim_ids = {claim.claim_id for claim in candidate.claims}
+        if candidate.candidate_id in self._candidate_claims:
+            if self._candidate_claims[candidate.candidate_id] != claim_ids:
+                raise ValueError("candidate evidence identity changed")
+            return
+        self._candidate_claims[candidate.candidate_id] = claim_ids
+
+    def _validate_reference(
+        self,
+        candidate_id: str,
+        claim_id: str | None,
+    ) -> None:
+        if not self._candidate_claims:
+            return
+        if candidate_id not in self._candidate_claims:
+            raise ValueError("evidence references an unknown candidate")
+        if (
+            claim_id is not None
+            and claim_id not in self._candidate_claims[candidate_id]
+        ):
+            raise ValueError("evidence references an unknown claim")
 
     def _reserve_record(self) -> None:
         if self._budget is not None:
@@ -48,6 +75,7 @@ class EvidenceLedger:
         duration_ms: float | None = None,
         timeout_seconds: float | None = None,
     ) -> EvidenceRecord:
+        self._validate_reference(candidate_id, claim_id)
         self._reserve_record()
         invocation = _tool_invocation(
             result,
@@ -81,6 +109,7 @@ class EvidenceLedger:
         status: str,
         description: str,
     ) -> EvidenceRecord:
+        self._validate_reference(candidate_id, claim_id)
         self._reserve_record()
         record = EvidenceRecord(
             evidence_id=f"ev-{uuid4().hex[:12]}",
@@ -107,6 +136,7 @@ class EvidenceLedger:
         claim_id: str,
         check_suggestion: str,
     ) -> EvidenceRecord:
+        self._validate_reference(candidate_id, claim_id)
         self._reserve_record()
         record = EvidenceRecord(
             evidence_id=f"ev-{uuid4().hex[:12]}",

@@ -14,6 +14,7 @@ from mathforge.harness.state import (
 
 
 CORE_SCHEMA_VERSION = "1.2"
+CANDIDATE_SCHEMA_VERSION = "2.0"
 MAX_CLAIMS = 64
 MAX_METHOD_STEPS = 64
 MAX_CLAIM_STATEMENT_CHARS = 4000
@@ -442,7 +443,7 @@ class Claim:
 
 @dataclass
 class CandidateSolution:
-    SCHEMA_VERSION: ClassVar[str] = CORE_SCHEMA_VERSION
+    SCHEMA_VERSION: ClassVar[str] = CANDIDATE_SCHEMA_VERSION
 
     candidate_id: str
     role: str
@@ -452,6 +453,7 @@ class CandidateSolution:
     assumptions: list[str] = field(default_factory=list)
     theorems: list[str] = field(default_factory=list)
     claims: list[Claim] = field(default_factory=list)
+    public_solution_steps: list[str] = field(default_factory=list)
     solution_text: str = ""
     unresolved_obligations: list[str] = field(default_factory=list)
     parse_status: str = "parsed"
@@ -460,7 +462,7 @@ class CandidateSolution:
     is_method_duplicate: bool = False
     contract_deviations: list[str] = field(default_factory=list)
     method_steps: list[MethodStep] = field(default_factory=list)
-    schema_version: str = CORE_SCHEMA_VERSION
+    schema_version: str = CANDIDATE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
         return {
@@ -473,6 +475,7 @@ class CandidateSolution:
             "assumptions": list(self.assumptions),
             "theorems": list(self.theorems),
             "claims": [claim.to_dict() for claim in self.claims],
+            "public_solution_steps": list(self.public_solution_steps),
             "solution_text": self.solution_text,
             "unresolved_obligations": list(self.unresolved_obligations),
             "parse_status": self.parse_status,
@@ -525,6 +528,7 @@ class CandidateSolution:
         for name, value in (
             ("assumptions", self.assumptions),
             ("theorems", self.theorems),
+            ("public_solution_steps", self.public_solution_steps),
             ("unresolved_obligations", self.unresolved_obligations),
             ("contract_deviations", self.contract_deviations),
         ):
@@ -612,6 +616,7 @@ class CandidateSolution:
             "assumptions",
             "theorems",
             "claims",
+            "public_solution_steps",
             "solution_text",
             "unresolved_obligations",
             "parse_status",
@@ -671,6 +676,10 @@ class CandidateSolution:
                 "CandidateSolution.theorems",
             ),
             claims=[Claim.from_dict(item) for item in raw_claims],
+            public_solution_steps=_require_string_list(
+                payload.get("public_solution_steps"),
+                "CandidateSolution.public_solution_steps",
+            ),
             solution_text=strings["solution_text"],
             unresolved_obligations=_require_string_list(
                 payload.get("unresolved_obligations"),

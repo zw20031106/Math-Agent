@@ -16,7 +16,13 @@ from mathforge.harness.fingerprints import request_fingerprint
 from mathforge.harness.context_budget import ModelContextBudget
 from mathforge.harness.metrics import collect_run_metrics
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
-from mathforge.harness.orchestration import BranchFailure, CandidateOrchestrator
+from mathforge.harness.orchestration import (
+    BranchFailure,
+    CandidateOrchestrator,
+    candidate_failure_trace_payload,
+    candidate_trace_payload,
+    public_candidate_content,
+)
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
 from mathforge.harness.session import create_session
 from mathforge.harness.state import RuntimePhase
@@ -209,13 +215,18 @@ class MathForgeHarness:
             ),
             raw_context_max_chars=self._config.raw_context_max_chars,
         )
+        fingerprint_nonce = str(safe_metadata.get("benchmark_nonce", session.session_id))
+        run_fingerprint = request_fingerprint(normalized_problem, fingerprint_nonce)
         trace = TraceBuilder(
             session.trace_events,
             max_chars=self._config.trace_max_chars,
             max_events=self._config.trace_max_events,
+            redacted_values=(
+                [fingerprint_nonce]
+                if "benchmark_nonce" in safe_metadata
+                else []
+            ),
         )
-        fingerprint_nonce = str(safe_metadata.get("benchmark_nonce", session.session_id))
-        run_fingerprint = request_fingerprint(normalized_problem, fingerprint_nonce)
         trace.add(
             "session_started",
             session_id=session.session_id,
@@ -242,6 +253,9 @@ class MathForgeHarness:
                 "problem_parsed",
                 problem_type=session.problem_ir.problem_type,
                 answer_type=session.problem_ir.answer_type,
+                assumptions=session.problem_ir.assumptions,
+                domains=session.problem_ir.domains,
+                risk_flags=session.problem_ir.risk_flags,
             )
             self._transition(
                 session,
@@ -443,7 +457,34 @@ class MathForgeHarness:
                 complexity_flags=session.route_plan.complexity_flags,
                 subject_candidates=session.problem_ir.subject_candidates,
                 selected_skills=session.route_plan.selected_skills,
+                selected_tools=session.route_plan.selected_tools,
                 method_families=session.route_plan.method_families,
+            )
+            skill_manifest = {
+                item["name"]: item for item in self._skills.manifest
+            }
+            trace.add(
+                "skills_selected",
+                skills=[
+                    {
+                        "name": name,
+                        "version": skill_manifest.get(name, {}).get(
+                            "version",
+                            "unknown",
+                        ),
+                        "role": "PrimarySolver",
+                        "reason": (
+                            "selected by deterministic route for "
+                            f"{session.route_plan.primary_subject}"
+                        ),
+                    }
+                    for name in (
+                        session.route_plan.selected_skills
+                        if self._config.enable_skills
+                        else []
+                    )
+                ],
+                skill_fingerprint=self._skills.fingerprint,
             )
             trace.add(
                 "call_allocation_planned",
@@ -490,6 +531,7 @@ class MathForgeHarness:
                 temperature=self._config.primary_temperature,
                 max_tokens=self._config.primary_max_tokens,
                 context_views=solver_contexts,
+                event_callback=trace.add,
             )
             bounded_candidates = []
             for candidate in fanout.candidates:
@@ -501,6 +543,18 @@ class MathForgeHarness:
                             candidate.candidate_id,
                             "claim_budget_exhausted",
                         )
+                    )
+                    trace.add(
+                        "candidate_evidence_completed",
+                        candidate_id=candidate.candidate_id,
+                        status="skipped",
+                        reason="claim_budget_exhausted",
+                        claim_results=[],
+                        answer_shape={"status": "skipped", "strength": "none"},
+                        hard_fail=False,
+                        unknown_claim_ids=[
+                            claim.claim_id for claim in candidate.claims
+                        ],
                     )
                 else:
                     bounded_candidates.append(candidate)
@@ -521,6 +575,14 @@ class MathForgeHarness:
             if not fanout.candidates:
                 raise RuntimeError("all solver branches failed")
             if session.budget.must_finalize():
+                for candidate in fanout.candidates:
+                    self._trace_candidate_evidence(
+                        trace,
+                        candidate,
+                        [],
+                        status="skipped",
+                        reason="deadline_finalize",
+                    )
                 trace.add("deadline_finalize", stage="after_fanout")
                 raise RuntimeError("deterministic finalize reserve reached")
             self._transition(
@@ -530,7 +592,11 @@ class MathForgeHarness:
                 RuntimePhase.CANDIDATES_READY,
                 "candidate_fanout_completed",
             )
-            ledger = EvidenceLedger(session.evidence, session.budget)
+            ledger = EvidenceLedger(
+                session.evidence,
+                session.budget,
+                fanout.candidates,
+            )
             tool_results = []
             if self._config.enable_tools:
                 for item in fanout.candidates:
@@ -576,6 +642,30 @@ class MathForgeHarness:
                             ]
                         },
                     )
+            for candidate in fanout.candidates:
+                evidence_checks_enabled = (
+                    self._config.enable_tools
+                    and self._config.enable_evidence
+                )
+                self._trace_candidate_evidence(
+                    trace,
+                    candidate,
+                    [
+                        record
+                        for record in session.evidence
+                        if record.candidate_id == candidate.candidate_id
+                    ],
+                    status=(
+                        "completed"
+                        if evidence_checks_enabled
+                        else "skipped"
+                    ),
+                    reason=(
+                        "evidence_completed"
+                        if evidence_checks_enabled
+                        else "evidence_checks_disabled"
+                    ),
+                )
             active_candidates = list(fanout.candidates)
             if (
                 self._config.enable_repair
@@ -617,12 +707,80 @@ class MathForgeHarness:
                     )
                     if repair_result.proposed is not None:
                         session.candidates.append(repair_result.proposed)
+                        trace.add(
+                            "repair_proposed",
+                            source_candidate_id=item.candidate_id,
+                            proposed_candidate_id=(
+                                repair_result.proposed.candidate_id
+                            ),
+                            affected_claim_ids=repair_result.affected_claim_ids,
+                            changes=self._repair_trace_changes(
+                                item,
+                                repair_result.proposed,
+                                repair_result.changed_claim_ids,
+                            ),
+                            answer_changed=(
+                                item.final_answer
+                                != repair_result.proposed.final_answer
+                            ),
+                            old_final_answer=item.final_answer,
+                            new_final_answer=(
+                                repair_result.proposed.final_answer
+                            ),
+                            proposed_content=public_candidate_content(
+                                repair_result.proposed
+                            ),
+                            content_digest=candidate_trace_payload(
+                                repair_result.proposed
+                            )["content_digest"],
+                        )
+                        self._trace_candidate_evidence(
+                            trace,
+                            repair_result.proposed,
+                            repair_result.new_evidence,
+                            status=(
+                                "completed"
+                                if repair_result.new_evidence
+                                else "skipped"
+                            ),
+                            reason=repair_result.reason,
+                        )
                     if repair_result.triggered:
                         trace.add(
                             "repair_completed",
-                            candidate_id=item.candidate_id,
+                            source_candidate_id=item.candidate_id,
+                            **(
+                                {
+                                    "proposed_candidate_id": (
+                                        repair_result.proposed.candidate_id
+                                    )
+                                }
+                                if repair_result.proposed is not None
+                                else {}
+                            ),
                             selected_candidate_id=repair_result.selected.candidate_id,
                             affected_claim_ids=repair_result.affected_claim_ids,
+                            reverified_claim_ids=sorted(
+                                {
+                                    record.claim_id
+                                    for record in repair_result.new_evidence
+                                    if record.claim_id is not None
+                                }
+                            ),
+                            evidence_ids=[
+                                record.evidence_id
+                                for record in repair_result.new_evidence
+                            ],
+                            evidence_quality_before=(
+                                "hard_fail"
+                                if repair_result.triggered
+                                else "unchanged"
+                            ),
+                            evidence_quality_after=(
+                                "hard_pass"
+                                if not repair_result.rolled_back
+                                else "not_improved"
+                            ),
                             rolled_back=repair_result.rolled_back,
                             reason=repair_result.reason,
                         )
@@ -719,6 +877,7 @@ class MathForgeHarness:
             expanded_precheck_rejections: dict[str, list[str]] = {}
             for expanded in lemma_result.generated_candidates:
                 rejection_codes: list[str] = []
+                ledger.register_candidate(expanded)
                 try:
                     expanded.validate()
                     session.budget.record_claims(len(expanded.claims))
@@ -755,6 +914,30 @@ class MathForgeHarness:
                     )
                     if ledger.has_hard_fail(expanded.candidate_id):
                         rejection_codes.append("claim_hard_fail")
+                expanded_records = [
+                    record
+                    for record in session.evidence
+                    if record.candidate_id == expanded.candidate_id
+                ]
+                self._trace_candidate_evidence(
+                    trace,
+                    expanded,
+                    expanded_records,
+                    status=(
+                        "completed"
+                        if expanded_records
+                        else "skipped"
+                    ),
+                    reason=(
+                        "precheck_rejected"
+                        if rejection_codes
+                        else (
+                            "evidence_completed"
+                            if expanded_records
+                            else "no_supported_checks"
+                        )
+                    ),
+                )
                 if rejection_codes:
                     expanded_precheck_rejections[expanded.candidate_id] = sorted(
                         set(rejection_codes)
@@ -900,13 +1083,26 @@ class MathForgeHarness:
                 problem=session.problem_ir,
             )
             candidate = arbitration.selected
+            rank_details = [rank.to_dict() for rank in arbitration.ranks]
             trace.add(
                 "candidate_arbitrated",
                 selected=candidate.candidate_id,
                 ranking=[rank.candidate_id for rank in arbitration.ranks],
+                rank_details=rank_details,
+                viable_candidates=[item.candidate_id for item in viable],
+                rejected_candidates=self._arbitration_rejections(
+                    session,
+                    viable,
+                    expanded_precheck_rejections,
+                ),
+                selection_reason=(
+                    "lowest lexicographic evidence rank; stable generation order "
+                    "breaks exact ties"
+                ),
                 equivalence_clusters=arbitration.clusters,
                 equivalence_unknown_pairs=arbitration.unknown_pairs,
                 equivalence_disagreement_pairs=arbitration.disagreement_pairs,
+                used_llm_arbiter=arbitration.used_llm_arbiter,
             )
             self._transition(
                 session,
@@ -980,6 +1176,25 @@ class MathForgeHarness:
             final_response, final_count = self._validated_final_response(
                 final_response
             )
+            trace.add(
+                "final_answer_selected",
+                candidate_id=candidate.candidate_id,
+                selection_reason=(
+                    "selected by hard-evidence gate and lexicographic arbitration"
+                ),
+                public_solution={
+                    "solution_text": candidate.solution_text,
+                    "public_solution_steps": list(
+                        candidate.public_solution_steps
+                    ),
+                    "final_answer": candidate.final_answer,
+                    "final_response": final_response,
+                },
+                answer_validation={
+                    "status": "pass" if not validation_errors else "warning",
+                    "codes": list(validation_errors),
+                },
+            )
             session.budget.record_final_response(
                 final_count.tokens,
                 final_count.counting_mode,
@@ -1027,6 +1242,7 @@ class MathForgeHarness:
                 failed_phase=failed_phase.value,
             )
 
+        self._close_trace_invariants(trace)
         final_count = self._context_budget.ensure_text_within_window(
             final_response
         )
@@ -1069,7 +1285,7 @@ class MathForgeHarness:
                 pass
         return {
             "final_response": final_response,
-            "trace": trace.build(),
+            "trace": trace.build(final_response=final_response),
             "run_metrics": metrics.to_dict(),
             "provenance": self._run_provenance.to_dict(),
         }
@@ -1242,6 +1458,7 @@ class MathForgeHarness:
         ledger: EvidenceLedger,
         affected_claim_ids: list[str],
     ):
+        ledger.register_candidate(candidate)
         _, records = self._run_answer_type_check(session, candidate, ledger)
         records.extend(
             self._claim_verifier.verify(
@@ -1286,15 +1503,199 @@ class MathForgeHarness:
                 memory_categories={"raw"},
             ),
         )
-        candidate = self._solver_executor.execute(
-            PrimarySolver(self._contracts),
-            request,
-            session.budget,
-            temperature=self._config.primary_temperature,
-            max_tokens=self._config.primary_max_tokens,
-            optional=True,
+        trace.add(
+            "candidate_generation_started",
+            candidate_id=request.candidate_id,
+            role="PrimarySolver",
+            planned_method_family=request.method_family,
+            source="verified_lemma_expansion",
+        )
+        try:
+            candidate = self._solver_executor.execute(
+                PrimarySolver(self._contracts),
+                request,
+                session.budget,
+                temperature=self._config.primary_temperature,
+                max_tokens=self._config.primary_max_tokens,
+                optional=True,
+            )
+        except Exception:
+            trace.add(
+                "candidate_generation_failed",
+                **candidate_failure_trace_payload(
+                    request.candidate_id,
+                    "lemma_expansion_failed",
+                ),
+            )
+            raise
+        trace.add(
+            "candidate_generated",
+            **candidate_trace_payload(candidate),
         )
         return candidate
+
+    @staticmethod
+    def _trace_candidate_evidence(
+        trace: TraceBuilder,
+        candidate,
+        records,
+        *,
+        status: str,
+        reason: str,
+    ) -> None:
+        active_records = [
+            record
+            for record in records
+            if record.transaction_status == "active"
+        ]
+        claim_results = [
+            {
+                "claim_id": record.claim_id,
+                "evidence_id": record.evidence_id,
+                "check": record.evidence_type,
+                "capability": record.capability,
+                "status": record.status,
+                "strength": record.strength,
+                "summary": record.description,
+            }
+            for record in active_records
+            if record.claim_id is not None
+        ]
+        answer_records = [
+            record for record in active_records if record.claim_id is None
+        ]
+        answer_shape = (
+            {
+                "status": answer_records[-1].status,
+                "strength": answer_records[-1].strength,
+                "evidence_id": answer_records[-1].evidence_id,
+                "summary": answer_records[-1].description,
+            }
+            if answer_records
+            else {"status": "skipped", "strength": "none"}
+        )
+        claims_with_pass_evidence = {
+            record.claim_id
+            for record in active_records
+            if record.claim_id is not None and record.status == "pass"
+        }
+        trace.add(
+            "candidate_evidence_completed",
+            candidate_id=candidate.candidate_id,
+            status=status,
+            reason=reason,
+            claim_results=claim_results,
+            answer_shape=answer_shape,
+            hard_fail=any(
+                record.status == "fail" and record.strength == "hard"
+                for record in active_records
+            ),
+            unknown_claim_ids=[
+                claim.claim_id
+                for claim in candidate.claims
+                if claim.claim_id not in claims_with_pass_evidence
+            ],
+        )
+
+    @staticmethod
+    def _repair_trace_changes(
+        original,
+        proposed,
+        changed_claim_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        old_claims = {claim.claim_id: claim for claim in original.claims}
+        new_claims = {claim.claim_id: claim for claim in proposed.claims}
+        return [
+            {
+                "claim_id": claim_id,
+                "before": old_claims[claim_id].statement,
+                "after": new_claims[claim_id].statement,
+            }
+            for claim_id in changed_claim_ids
+            if claim_id in old_claims and claim_id in new_claims
+        ]
+
+    @staticmethod
+    def _arbitration_rejections(
+        session,
+        viable,
+        expanded_precheck_rejections: dict[str, list[str]],
+    ) -> list[dict[str, Any]]:
+        viable_ids = {candidate.candidate_id for candidate in viable}
+        rejected = []
+        for candidate in session.candidates:
+            if candidate.candidate_id in viable_ids:
+                continue
+            reasons = list(
+                expanded_precheck_rejections.get(candidate.candidate_id, [])
+            )
+            if any(
+                record.candidate_id == candidate.candidate_id
+                and record.transaction_status == "active"
+                and record.status == "fail"
+                and record.strength == "hard"
+                for record in session.evidence
+            ):
+                reasons.append("hard_evidence_failure")
+            if not reasons:
+                reasons.append("not_viable_after_verification")
+            rejected.append(
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "reason_codes": sorted(set(reasons)),
+                }
+            )
+        return rejected
+
+    @staticmethod
+    def _close_trace_invariants(trace: TraceBuilder) -> None:
+        events = trace.internal_events
+        starts = {
+            str(event.get("candidate_id", ""))
+            for event in events
+            if event.get("event") == "candidate_generation_started"
+        }
+        success_events = {
+            str(event.get("candidate_id", "")): event
+            for event in events
+            if event.get("event") == "candidate_generated"
+        }
+        terminal_ids = {
+            str(event.get("candidate_id", ""))
+            for event in events
+            if event.get("event")
+            in {"candidate_generated", "candidate_generation_failed"}
+        }
+        for candidate_id in sorted(starts - terminal_ids):
+            trace.add(
+                "candidate_generation_failed",
+                **candidate_failure_trace_payload(
+                    candidate_id,
+                    "run_terminated_before_generation_terminal",
+                ),
+            )
+        evidence_ids = {
+            str(event.get("candidate_id", ""))
+            for event in events
+            if event.get("event") == "candidate_evidence_completed"
+        }
+        for candidate_id in sorted(set(success_events) - evidence_ids):
+            content = success_events[candidate_id].get("content", {})
+            claims = content.get("claims", []) if isinstance(content, dict) else []
+            trace.add(
+                "candidate_evidence_completed",
+                candidate_id=candidate_id,
+                status="skipped",
+                reason="run_terminated_before_evidence",
+                claim_results=[],
+                answer_shape={"status": "skipped", "strength": "none"},
+                hard_fail=False,
+                unknown_claim_ids=[
+                    str(claim.get("claim_id", ""))
+                    for claim in claims
+                    if isinstance(claim, dict) and claim.get("claim_id")
+                ],
+            )
 
 
 def _tool_outcome_reason(status: str, summary: str) -> str:

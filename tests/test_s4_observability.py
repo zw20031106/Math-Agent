@@ -60,12 +60,10 @@ def test_runtime_failure_has_terminal_event_metrics_and_sanitized_debug_sink():
     harness = MathForgeHarness(FakeClient(fail=True), _minimal_config(), debug_sink=sink)
     result = harness.solve("x", {"api_key": "must-not-leak"})
 
-    assert result["trace"][-1] == {
-        "event": "run_completed",
-        "outcome": "fallback",
-        "error_code": "all_candidates_failed",
-        "final_phase": "fallback_completed",
-    }
+    assert result["trace"][-1]["event"] == "run_completed"
+    assert result["trace"][-1]["outcome"] == "fallback"
+    assert result["trace"][-1]["error_code"] == "all_candidates_failed"
+    assert result["trace"][-1]["final_phase"] == "fallback_completed"
     assert result["run_metrics"]["error_code"] == "all_candidates_failed"
     assert all("simulated provider failure" not in json.dumps(item) for item in result["trace"])
     assert len(sink.records) == 1

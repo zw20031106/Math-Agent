@@ -9,6 +9,7 @@ import tempfile
 from threading import Event, Thread
 from time import perf_counter
 from typing import Any, Callable
+from uuid import uuid4
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +18,9 @@ if str(ROOT) not in sys.path:
 
 from llm_client import InternChatClient  # noqa: E402
 from mathforge.benchmark import BenchmarkRecord, load_jsonl, run_benchmark  # noqa: E402
+from mathforge.harness.fingerprints import request_fingerprint  # noqa: E402
 from mathforge.harness.metrics import RunMetrics  # noqa: E402
+from mathforge.harness.trace import TraceBuilder  # noqa: E402
 from mathforge.model_identity import require_exact_intern_model  # noqa: E402
 from mathforge.output.public_result import build_public_result  # noqa: E402
 from mathforge.runtime import MathForgeHarness  # noqa: E402
@@ -84,23 +87,42 @@ class PerCaseWallClockRunner:
             "未能在单题 15 分钟墙钟限制内完成求解；"
             "为避免输出未经验证的结论，本题返回确定性超时结果。"
         )
-        trace = [
-            {
-                "event": "per_case_wall_clock_timeout",
-                "elapsed_seconds": round(elapsed, 6),
-                "wall_clock_seconds": self.wall_clock_seconds,
-                "serialization_reserve_seconds": (
-                    self.serialization_reserve_seconds
-                ),
-                "error_code": "per_case_wall_clock_exceeded",
-            },
-            {
-                "event": "run_completed",
-                "outcome": "timeout",
-                "final_phase": "timeout_completed",
-                "error_code": "per_case_wall_clock_exceeded",
-            },
-        ]
+        session_id = f"timeout-{uuid4().hex}"
+        events: list[dict[str, Any]] = []
+        trace_builder = TraceBuilder(events, max_chars=0, max_events=0)
+        trace_builder.add(
+            "session_started",
+            session_id=session_id,
+            request_fingerprint=request_fingerprint(
+                "per-case-wall-clock-timeout",
+                session_id,
+            ),
+        )
+        trace_builder.add(
+            "per_case_wall_clock_timeout",
+            elapsed_seconds=round(elapsed, 6),
+            wall_clock_seconds=self.wall_clock_seconds,
+            serialization_reserve_seconds=self.serialization_reserve_seconds,
+            error_code="per_case_wall_clock_exceeded",
+        )
+        trace_builder.add(
+            "deadline_finalize",
+            stage="wall_clock_timeout",
+            disabled=["unfinished_harness_run"],
+        )
+        trace_builder.add(
+            "budget_summary",
+            outcome="timeout",
+            wall_clock_seconds=self.wall_clock_seconds,
+            elapsed_seconds=round(elapsed, 6),
+        )
+        trace_builder.add(
+            "run_completed",
+            outcome="timeout",
+            final_phase="timeout_completed",
+            error_code="per_case_wall_clock_exceeded",
+        )
+        trace = trace_builder.build(final_response=final_response)
         metrics = RunMetrics(
             elapsed_seconds=round(elapsed, 6),
             outcome="timeout",

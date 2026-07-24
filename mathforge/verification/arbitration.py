@@ -37,6 +37,17 @@ class CandidateRank:
             -self.soft_score,
         )
 
+    def to_dict(self) -> dict:
+        return {
+            "candidate_id": self.candidate_id,
+            "hard_fail_count": self.hard_fail_count,
+            "required_coverage": self.required_coverage,
+            "answer_consistency": self.answer_consistency,
+            "independent_agreement": self.independent_agreement,
+            "soft_score": self.soft_score,
+            "lexicographic_key": list(self.lexicographic_key),
+        }
+
 
 @dataclass
 class ArbitrationResult:
