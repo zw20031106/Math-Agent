@@ -12,8 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from llm_client import DEFAULT_MODEL, InternChatClient  # noqa: E402
+from llm_client import InternChatClient  # noqa: E402
 from mathforge.benchmark import BenchmarkRecord, load_jsonl, run_benchmark  # noqa: E402
+from mathforge.model_identity import require_exact_intern_model  # noqa: E402
 from mathforge.output.public_result import build_public_result  # noqa: E402
 from mathforge.runtime import MathForgeHarness  # noqa: E402
 from scripts.run_benchmark import load_benchmark_config  # noqa: E402
@@ -32,15 +33,15 @@ def main() -> int:
     )
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--model-identifier", default=DEFAULT_MODEL)
     args = parser.parse_args()
 
+    model_identity = require_exact_intern_model()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     config = load_benchmark_config(args.config)
     harness = MathForgeHarness(
         InternChatClient(),
         config,
-        model_identifier=args.model_identifier,
+        model_identity=model_identity,
     )
 
     def persist(record: BenchmarkRecord) -> None:

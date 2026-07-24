@@ -10,12 +10,13 @@ from typing import Any
 from mathforge.agents.registry import PromptContractLoader, SkillRegistry
 from mathforge.config import HarnessConfig
 from mathforge.harness.fingerprints import file_fingerprint, semantic_fingerprint
+from mathforge.model_identity import ModelIdentity, unreported_model_identity
 from mathforge.retrieval.retriever import Retriever
 from mathforge.retrieval.schemas import RAG_SCHEMA_VERSION
 from mathforge.tools.registry import ToolRegistry
 
 
-PROVENANCE_SCHEMA_VERSION = "1.0"
+PROVENANCE_SCHEMA_VERSION = "1.1"
 ROOT = Path(__file__).resolve().parents[1]
 CONTENT_REVIEW_MANIFEST = ROOT / "docs" / "content_review_manifest.json"
 COMPONENT_DECISIONS = ROOT / "config" / "component_decisions.json"
@@ -25,7 +26,8 @@ COMPONENT_DECISIONS = ROOT / "config" / "component_decisions.json"
 class RunProvenance:
     schema_version: str
     code_commit: str
-    model_identifier: str
+    code_dirty: bool | None
+    model_identity: dict[str, Any]
     config: dict[str, str]
     prompts: list[dict[str, str]]
     skills: list[dict[str, str]]
@@ -46,8 +48,11 @@ class RunProvenance:
             raise ValueError(
                 f"unsupported provenance schema version: {self.schema_version!r}"
             )
-        if not self.code_commit or not self.model_identifier:
-            raise ValueError("provenance commit and model identifier are required")
+        if not self.code_commit:
+            raise ValueError("provenance commit is required")
+        if self.code_dirty is not None and not isinstance(self.code_dirty, bool):
+            raise ValueError("provenance dirty state is invalid")
+        ModelIdentity.from_dict(self.model_identity)
         if not self.config.get("schema_version"):
             raise ValueError("provenance config schema version is required")
         _require_sha256(self.config.get("sha256"), "config")
@@ -85,7 +90,8 @@ class RunProvenance:
         expected = {
             "schema_version",
             "code_commit",
-            "model_identifier",
+            "code_dirty",
+            "model_identity",
             "config",
             "prompts",
             "skills",
@@ -106,7 +112,7 @@ def build_run_provenance(
     skills: SkillRegistry | None = None,
     retriever: Retriever | None = None,
     tools: ToolRegistry | None = None,
-    model_identifier: str = "unreported",
+    model_identity: ModelIdentity | None = None,
 ) -> RunProvenance:
     static = _DEFAULT_STATIC_PROVENANCE
     prompt_manifest = (
@@ -132,7 +138,8 @@ def build_run_provenance(
     return RunProvenance(
         schema_version=PROVENANCE_SCHEMA_VERSION,
         code_commit=str(static["code_commit"]),
-        model_identifier=model_identifier.strip() or "unreported",
+        code_dirty=static["code_dirty"],
+        model_identity=(model_identity or unreported_model_identity()).to_dict(),
         config={
             "schema_version": config.schema_version,
             "profile": config.profile,
@@ -164,6 +171,20 @@ def _git_commit() -> str:
         return "unknown"
 
 
+def _git_dirty() -> bool | None:
+    try:
+        output = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return bool(output.strip())
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -186,6 +207,7 @@ def _build_default_static_provenance() -> dict[str, Any]:
     decision_payload = _read_json(COMPONENT_DECISIONS)
     return {
         "code_commit": _git_commit(),
+        "code_dirty": _git_dirty(),
         "prompts": PromptContractLoader().manifest,
         "skills": SkillRegistry().manifest,
         "knowledge_db_sha256": Retriever().fingerprint,

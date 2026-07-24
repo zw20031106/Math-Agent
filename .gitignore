@@ -9,6 +9,9 @@ dist/
 build/
 *.egg-info/
 .env
+.env.*
+!.env.example
 data/*.sqlite-shm
 data/*.sqlite-wal
 benchmark-results/
+case-outputs/

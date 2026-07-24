@@ -11,6 +11,7 @@ import pytest
 from mathforge.benchmark import BenchmarkCase, benchmark_record_to_dict, run_benchmark
 from mathforge.evaluation.artifacts import finalize_artifact, validate_artifact
 from mathforge.governance.reviews import validate_review_manifest
+from mathforge.model_identity import EXACT_INTERN_MODEL, require_exact_intern_model
 from mathforge.retrieval.builder import build_database
 from mathforge.retrieval.retriever import RetrievalStatus, Retriever
 from mathforge.retrieval.schemas import KnowledgeCard
@@ -117,14 +118,16 @@ def test_run_and_benchmark_provenance_are_complete_and_tamper_evident(tmp_path):
     harness = MathForgeHarness(
         FakeClient(),
         _minimal_config(),
-        model_identifier="public-test-model",
+        model_identity=require_exact_intern_model(),
     )
     result = harness.solve("1 + 1", {})
     provenance = result["provenance"]
 
-    assert provenance["schema_version"] == "1.0"
+    assert provenance["schema_version"] == "1.1"
     assert provenance["code_commit"]
-    assert provenance["model_identifier"] == "public-test-model"
+    assert isinstance(provenance["code_dirty"], bool)
+    assert provenance["model_identity"]["requested_model"] == EXACT_INTERN_MODEL
+    assert provenance["model_identity"]["response_model_observable"] is False
     assert provenance["config"]["schema_version"]
     assert len(provenance["config"]["sha256"]) == 64
     assert len(provenance["prompts"]) == 7
@@ -150,28 +153,42 @@ def test_run_and_benchmark_provenance_are_complete_and_tamper_evident(tmp_path):
             **build_benchmark_metadata(
                 dataset,
                 config_path,
-                model_identifier="public-test-model",
             ),
             "summary": summary,
             "records": [benchmark_record_to_dict(record) for record in records],
         }
     )
     assert validate_artifact(artifact) == []
+    alias_artifact = json.loads(json.dumps(artifact))
+    alias_artifact["requested_model"] = "intern-s2-preview"
+    alias_artifact["run_provenance"]["model_identity"][
+        "requested_model"
+    ] = "intern-s2-preview"
+    alias_artifact = finalize_artifact(alias_artifact)
+    assert validate_artifact(alias_artifact) == [
+        "artifact requested model is not the exact competition model"
+    ]
     artifact["records"][0]["result"]["final_response"] = "tampered"
     assert validate_artifact(artifact) == ["artifact_sha256 mismatch"]
 
 
 def test_artifact_validator_reports_malformed_nested_provenance():
     artifact = {
-        "benchmark_schema_version": "3.1",
+        "benchmark_schema_version": "3.2",
         "dataset_sha256": "0" * 64,
         "config_sha256": "0" * 64,
         "git_commit": "test",
-        "model_identifier": "test-model",
+        "code_dirty": False,
+        "requested_model": EXACT_INTERN_MODEL,
+        "request_source": "environment:INTERN_MODEL",
+        "response_model_observable": False,
+        "thinking_mode_observable": False,
+        "unobservable_reason": "official_client_returns_assistant_content_only",
         "run_provenance": {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "code_commit": "test",
-            "model_identifier": "test-model",
+            "code_dirty": False,
+            "model_identity": None,
             "config": None,
             "prompts": [],
             "skills": [],

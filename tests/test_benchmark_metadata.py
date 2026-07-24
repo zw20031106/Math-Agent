@@ -2,6 +2,7 @@ from hashlib import sha256
 import json
 
 from mathforge.config import HarnessConfig
+from mathforge.model_identity import EXACT_INTERN_MODEL
 from scripts.run_benchmark import BENCHMARK_SCHEMA_VERSION, build_benchmark_metadata
 
 
@@ -24,3 +25,10 @@ def test_benchmark_metadata_hashes_exact_inputs(tmp_path):
     assert len(metadata["rag_sha256"]) == 64
     assert len(metadata["tool_sha256"]) == 64
     assert metadata["git_commit"]
+    assert isinstance(metadata["code_dirty"], bool)
+    assert metadata["requested_model"] == EXACT_INTERN_MODEL
+    assert metadata["request_source"] == "environment:INTERN_MODEL"
+    assert metadata["response_model_observable"] is False
+    assert metadata["thinking_mode_observable"] is False
+    assert "model_identifier" not in metadata
+    assert "response_model" not in metadata

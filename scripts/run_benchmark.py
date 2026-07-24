@@ -11,30 +11,30 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from llm_client import DEFAULT_MODEL, InternChatClient  # noqa: E402
+from llm_client import InternChatClient  # noqa: E402
 from mathforge.agents.registry import PromptContractLoader, SkillRegistry  # noqa: E402
 from mathforge.benchmark import benchmark_record_to_dict, load_jsonl, run_benchmark  # noqa: E402
 from mathforge.config import HarnessConfig, load_competition_config  # noqa: E402
 from mathforge.evaluation.artifacts import finalize_artifact  # noqa: E402
+from mathforge.model_identity import require_exact_intern_model  # noqa: E402
 from mathforge.provenance import build_run_provenance  # noqa: E402
 from mathforge.retrieval.retriever import Retriever  # noqa: E402
 from mathforge.runtime import MathForgeHarness  # noqa: E402
 from mathforge.tools.registry import ToolRegistry  # noqa: E402
 
 
-BENCHMARK_SCHEMA_VERSION = "3.1"
+BENCHMARK_SCHEMA_VERSION = "3.2"
 
 
 def build_benchmark_metadata(
     input_path: Path,
     config_path: Path,
-    *,
-    model_identifier: str = "unreported",
 ) -> dict:
+    model_identity = require_exact_intern_model()
     config = load_benchmark_config(config_path)
     provenance = build_run_provenance(
         config,
-        model_identifier=model_identifier,
+        model_identity=model_identity,
     )
     return {
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
@@ -48,7 +48,8 @@ def build_benchmark_metadata(
         "rag_sha256": Retriever().fingerprint,
         "tool_sha256": ToolRegistry().fingerprint,
         "git_commit": provenance.code_commit,
-        "model_identifier": provenance.model_identifier,
+        "code_dirty": provenance.code_dirty,
+        **model_identity.to_dict(),
         "run_provenance": provenance.to_dict(),
     }
 
@@ -61,14 +62,14 @@ def main() -> int:
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--model-identifier", default=DEFAULT_MODEL)
     args = parser.parse_args()
 
+    model_identity = require_exact_intern_model()
     config = load_benchmark_config(args.config)
     harness = MathForgeHarness(
         InternChatClient(),
         config,
-        model_identifier=args.model_identifier,
+        model_identity=model_identity,
     )
     cases = load_jsonl(args.input)
     records, summary = run_benchmark(
@@ -82,7 +83,6 @@ def main() -> int:
         **build_benchmark_metadata(
             args.input,
             args.config,
-            model_identifier=args.model_identifier,
         ),
         "config": args.config.as_posix(),
         "summary": summary,

@@ -32,6 +32,7 @@ from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.context.role_views import RoleContextFactory
 from mathforge.memory.blackboard import MemoryBlackboard
 from mathforge.harness.lemma_loop import VerifiedLemmaLoop
+from mathforge.model_identity import ModelIdentity
 from mathforge.retrieval.retriever import Retriever
 from mathforge.provenance import build_run_provenance
 from mathforge.verification.evidence import ClaimEvidenceVerifier
@@ -88,7 +89,7 @@ class MathForgeHarness:
         config: HarnessConfig | None = None,
         *,
         debug_sink: DebugSink | None = None,
-        model_identifier: str = "unreported",
+        model_identity: ModelIdentity | None = None,
     ) -> None:
         self._config = config or load_competition_config()
         self._debug_sink = debug_sink
@@ -129,8 +130,9 @@ class MathForgeHarness:
         self._proof_completion_gate = ProofCompletionGate()
         self._run_provenance = build_run_provenance(
             self._config,
-            model_identifier=model_identifier,
+            model_identity=model_identity,
         )
+        identity = ModelIdentity.from_dict(self._run_provenance.model_identity)
         self._provenance = {
             "config_schema_version": self._config.schema_version,
             "config_profile": self._config.profile,
@@ -141,7 +143,8 @@ class MathForgeHarness:
             "rag_hash": self._retriever.fingerprint,
             "tool_hash": self._tool_executor.fingerprint,
             "code_commit": self._run_provenance.code_commit,
-            "model_identifier": self._run_provenance.model_identifier,
+            "code_dirty": self._run_provenance.code_dirty,
+            **identity.to_dict(),
             "provenance_hash": self._run_provenance.fingerprint,
         }
 

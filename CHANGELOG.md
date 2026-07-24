@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### S6-A
+
+- Required the exact lowercase `intern-s2-preview-397b` model request from
+  `INTERN_MODEL`; missing values, aliases, case variants, and caller-supplied
+  display labels now fail closed or are ignored before any model call.
+- Upgraded run provenance to schema 1.1 and benchmark artifacts to schema 3.2,
+  recording the requested model, its environment source, Git dirty state, and
+  the fact that response model and thinking-mode metadata are not observable
+  through the injected chat surface.
+- Added a repository secret-pattern gate that reports only finding type,
+  relative path, and line number, without echoing credential content.
+- Added E0 regression coverage for exact model identity, provenance
+  consistency, alias-artifact rejection, early failure, and credential
+  redaction while preserving the immutable official files.
+
 ### Public output contract
 
 - Restricted `ReasoningAgent.solve()` to the flat public fields `id`,

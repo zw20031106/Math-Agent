@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import sys
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +16,11 @@ if str(ROOT) not in sys.path:
 from scripts.verify_baseline_files import verify  # noqa: E402
 from mathforge.config import load_competition_config  # noqa: E402
 from mathforge.governance.reviews import validate_review_manifest  # noqa: E402
+from mathforge.model_identity import (  # noqa: E402
+    EXACT_INTERN_MODEL,
+    MODEL_ENVIRONMENT_VARIABLE,
+)
+from scripts.scan_secrets import scan_repository  # noqa: E402
 from user_agent import ReasoningAgent  # noqa: E402
 
 
@@ -36,7 +43,14 @@ def validate(max_file_mb: float = 5.0) -> list[str]:
         )
     )
     try:
-        result = ReasoningAgent(client=OfflineClient()).solve("Calculate the integer 1+1", {})
+        with patch.dict(
+            os.environ,
+            {MODEL_ENVIRONMENT_VARIABLE: EXACT_INTERN_MODEL},
+        ):
+            result = ReasoningAgent(client=OfflineClient()).solve(
+                "Calculate the integer 1+1",
+                {},
+            )
         json.dumps(result)
         if set(result) != {"id", "final_response", "trace"}:
             errors.append("public result fields are invalid")
@@ -46,6 +60,10 @@ def validate(max_file_mb: float = 5.0) -> list[str]:
             errors.append("final_response is empty")
     except Exception as error:
         errors.append(f"public interface failed: {type(error).__name__}")
+    errors.extend(
+        f"potential {finding.kind}: {finding.path}:{finding.line}"
+        for finding in scan_repository(ROOT)
+    )
 
     scan_paths = [ROOT / "mathforge", ROOT / "user_agent.py"]
     for scan_path in scan_paths:

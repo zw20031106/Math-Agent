@@ -47,12 +47,19 @@ For one atomic JSON file per input case, written immediately when that case
 finishes, use:
 
 ```bash
-python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --concurrency 4 --model-identifier public-model-name
+export INTERN_MODEL=intern-s2-preview-397b
+python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --concurrency 4
 ```
 
 Files are named `<id>.json` and contain exactly `id`, `final_response`, and
 `trace`, without a `result` wrapper. The official `main.py` remains byte-frozen
 and retains the competition sample's `idx/status` wrapper.
+
+`INTERN_MODEL` is mandatory and must be the exact lowercase ID shown above.
+Aliases such as `intern-s2-preview` and caller-supplied display labels are
+rejected. The official chat surface returns assistant content but no response
+model or thinking-mode metadata, so provenance records the requested model and
+marks those response-side fields as unobservable instead of inferring them.
 
 ## Verification
 
@@ -63,6 +70,7 @@ mypy mathforge user_agent.py
 pytest -q
 pytest --cov=mathforge --cov-branch --cov-report=term-missing
 python scripts/check_coverage_gates.py
+python scripts/scan_secrets.py
 python scripts/verify_content_reviews.py
 python scripts/verify_baseline_files.py
 python scripts/validate_submission.py
@@ -75,10 +83,10 @@ Rebuild the reviewed offline FTS5 database atomically with
 missing-database, unavailable-FTS, and query-error outcomes. A `verified`
 knowledge card additionally requires two distinct verification reviewers.
 
-Run any A0–A10 overlay with an explicit public model identifier:
+Run any A0–A10 overlay after exporting the exact competition model:
 
 ```bash
-python scripts/run_benchmark.py --input cases.jsonl --config config/ablation/A4.json --output benchmark-results/A4.json --repetitions 5 --seed 23 --model-identifier public-model-name
+python scripts/run_benchmark.py --input cases.jsonl --config config/ablation/A4.json --output benchmark-results/A4.json --repetitions 5 --seed 23
 python scripts/verify_benchmark_artifact.py benchmark-results/A4.json
 ```
 
@@ -91,6 +99,7 @@ wheelhouse; installation and the smoke test are offline.
 
 ## Runtime configuration
 
+- `INTERN_MODEL=intern-s2-preview-397b`: required exact model request; aliases fail closed.
 - `MATHFORGE_MODEL_MAX_CONCURRENCY`: bounded shared client concurrency (default `4`).
 - `MATHFORGE_USE_MCP=1`: explicitly opt into the one-shot local StdIO adapter;
   Direct remains the production default.
