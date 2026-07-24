@@ -115,13 +115,13 @@ class SolverExecutor:
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            deadline=budget.deadline,
+            budget=budget,
+            stage=stage,
         )
         if not response.strip():
             raise ValueError("empty solver response")
         if budget.deadline.must_finalize():
             raise BudgetExceeded("solver response arrived after finalize cutoff")
-        budget.record_tokens(max(1, len(response) // 4))
         budget.ensure_stage("solution_parser")
         candidate = self._parser.parse(
             response,

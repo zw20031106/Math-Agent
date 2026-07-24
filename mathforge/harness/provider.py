@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from threading import BoundedSemaphore, Event, Thread
+from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
+from mathforge.context.errors import ContextBudgetExceeded
+from mathforge.harness.context_budget import ModelContextBudget
 from mathforge.harness.errors import BudgetExceeded
 
 if TYPE_CHECKING:
+    from mathforge.harness.budget import CallBudget
     from mathforge.harness.deadline import DeadlineController
 
 
@@ -55,11 +59,20 @@ class ModelCallGate:
 class OfficialClientProvider:
     """Expose only the documented chat surface of the injected client."""
 
-    def __init__(self, client: Any, gate: ModelCallGate) -> None:
+    def __init__(
+        self,
+        client: Any,
+        gate: ModelCallGate,
+        context_budget: ModelContextBudget | None = None,
+    ) -> None:
         if not callable(getattr(client, "chat", None)):
             raise TypeError("client must expose a callable chat method")
         self._chat = client.chat
         self._gate = gate
+        self._context_budget = context_budget or ModelContextBudget(
+            context_window_tokens=262144,
+            safety_margin_tokens=8192,
+        )
 
     def chat(
         self,
@@ -68,14 +81,67 @@ class OfficialClientProvider:
         temperature: float,
         max_tokens: int,
         deadline: "DeadlineController | None" = None,
+        budget: "CallBudget | None" = None,
+        stage: str = "unallocated",
     ) -> str:
-        response = self._gate.call(
-            self._chat,
-            deadline=deadline,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
+        allocation = self._context_budget.allocate(
+            messages,
+            configured_max_output_tokens=max_tokens,
         )
+        call_index = (
+            budget.record_model_call_started(stage, allocation.to_dict())
+            if budget is not None
+            else None
+        )
+        active_deadline = budget.deadline if budget is not None else deadline
+        started = perf_counter()
+        try:
+            response = self._gate.call(
+                self._chat,
+                deadline=active_deadline,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=allocation.max_output_tokens,
+            )
+        except BudgetExceeded as error:
+            if budget is not None and call_index is not None:
+                if "response exceeded" in str(error):
+                    budget.record_model_call_timeout(
+                        call_index,
+                        perf_counter() - started,
+                    )
+                else:
+                    budget.record_model_call_failed(
+                        call_index,
+                        perf_counter() - started,
+                    )
+            raise
+        except BaseException:
+            if budget is not None and call_index is not None:
+                budget.record_model_call_failed(
+                    call_index,
+                    perf_counter() - started,
+                )
+            raise
         if not isinstance(response, str):
+            if budget is not None and call_index is not None:
+                budget.record_model_call_failed(
+                    call_index,
+                    perf_counter() - started,
+                )
             raise TypeError("client.chat must return a string")
+        output = self._context_budget.count_text(response)
+        if budget is not None and call_index is not None:
+            budget.record_model_call_completed(
+                call_index,
+                observed_output_tokens=output.tokens,
+                output_counting_mode=output.counting_mode,
+                output_chars=len(response),
+                elapsed_seconds=perf_counter() - started,
+            )
+            budget.record_tokens(output.tokens)
+        if output.tokens > allocation.max_output_tokens:
+            raise ContextBudgetExceeded(
+                "model response exceeds its dynamically allocated output budget"
+            )
         return response

@@ -12,23 +12,35 @@ from mathforge.harness.errors import BudgetExceeded
 class CallBudget:
     max_calls: int
     used_calls: int = 0
-    max_tokens: int = 24000
+    max_tokens: int = 0
     used_tokens: int = 0
-    soft_deadline_seconds: float = 720.0
-    exploration_deadline_seconds: float = 780.0
+    soft_deadline_seconds: float = 600.0
+    exploration_deadline_seconds: float = 705.0
     hard_deadline_seconds: float = 870.0
-    deterministic_finalize_reserve_seconds: float = 5.0
-    model_call_start_margin_seconds: float = 0.0
+    deterministic_finalize_reserve_seconds: float = 30.0
+    model_call_start_margin_seconds: float = 135.0
     max_claims: int = 64
     max_tool_calls: int = 32
     max_isolated_tool_calls: int = 16
     max_tool_seconds: float = 30.0
     max_evidence_records: int = 256
-    max_prompt_chars_total: int = 200000
+    max_prompt_chars_total: int = 5000000
+    token_limit_mode: str = "dynamic_context"
+    model_context_window_tokens: int = 262144
+    context_safety_margin_tokens: int = 8192
 
     def __post_init__(self) -> None:
-        if self.max_calls < 1 or self.max_tokens < 1:
-            raise ValueError("model call and token budgets must be positive")
+        if self.max_calls < 1 or self.max_tokens < 0:
+            raise ValueError("model call budget must be positive and token quota nonnegative")
+        if self.token_limit_mode not in {"dynamic_context", "configured_cap"}:
+            raise ValueError("token limit mode is invalid")
+        if (
+            self.model_context_window_tokens <= 0
+            or self.context_safety_margin_tokens < 0
+            or self.context_safety_margin_tokens
+            >= self.model_context_window_tokens
+        ):
+            raise ValueError("model context window settings are invalid")
         if not 1 <= self.max_claims <= 64:
             raise ValueError("max_claims must be in [1, 64]")
         if self.max_tool_calls < 1 or self.max_isolated_tool_calls < 1:
@@ -50,6 +62,17 @@ class CallBudget:
         self.used_tool_seconds = 0.0
         self.used_evidence_records = 0
         self.used_prompt_chars = 0
+        self.prompt_tokens = 0
+        self.official_prompt_tokens = 0
+        self.fallback_prompt_tokens = 0
+        self.requested_output_tokens = 0
+        self.observed_output_tokens = 0
+        self.output_chars = 0
+        self.model_call_elapsed_seconds = 0.0
+        self.model_call_timeout_count = 0
+        self.model_call_records: list[dict] = []
+        self.final_response_tokens = 0
+        self.final_response_counting_mode = ""
         self.deadline = DeadlineController(
             soft_deadline_seconds=self.soft_deadline_seconds,
             exploration_deadline_seconds=self.exploration_deadline_seconds,
@@ -87,9 +110,91 @@ class CallBudget:
     def record_tokens(self, tokens: int) -> None:
         with self._lock:
             proposed = self.used_tokens + max(0, int(tokens))
-            if proposed > self.max_tokens:
+            if self.max_tokens > 0 and proposed > self.max_tokens:
                 raise BudgetExceeded("model token budget exhausted")
             self.used_tokens = proposed
+
+    def record_model_call_started(self, stage: str, allocation: dict) -> int:
+        with self._lock:
+            prompt_tokens = max(0, int(allocation["prompt_tokens"]))
+            requested = max(0, int(allocation["max_output_tokens"]))
+            mode = str(allocation["counting_mode"])
+            self.prompt_tokens += prompt_tokens
+            self.requested_output_tokens += requested
+            if mode == "official_tokenizer":
+                self.official_prompt_tokens += prompt_tokens
+            else:
+                self.fallback_prompt_tokens += prompt_tokens
+            record = {
+                "stage": str(stage),
+                **dict(allocation),
+                "started_elapsed_seconds": round(
+                    self.deadline.elapsed_seconds(),
+                    6,
+                ),
+                "deadline_phase": self.deadline.phase(),
+                "status": "started",
+                "observed_output_tokens": 0,
+                "output_counting_mode": "",
+                "output_chars": 0,
+                "elapsed_seconds": 0.0,
+            }
+            self.model_call_records.append(record)
+            return len(self.model_call_records) - 1
+
+    def record_model_call_completed(
+        self,
+        index: int,
+        *,
+        observed_output_tokens: int,
+        output_counting_mode: str,
+        output_chars: int,
+        elapsed_seconds: float,
+    ) -> None:
+        with self._lock:
+            observed = max(0, int(observed_output_tokens))
+            characters = max(0, int(output_chars))
+            elapsed = max(0.0, float(elapsed_seconds))
+            self.observed_output_tokens += observed
+            self.output_chars += characters
+            self.model_call_elapsed_seconds += elapsed
+            self.model_call_records[index].update(
+                {
+                    "status": "completed",
+                    "observed_output_tokens": observed,
+                    "output_counting_mode": str(output_counting_mode),
+                    "output_chars": characters,
+                    "elapsed_seconds": round(elapsed, 6),
+                }
+            )
+
+    def record_model_call_timeout(self, index: int, elapsed_seconds: float) -> None:
+        with self._lock:
+            elapsed = max(0.0, float(elapsed_seconds))
+            self.model_call_timeout_count += 1
+            self.model_call_elapsed_seconds += elapsed
+            self.model_call_records[index].update(
+                {
+                    "status": "timeout",
+                    "elapsed_seconds": round(elapsed, 6),
+                }
+            )
+
+    def record_model_call_failed(self, index: int, elapsed_seconds: float) -> None:
+        with self._lock:
+            elapsed = max(0.0, float(elapsed_seconds))
+            self.model_call_elapsed_seconds += elapsed
+            self.model_call_records[index].update(
+                {
+                    "status": "failed",
+                    "elapsed_seconds": round(elapsed, 6),
+                }
+            )
+
+    def record_final_response(self, tokens: int, counting_mode: str) -> None:
+        with self._lock:
+            self.final_response_tokens = max(0, int(tokens))
+            self.final_response_counting_mode = str(counting_mode)
 
     def soft_expired(self) -> bool:
         return not self.deadline.optional_work_allowed()
@@ -157,8 +262,31 @@ class CallBudget:
             return {
                 "max_calls": self.max_calls,
                 "used_calls": self.used_calls,
+                "model_calls": self.used_calls,
                 "max_tokens": self.max_tokens,
                 "used_tokens": self.used_tokens,
+                "estimated_tokens": self.used_tokens,
+                "token_limit_mode": self.token_limit_mode,
+                "model_context_window_tokens": self.model_context_window_tokens,
+                "context_safety_margin_tokens": self.context_safety_margin_tokens,
+                "prompt_tokens": self.prompt_tokens,
+                "official_prompt_tokens": self.official_prompt_tokens,
+                "fallback_prompt_tokens": self.fallback_prompt_tokens,
+                "requested_output_tokens": self.requested_output_tokens,
+                "observed_output_tokens": self.observed_output_tokens,
+                "output_chars": self.output_chars,
+                "model_call_elapsed_seconds": round(
+                    self.model_call_elapsed_seconds,
+                    6,
+                ),
+                "model_call_timeout_count": self.model_call_timeout_count,
+                "final_response_tokens": self.final_response_tokens,
+                "final_response_counting_mode": (
+                    self.final_response_counting_mode
+                ),
+                "model_call_records": [
+                    dict(record) for record in self.model_call_records
+                ],
                 "max_claims": self.max_claims,
                 "used_claims": self.used_claims,
                 "max_tool_calls": self.max_tool_calls,
@@ -171,6 +299,7 @@ class CallBudget:
                 "used_evidence_records": self.used_evidence_records,
                 "max_prompt_chars_total": self.max_prompt_chars_total,
                 "used_prompt_chars": self.used_prompt_chars,
+                "prompt_chars": self.used_prompt_chars,
                 "call_allocation": (
                     self._allocation_plan.to_dict()
                     if self._allocation_plan is not None
@@ -181,4 +310,5 @@ class CallBudget:
                 "finalize_reserve_seconds": self.deadline.finalize_reserve_seconds,
                 "soft_expired": self.soft_expired(),
                 "exploration_open": self.can_start_exploration(),
+                "deadline_phase": self.deadline.phase(),
             }

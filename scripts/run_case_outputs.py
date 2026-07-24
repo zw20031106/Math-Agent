@@ -6,6 +6,9 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from threading import Event, Thread
+from time import perf_counter
+from typing import Any, Callable
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,10 +17,103 @@ if str(ROOT) not in sys.path:
 
 from llm_client import InternChatClient  # noqa: E402
 from mathforge.benchmark import BenchmarkRecord, load_jsonl, run_benchmark  # noqa: E402
+from mathforge.harness.metrics import RunMetrics  # noqa: E402
 from mathforge.model_identity import require_exact_intern_model  # noqa: E402
 from mathforge.output.public_result import build_public_result  # noqa: E402
 from mathforge.runtime import MathForgeHarness  # noqa: E402
 from scripts.run_benchmark import load_benchmark_config  # noqa: E402
+
+
+PER_CASE_WALL_CLOCK_SECONDS = 900.0
+RESULT_SERIALIZATION_RESERVE_SECONDS = 30.0
+
+
+class PerCaseWallClockRunner:
+    """Return a terminal result before the 15-minute persistence deadline."""
+
+    def __init__(
+        self,
+        solve: Callable[[str, dict[str, Any]], dict[str, Any]],
+        *,
+        wall_clock_seconds: float = PER_CASE_WALL_CLOCK_SECONDS,
+        serialization_reserve_seconds: float = RESULT_SERIALIZATION_RESERVE_SECONDS,
+    ) -> None:
+        if wall_clock_seconds <= 0:
+            raise ValueError("wall_clock_seconds must be positive")
+        if not 0 < serialization_reserve_seconds < wall_clock_seconds:
+            raise ValueError(
+                "serialization_reserve_seconds must be positive and below the wall clock"
+            )
+        self._solve = solve
+        self.wall_clock_seconds = float(wall_clock_seconds)
+        self.serialization_reserve_seconds = float(serialization_reserve_seconds)
+        self.harness_return_seconds = (
+            self.wall_clock_seconds - self.serialization_reserve_seconds
+        )
+
+    def solve(self, problem: str, metadata: dict[str, Any]) -> dict[str, Any]:
+        completed = Event()
+        outcome: dict[str, Any] = {}
+        started = perf_counter()
+
+        def invoke() -> None:
+            try:
+                outcome["result"] = self._solve(problem, metadata)
+            except BaseException as error:
+                outcome["error"] = error
+            finally:
+                completed.set()
+
+        Thread(
+            target=invoke,
+            name="mathforge-per-case-wall-clock",
+            daemon=True,
+        ).start()
+        if not completed.wait(self.harness_return_seconds):
+            return self._timeout_result(perf_counter() - started)
+        if "error" in outcome:
+            raise outcome["error"]
+        result = outcome.get("result")
+        if not isinstance(result, dict):
+            raise TypeError("solve must return a mapping")
+        return result
+
+    def _timeout_result(self, elapsed_seconds: float) -> dict[str, Any]:
+        elapsed = max(0.0, float(elapsed_seconds))
+        final_response = (
+            "未能在单题 15 分钟墙钟限制内完成求解；"
+            "为避免输出未经验证的结论，本题返回确定性超时结果。"
+        )
+        trace = [
+            {
+                "event": "per_case_wall_clock_timeout",
+                "elapsed_seconds": round(elapsed, 6),
+                "wall_clock_seconds": self.wall_clock_seconds,
+                "serialization_reserve_seconds": (
+                    self.serialization_reserve_seconds
+                ),
+                "error_code": "per_case_wall_clock_exceeded",
+            },
+            {
+                "event": "run_completed",
+                "outcome": "timeout",
+                "final_phase": "timeout_completed",
+                "error_code": "per_case_wall_clock_exceeded",
+            },
+        ]
+        metrics = RunMetrics(
+            elapsed_seconds=round(elapsed, 6),
+            outcome="timeout",
+            final_phase="timeout_completed",
+            error_code="per_case_wall_clock_exceeded",
+            per_case_wall_clock_timeout_count=1,
+            deadline_phase="hard_expired",
+        )
+        return {
+            "final_response": final_response,
+            "trace": trace,
+            "run_metrics": metrics.to_dict(),
+        }
 
 
 def main() -> int:
@@ -43,6 +139,7 @@ def main() -> int:
         config,
         model_identity=model_identity,
     )
+    wall_clock_runner = PerCaseWallClockRunner(harness.solve)
 
     def persist(record: BenchmarkRecord) -> None:
         path = write_case_output(record, args.output_dir)
@@ -50,7 +147,7 @@ def main() -> int:
 
     _, summary = run_benchmark(
         load_jsonl(args.input),
-        harness.solve,
+        wall_clock_runner.solve,
         concurrency=args.concurrency,
         seed=args.seed,
         on_record_completed=persist,

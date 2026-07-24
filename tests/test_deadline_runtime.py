@@ -197,7 +197,6 @@ def test_soft_cutoff_disables_optional_runtime_stages_before_they_start():
         "alternatives",
         "rag",
         "lemma",
-        "repair",
         "finalizer",
     ]
     assert client.calls == 1

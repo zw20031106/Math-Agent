@@ -52,7 +52,7 @@ def _run(answer: str, solution_text: str = "Proof", extra: dict | None = None):
         candidate,
         "Proof\n\nFinal answer: 42",
         CallBudget(1),
-        max_tokens=100,
+        max_tokens=0,
     )
 
 

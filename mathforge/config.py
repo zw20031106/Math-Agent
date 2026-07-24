@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 
-CONFIG_SCHEMA_VERSION = "1.1"
+CONFIG_SCHEMA_VERSION = "1.2"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPETITION_CONFIG_PATH = REPO_ROOT / "config" / "competition.json"
 _METADATA_FIELDS = frozenset({"schema_version", "profile", "status"})
@@ -23,24 +23,27 @@ class HarnessConfig:
     status: str = "custom"
     model_max_concurrency: int = 4
     primary_temperature: float = 0.2
-    primary_max_tokens: int = 4096
-    max_model_calls: int = 4
+    primary_max_tokens: int = 0
+    max_model_calls: int = 6
     skill_char_budget: int = 6000
     raw_context_max_chars: int = 48000
     use_mcp: bool = False
-    max_model_tokens: int = 24000
-    soft_deadline_seconds: float = 720.0
-    exploration_deadline_seconds: float = 780.0
+    max_model_tokens: int = 0
+    model_context_window_tokens: int = 262144
+    context_safety_margin_tokens: int = 8192
+    soft_deadline_seconds: float = 600.0
+    exploration_deadline_seconds: float = 705.0
     hard_deadline_seconds: float = 870.0
-    deterministic_finalize_reserve_seconds: float = 5.0
-    model_call_start_margin_seconds: float = 10.0
-    trace_max_chars: int = 12000
+    deterministic_finalize_reserve_seconds: float = 30.0
+    model_call_start_margin_seconds: float = 135.0
+    trace_max_chars: int = 0
+    trace_max_events: int = 0
     max_claims: int = 64
     max_tool_calls: int = 32
     max_isolated_tool_calls: int = 16
     max_tool_seconds: float = 30.0
     max_evidence_records: int = 256
-    max_prompt_chars_total: int = 200000
+    max_prompt_chars_total: int = 5000000
     enable_router: bool = True
     enable_skills: bool = True
     enable_alternatives: bool = True
@@ -108,12 +111,15 @@ class HarnessConfig:
 
         integer_ranges = {
             "model_max_concurrency": (1, 64),
-            "primary_max_tokens": (1, 65536),
+            "primary_max_tokens": (0, 262144),
             "max_model_calls": (1, 64),
             "skill_char_budget": (1, 200000),
             "raw_context_max_chars": (256, 1000000),
-            "max_model_tokens": (1, 1000000),
-            "trace_max_chars": (256, 1000000),
+            "max_model_tokens": (0, 10000000),
+            "model_context_window_tokens": (262144, 262144),
+            "context_safety_margin_tokens": (1, 131072),
+            "trace_max_chars": (0, 1000000),
+            "trace_max_events": (0, 100000),
             "max_claims": (1, 64),
             "max_tool_calls": (1, 10000),
             "max_isolated_tool_calls": (1, 10000),
@@ -172,8 +178,25 @@ class HarnessConfig:
             raise ValueError(
                 "model call start and finalize reserves must be below hard deadline"
             )
-        if self.primary_max_tokens > self.max_model_tokens:
+        if self.context_safety_margin_tokens >= self.model_context_window_tokens:
+            raise ValueError(
+                "context_safety_margin_tokens must be below the context window"
+            )
+        if (
+            self.primary_max_tokens > 0
+            and self.max_model_tokens > 0
+            and self.primary_max_tokens > self.max_model_tokens
+        ):
             raise ValueError("primary_max_tokens must not exceed max_model_tokens")
+        if (
+            self.primary_max_tokens > 0
+            and self.primary_max_tokens
+            + self.context_safety_margin_tokens
+            >= self.model_context_window_tokens
+        ):
+            raise ValueError(
+                "primary_max_tokens and safety margin must leave prompt capacity"
+            )
         if self.skill_char_budget > self.raw_context_max_chars:
             raise ValueError("skill_char_budget must not exceed raw_context_max_chars")
         if self.raw_context_max_chars > self.max_prompt_chars_total:

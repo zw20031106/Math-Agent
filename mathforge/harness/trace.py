@@ -61,20 +61,20 @@ class TraceBuilder:
                 for existing in self._events
                 if existing.get("event") != event
             ]
-            while len(self._events) >= self._max_events:
+            while self._max_events > 0 and len(self._events) >= self._max_events:
                 if not self._evict_nonterminal():
                     self._events.pop(0)
             self._events.append(item)
-            while self._serialized_size() > self._max_chars:
+            while self._max_chars > 0 and self._serialized_size() > self._max_chars:
                 if not self._evict_nonterminal():
                     self._events.pop(0)
                     if not self._events:
                         break
             return
-        if len(self._events) >= self._max_events:
+        if self._max_events > 0 and len(self._events) >= self._max_events:
             return
         self._events.append(item)
-        if self._serialized_size() > self._max_chars:
+        if self._max_chars > 0 and self._serialized_size() > self._max_chars:
             self._events.pop()
 
     def _evict_nonterminal(self) -> bool:

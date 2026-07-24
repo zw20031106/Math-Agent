@@ -123,11 +123,13 @@ def test_run_and_benchmark_provenance_are_complete_and_tamper_evident(tmp_path):
     result = harness.solve("1 + 1", {})
     provenance = result["provenance"]
 
-    assert provenance["schema_version"] == "1.1"
+    assert provenance["schema_version"] == "1.2"
     assert provenance["code_commit"]
     assert isinstance(provenance["code_dirty"], bool)
     assert provenance["model_identity"]["requested_model"] == EXACT_INTERN_MODEL
     assert provenance["model_identity"]["response_model_observable"] is False
+    assert provenance["tokenizer"]["repository"] == "internlm/Intern-S2-Preview-397B"
+    assert len(provenance["tokenizer"]["tokenizer_json_sha256"]) == 64
     assert provenance["config"]["schema_version"]
     assert len(provenance["config"]["sha256"]) == 64
     assert len(provenance["prompts"]) == 7
@@ -174,7 +176,7 @@ def test_run_and_benchmark_provenance_are_complete_and_tamper_evident(tmp_path):
 
 def test_artifact_validator_reports_malformed_nested_provenance():
     artifact = {
-        "benchmark_schema_version": "3.2",
+        "benchmark_schema_version": "3.3",
         "dataset_sha256": "0" * 64,
         "config_sha256": "0" * 64,
         "git_commit": "test",
@@ -185,10 +187,11 @@ def test_artifact_validator_reports_malformed_nested_provenance():
         "thinking_mode_observable": False,
         "unobservable_reason": "official_client_returns_assistant_content_only",
         "run_provenance": {
-            "schema_version": "1.1",
+            "schema_version": "1.2",
             "code_commit": "test",
             "code_dirty": False,
             "model_identity": None,
+            "tokenizer": None,
             "config": None,
             "prompts": [],
             "skills": [],

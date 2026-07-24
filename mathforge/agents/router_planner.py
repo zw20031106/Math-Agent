@@ -218,7 +218,7 @@ class RouterPlanner:
         *,
         llm_chat: Callable[..., str] | None = None,
         consume_call: Callable[[], None] | None = None,
-        record_tokens: Callable[[int], None] | None = None,
+        max_tokens: int = 0,
         context_view: RoleContextView | None = None,
         record_prompt_chars: Callable[[int], None] | None = None,
     ) -> RoutePlan:
@@ -251,10 +251,8 @@ class RouterPlanner:
             response = llm_chat(
                 messages=messages,
                 temperature=0.0,
-                max_tokens=256,
+                max_tokens=max_tokens,
             )
-            if record_tokens is not None:
-                record_tokens(max(1, len(response) // 4))
             match = re.search(r"\{.*\}", response, re.DOTALL)
             payload = json.loads(match.group(0)) if match else {}
             primary = str(payload.get("primary_subject", "general-math"))

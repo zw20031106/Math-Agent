@@ -514,10 +514,6 @@ class CandidateSolution:
             raise SchemaValidationError("invalid candidate version")
         if len(self.method) > 256:
             raise SchemaValidationError("candidate method is too long")
-        if len(self.final_answer) > 4096:
-            raise SchemaValidationError("candidate final answer is too long")
-        if len(self.solution_text) > 48000:
-            raise SchemaValidationError("candidate solution text is too long")
         if not isinstance(self.claims, list) or any(
             not isinstance(claim, Claim) for claim in self.claims
         ):

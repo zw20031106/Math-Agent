@@ -26,6 +26,9 @@ from user_agent import ReasoningAgent  # noqa: E402
 
 _FORBIDDEN_IMPORTS = re.compile(r"^\s*(?:from|import)\s+(openai|anthropic|httpx|socket|urllib)", re.M)
 _WINDOWS_ABSOLUTE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:[\\/]")
+_GENERATED_DIRECTORIES = frozenset(
+    {".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__"}
+)
 
 
 class OfflineClient:
@@ -78,7 +81,11 @@ def validate(max_file_mb: float = 5.0) -> list[str]:
 
     limit = int(max_file_mb * 1024 * 1024)
     for path in ROOT.rglob("*"):
-        if path.is_file() and ".git" not in path.parts and path.stat().st_size > limit:
+        if (
+            path.is_file()
+            and not _GENERATED_DIRECTORIES.intersection(path.parts)
+            and path.stat().st_size > limit
+        ):
             errors.append(f"oversized file: {path.relative_to(ROOT).as_posix()}")
     return errors
 

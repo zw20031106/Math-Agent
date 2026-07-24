@@ -9,6 +9,7 @@ from typing import Any
 
 from mathforge.agents.registry import PromptContractLoader, SkillRegistry
 from mathforge.config import HarnessConfig
+from mathforge.harness.context_budget import tokenizer_provenance
 from mathforge.harness.fingerprints import file_fingerprint, semantic_fingerprint
 from mathforge.model_identity import ModelIdentity, unreported_model_identity
 from mathforge.retrieval.retriever import Retriever
@@ -16,7 +17,7 @@ from mathforge.retrieval.schemas import RAG_SCHEMA_VERSION
 from mathforge.tools.registry import ToolRegistry
 
 
-PROVENANCE_SCHEMA_VERSION = "1.1"
+PROVENANCE_SCHEMA_VERSION = "1.2"
 ROOT = Path(__file__).resolve().parents[1]
 CONTENT_REVIEW_MANIFEST = ROOT / "docs" / "content_review_manifest.json"
 COMPONENT_DECISIONS = ROOT / "config" / "component_decisions.json"
@@ -28,6 +29,7 @@ class RunProvenance:
     code_commit: str
     code_dirty: bool | None
     model_identity: dict[str, Any]
+    tokenizer: dict[str, str]
     config: dict[str, str]
     prompts: list[dict[str, str]]
     skills: list[dict[str, str]]
@@ -53,6 +55,24 @@ class RunProvenance:
         if self.code_dirty is not None and not isinstance(self.code_dirty, bool):
             raise ValueError("provenance dirty state is invalid")
         ModelIdentity.from_dict(self.model_identity)
+        if not self.tokenizer.get("repository") or not self.tokenizer.get("revision"):
+            raise ValueError("tokenizer provenance identity is incomplete")
+        _require_sha256(
+            self.tokenizer.get("tokenizer_json_sha256"),
+            "tokenizer JSON",
+        )
+        _require_sha256(
+            self.tokenizer.get("tokenizer_config_sha256"),
+            "tokenizer config",
+        )
+        _require_sha256(
+            self.tokenizer.get("chat_template_sha256"),
+            "tokenizer chat template",
+        )
+        _require_sha256(
+            self.tokenizer.get("fallback_sha256"),
+            "tokenizer fallback",
+        )
         if not self.config.get("schema_version"):
             raise ValueError("provenance config schema version is required")
         _require_sha256(self.config.get("sha256"), "config")
@@ -92,6 +112,7 @@ class RunProvenance:
             "code_commit",
             "code_dirty",
             "model_identity",
+            "tokenizer",
             "config",
             "prompts",
             "skills",
@@ -140,6 +161,7 @@ def build_run_provenance(
         code_commit=str(static["code_commit"]),
         code_dirty=static["code_dirty"],
         model_identity=(model_identity or unreported_model_identity()).to_dict(),
+        tokenizer=tokenizer_provenance(),
         config={
             "schema_version": config.schema_version,
             "profile": config.profile,

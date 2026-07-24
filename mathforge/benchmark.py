@@ -301,6 +301,47 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
             if records
             else 0.0
         ),
+        "average_prompt_tokens": (
+            sum(item.prompt_tokens for item in metrics) / len(records)
+            if records
+            else 0.0
+        ),
+        "average_official_prompt_tokens": (
+            sum(item.official_prompt_tokens for item in metrics) / len(records)
+            if records
+            else 0.0
+        ),
+        "average_fallback_prompt_tokens": (
+            sum(item.fallback_prompt_tokens for item in metrics) / len(records)
+            if records
+            else 0.0
+        ),
+        "average_requested_output_tokens": (
+            sum(item.requested_output_tokens for item in metrics) / len(records)
+            if records
+            else 0.0
+        ),
+        "average_observed_output_tokens": (
+            sum(item.observed_output_tokens for item in metrics) / len(records)
+            if records
+            else 0.0
+        ),
+        "average_output_chars": (
+            sum(item.output_chars for item in metrics) / len(records)
+            if records
+            else 0.0
+        ),
+        "model_call_timeout_count": sum(
+            item.model_call_timeout_count for item in metrics
+        ),
+        "per_case_wall_clock_timeout_count": sum(
+            item.per_case_wall_clock_timeout_count for item in metrics
+        ),
+        "timeout_rate": (
+            sum(item.outcome == "timeout" for item in metrics) / len(records)
+            if records
+            else 0.0
+        ),
         "latency_p50_seconds": _percentile(latencies, 0.50),
         "latency_p95_seconds": _percentile(latencies, 0.95),
         "json_failure_rate": (
@@ -511,19 +552,21 @@ def _metrics_from_payload(
         event for event in trace if event.get("event") == "retrieval_completed"
     ]
     legacy = payload if isinstance(payload, dict) else {}
+    terminal = _last_event(trace, "run_completed")
     outcome = str(
         legacy.get(
             "outcome",
-            (
+            terminal.get(
+                "outcome",
                 "error"
                 if result.get("error_type")
                 else "fallback"
                 if _last_event(trace, "fallback_used")
-                else "primary"
+                else "primary",
             ),
         )
     )
-    if outcome not in {"primary", "fallback", "error"}:
+    if outcome not in {"primary", "fallback", "error", "timeout"}:
         outcome = "error"
     return RunMetrics(
         session_id=str(legacy.get("session_id", session_id or "")),
@@ -533,6 +576,90 @@ def _metrics_from_payload(
         model_calls=_nonnegative_int(cost_source.get("model_calls", 0)),
         estimated_tokens=_nonnegative_int(
             cost_source.get("estimated_tokens", 0)
+        ),
+        prompt_tokens=_nonnegative_int(
+            legacy.get("prompt_tokens", cost_source.get("prompt_tokens", 0))
+        ),
+        official_prompt_tokens=_nonnegative_int(
+            legacy.get(
+                "official_prompt_tokens",
+                cost_source.get("official_prompt_tokens", 0),
+            )
+        ),
+        fallback_prompt_tokens=_nonnegative_int(
+            legacy.get(
+                "fallback_prompt_tokens",
+                cost_source.get("fallback_prompt_tokens", 0),
+            )
+        ),
+        requested_output_tokens=_nonnegative_int(
+            legacy.get(
+                "requested_output_tokens",
+                cost_source.get("requested_output_tokens", 0),
+            )
+        ),
+        observed_output_tokens=_nonnegative_int(
+            legacy.get(
+                "observed_output_tokens",
+                cost_source.get("observed_output_tokens", 0),
+            )
+        ),
+        output_chars=_nonnegative_int(
+            legacy.get("output_chars", cost_source.get("output_chars", 0))
+        ),
+        model_call_timeout_count=_nonnegative_int(
+            legacy.get(
+                "model_call_timeout_count",
+                cost_source.get("model_call_timeout_count", 0),
+            )
+        ),
+        per_case_wall_clock_timeout_count=_nonnegative_int(
+            legacy.get(
+                "per_case_wall_clock_timeout_count",
+                int(outcome == "timeout"),
+            )
+        ),
+        final_response_tokens=_nonnegative_int(
+            legacy.get(
+                "final_response_tokens",
+                cost_source.get("final_response_tokens", 0),
+            )
+        ),
+        context_window_tokens=_nonnegative_int(
+            legacy.get(
+                "context_window_tokens",
+                cost_source.get("model_context_window_tokens", 0),
+            )
+        ),
+        safety_margin_tokens=_nonnegative_int(
+            legacy.get(
+                "safety_margin_tokens",
+                cost_source.get("context_safety_margin_tokens", 0),
+            )
+        ),
+        model_call_elapsed_seconds=_nonnegative_float(
+            legacy.get(
+                "model_call_elapsed_seconds",
+                cost_source.get("model_call_elapsed_seconds", 0.0),
+            )
+        ),
+        token_limit_mode=str(
+            legacy.get(
+                "token_limit_mode",
+                cost_source.get("token_limit_mode", ""),
+            )
+        ),
+        final_response_counting_mode=str(
+            legacy.get(
+                "final_response_counting_mode",
+                cost_source.get("final_response_counting_mode", ""),
+            )
+        ),
+        deadline_phase=str(
+            legacy.get(
+                "deadline_phase",
+                cost_source.get("deadline_phase", ""),
+            )
         ),
         claims=_nonnegative_int(legacy.get("claims", 0)),
         tool_calls=_nonnegative_int(legacy.get("tool_calls", 0)),

@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### S6-B
+
+- Upgraded the configuration schema to 1.2 and made `0` the explicit sentinel
+  for dynamic per-call output capacity and unlimited aggregate token recording.
+- Added one provider-owned 262,144-token context budget for every LLM role,
+  using an 8,192-token safety margin, a hash-pinned Intern-S2 tokenizer
+  snapshot when locally available, and a conservative UTF-8 byte fallback.
+- Removed role-level low output caps and character-quarter token estimates;
+  every client call now receives a positive dynamic maximum that satisfies the
+  context invariant, while positive legacy caps remain enforceable.
+- Implemented the 600/705/840/870-second runtime phases and a 900-second
+  per-case terminal runner with a 30-second persistence reserve, atomic timeout
+  output, and no late-result overwrite path.
+- Expanded metrics and trace budget summaries with prompt counting mode,
+  official/fallback prompt tokens, requested and observed output, characters,
+  context window, margin, elapsed call time, deadline phase, and timeout
+  counters.
+- Added E1 boundary tests for configuration sentinels, exact and fallback token
+  counting, near-window allocation, oversized prompts and responses, all role
+  stages, deadlines, unlimited trace totals, timeout persistence, and late
+  background completion.
+
 ### S6-A
 
 - Required the exact lowercase `intern-s2-preview-397b` model request from

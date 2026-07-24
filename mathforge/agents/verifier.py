@@ -101,11 +101,11 @@ class VerifierSkepticAgent:
                 messages=messages,
                 temperature=0.0,
                 max_tokens=max_tokens,
-                deadline=budget.deadline,
+                budget=budget,
+                stage="verifier",
             )
             if budget.deadline.must_finalize():
                 return BatchVerificationResult([], False, "finalize_cutoff")
-            budget.record_tokens(max(1, len(response) // 4))
         except Exception:
             return BatchVerificationResult([], False, "verifier_unavailable")
         findings = self._parse_findings(response, candidates, obligations)

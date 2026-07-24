@@ -23,7 +23,7 @@ from mathforge.runtime import MathForgeHarness  # noqa: E402
 from mathforge.tools.registry import ToolRegistry  # noqa: E402
 
 
-BENCHMARK_SCHEMA_VERSION = "3.2"
+BENCHMARK_SCHEMA_VERSION = "3.3"
 
 
 def build_benchmark_metadata(

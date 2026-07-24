@@ -13,6 +13,7 @@ from mathforge.harness.debug import DebugSink, sanitized_failure_record
 from mathforge.harness.errors import BudgetExceeded, classify_failure
 from mathforge.harness.fallback import FallbackSolver
 from mathforge.harness.fingerprints import request_fingerprint
+from mathforge.harness.context_budget import ModelContextBudget
 from mathforge.harness.metrics import collect_run_metrics
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.harness.orchestration import BranchFailure, CandidateOrchestrator
@@ -93,8 +94,16 @@ class MathForgeHarness:
     ) -> None:
         self._config = config or load_competition_config()
         self._debug_sink = debug_sink
+        self._context_budget = ModelContextBudget(
+            context_window_tokens=self._config.model_context_window_tokens,
+            safety_margin_tokens=self._config.context_safety_margin_tokens,
+        )
         gate = ModelCallGate(self._config.model_max_concurrency)
-        self._provider = OfficialClientProvider(client, gate)
+        self._provider = OfficialClientProvider(
+            client,
+            gate,
+            self._context_budget,
+        )
         self._fallback = FallbackSolver()
         self._problem_parser = ProblemParser()
         self._solution_parser = SolutionParser()
@@ -144,6 +153,20 @@ class MathForgeHarness:
             "tool_hash": self._tool_executor.fingerprint,
             "code_commit": self._run_provenance.code_commit,
             "code_dirty": self._run_provenance.code_dirty,
+            "tokenizer_repository": self._run_provenance.tokenizer["repository"],
+            "tokenizer_revision": self._run_provenance.tokenizer["revision"],
+            "tokenizer_json_sha256": self._run_provenance.tokenizer[
+                "tokenizer_json_sha256"
+            ],
+            "tokenizer_config_sha256": self._run_provenance.tokenizer[
+                "tokenizer_config_sha256"
+            ],
+            "tokenizer_chat_template_sha256": self._run_provenance.tokenizer[
+                "chat_template_sha256"
+            ],
+            "tokenizer_fallback_sha256": self._run_provenance.tokenizer[
+                "fallback_sha256"
+            ],
             **identity.to_dict(),
             "provenance_hash": self._run_provenance.fingerprint,
         }
@@ -172,10 +195,25 @@ class MathForgeHarness:
                 max_tool_seconds=self._config.max_tool_seconds,
                 max_evidence_records=self._config.max_evidence_records,
                 max_prompt_chars_total=self._config.max_prompt_chars_total,
+                token_limit_mode=(
+                    "dynamic_context"
+                    if self._config.primary_max_tokens == 0
+                    else "configured_cap"
+                ),
+                model_context_window_tokens=(
+                    self._config.model_context_window_tokens
+                ),
+                context_safety_margin_tokens=(
+                    self._config.context_safety_margin_tokens
+                ),
             ),
             raw_context_max_chars=self._config.raw_context_max_chars,
         )
-        trace = TraceBuilder(session.trace_events, max_chars=self._config.trace_max_chars)
+        trace = TraceBuilder(
+            session.trace_events,
+            max_chars=self._config.trace_max_chars,
+            max_events=self._config.trace_max_events,
+        )
         fingerprint_nonce = str(safe_metadata.get("benchmark_nonce", session.session_id))
         run_fingerprint = request_fingerprint(normalized_problem, fingerprint_nonce)
         trace.add(
@@ -240,7 +278,8 @@ class MathForgeHarness:
                 llm_chat=(
                     (
                         lambda **kwargs: self._provider.chat(
-                            deadline=session.budget.deadline,
+                            budget=session.budget,
+                            stage="router",
                             **kwargs,
                         )
                     )
@@ -257,9 +296,7 @@ class MathForgeHarness:
                     if router_enabled
                     else None
                 ),
-                record_tokens=(
-                    session.budget.record_tokens if router_enabled else None
-                ),
+                max_tokens=self._config.primary_max_tokens,
                 context_view=router_context,
                 record_prompt_chars=(
                     session.budget.record_prompt_chars if router_enabled else None
@@ -283,7 +320,7 @@ class MathForgeHarness:
                 trace.add(
                     "deadline_finalize",
                     stage="soft_cutoff",
-                    disabled=["alternatives", "rag", "lemma", "repair", "finalizer"],
+                    disabled=["alternatives", "rag", "lemma", "finalizer"],
                 )
             elif (
                 not session.budget.can_start_exploration()
@@ -308,7 +345,7 @@ class MathForgeHarness:
                 repair_requested=(
                     self._config.enable_repair
                     and self._config.enable_evidence
-                    and session.budget.deadline.optional_work_allowed()
+                    and session.budget.deadline.exploration_allowed()
                 ),
                 lemma_requested=(
                     self._config.enable_lemma_loop
@@ -544,7 +581,7 @@ class MathForgeHarness:
                 self._config.enable_repair
                 and self._config.enable_evidence
                 and allocation.repair_reserve > 0
-                and not session.budget.deadline.optional_work_allowed()
+                and not session.budget.deadline.exploration_allowed()
             ):
                 trace.add(
                     "deadline_finalize",
@@ -555,7 +592,7 @@ class MathForgeHarness:
                 self._config.enable_repair
                 and self._config.enable_evidence
                 and allocation.repair_reserve > 0
-                and session.budget.deadline.optional_work_allowed()
+                and session.budget.deadline.exploration_allowed()
             ):
                 repair_service = ClaimRepairService()
                 repaired_candidates = []
@@ -767,6 +804,7 @@ class MathForgeHarness:
                 and self._config.enable_evidence
                 and session.route_plan.risk_level in {"medium", "high"}
                 and required_obligations
+                and session.budget.deadline.exploration_allowed()
             ):
                 verifier_context = self._build_role_context(
                     session,
@@ -781,7 +819,7 @@ class MathForgeHarness:
                     viable,
                     session.proof_obligations,
                     session.budget,
-                    max_tokens=min(1536, self._config.primary_max_tokens),
+                    max_tokens=self._config.primary_max_tokens,
                     context_view=verifier_context,
                 )
                 for finding in verifier_result.findings:
@@ -921,7 +959,7 @@ class MathForgeHarness:
                         candidate,
                         final_response,
                         session.budget,
-                        max_tokens=min(2048, self._config.primary_max_tokens),
+                        max_tokens=self._config.primary_max_tokens,
                         context_view=finalizer_context,
                     )
                     final_response = finalization.text
@@ -939,6 +977,13 @@ class MathForgeHarness:
                     used_llm=False,
                     reason="soft_deadline",
                 )
+            final_response, final_count = self._validated_final_response(
+                final_response
+            )
+            session.budget.record_final_response(
+                final_count.tokens,
+                final_count.counting_mode,
+            )
             self._transition(
                 session,
                 trace,
@@ -957,16 +1002,6 @@ class MathForgeHarness:
                 RuntimePhase.COMPLETED,
                 "solve_completed",
             )
-            trace.add(
-                "budget_summary",
-                model_calls=session.budget.used_calls,
-                estimated_tokens=session.budget.used_tokens,
-                claims=session.budget.used_claims,
-                tool_calls=session.budget.used_tool_calls,
-                evidence_records=session.budget.used_evidence_records,
-                prompt_chars=session.budget.used_prompt_chars,
-                outcome="primary",
-            )
             outcome = "primary"
         except Exception as error:  # The public contract requires a result on every path.
             failure = error
@@ -979,16 +1014,6 @@ class MathForgeHarness:
             )
             trace.add("phase_transition", **transition)
             final_response = self._fallback.solve(normalized_problem)
-            trace.add(
-                "budget_summary",
-                model_calls=session.budget.used_calls,
-                estimated_tokens=session.budget.used_tokens,
-                claims=session.budget.used_claims,
-                tool_calls=session.budget.used_tool_calls,
-                evidence_records=session.budget.used_evidence_records,
-                prompt_chars=session.budget.used_prompt_chars,
-                outcome="fallback",
-            )
             transition = session.transition(
                 RuntimePhase.FAILED,
                 RuntimePhase.FALLBACK_COMPLETED,
@@ -1002,6 +1027,18 @@ class MathForgeHarness:
                 failed_phase=failed_phase.value,
             )
 
+        final_count = self._context_budget.ensure_text_within_window(
+            final_response
+        )
+        session.budget.record_final_response(
+            final_count.tokens,
+            final_count.counting_mode,
+        )
+        trace.add(
+            "budget_summary",
+            **session.budget.to_dict(),
+            outcome=outcome,
+        )
         trace.add(
             "run_completed",
             outcome=outcome,
@@ -1036,6 +1073,17 @@ class MathForgeHarness:
             "run_metrics": metrics.to_dict(),
             "provenance": self._run_provenance.to_dict(),
         }
+
+    def _validated_final_response(self, text: str):
+        try:
+            return text, self._context_budget.ensure_text_within_window(text)
+        except ContextBudgetExceeded:
+            blocks = text.split("\n\n")
+            deduplicated = "\n\n".join(dict.fromkeys(blocks))
+            return (
+                deduplicated,
+                self._context_budget.ensure_text_within_window(deduplicated),
+            )
 
     @staticmethod
     def _transition(

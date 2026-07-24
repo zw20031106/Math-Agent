@@ -48,15 +48,13 @@ def test_all_domain_skills_load_and_budget_is_enforced():
     assert len(registry.compose(registry.names(), 120)) <= 120
 
 
-def test_ambiguous_router_records_response_tokens():
-    recorded_tokens = []
-    RouterPlanner().plan(
+def test_ambiguous_router_delegates_token_accounting_to_provider():
+    plan = RouterPlanner().plan(
         ProblemParser().parse("solve this problem"),
         llm_chat=lambda **_: "not json",
         consume_call=lambda: None,
-        record_tokens=recorded_tokens.append,
     )
-    assert recorded_tokens == [2]
+    assert plan.primary_subject == "general-math"
 
 
 def test_equal_high_confidence_domains_produce_auxiliary_and_medium_risk():

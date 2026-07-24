@@ -61,6 +61,17 @@ rejected. The official chat surface returns assistant content but no response
 model or thinking-mode metadata, so provenance records the requested model and
 marks those response-side fields as unobservable instead of inferring them.
 
+Every role call uses one context-budget service. With the competition sentinel
+`primary_max_tokens=0`, the provider passes the positive value
+`262144 - prompt_tokens - 8192` to the client. A positive configured cap is
+still honored, but can never exceed that dynamic value. The preferred counter
+is the pinned tokenizer snapshot for
+`internlm/Intern-S2-Preview-397B@35eba5f142353d180472cdad2d70b09d0a383113`;
+set `MATHFORGE_INTERN_S2_TOKENIZER_DIR` to a local snapshot containing the
+hash-verified tokenizer config, tokenizer JSON, and chat template. If it is
+absent or mismatched, the harness fails over to a conservative UTF-8 byte
+upper-bound and records the actual counting mode.
+
 ## Verification
 
 ```bash
@@ -101,14 +112,21 @@ wheelhouse; installation and the smoke test are offline.
 
 - `INTERN_MODEL=intern-s2-preview-397b`: required exact model request; aliases fail closed.
 - `MATHFORGE_MODEL_MAX_CONCURRENCY`: bounded shared client concurrency (default `4`).
+- `MATHFORGE_INTERN_S2_TOKENIZER_DIR`: optional pinned local tokenizer snapshot;
+  a mismatch activates the recorded UTF-8 fallback instead of loading it.
 - `MATHFORGE_USE_MCP=1`: explicitly opt into the one-shot local StdIO adapter;
   Direct remains the production default.
 
-Per-problem defaults are four model calls, 24,000 estimated output tokens, a
-12-minute soft deadline, a 13-minute exploration cutoff, and a 14.5-minute hard
-finalization deadline. Every failure path returns a non-empty deterministic fallback.
+The competition profile allows six model calls and has no artificial aggregate
+model-token quota. It stops low-value optional work at 600 seconds, closes all
+new model calls at 705 seconds, enters deterministic finalization at 840
+seconds, and requires Harness return by 870 seconds. The per-case runner
+reserves the remaining 30 seconds of the 900-second wall clock for a terminal
+result and atomic JSON persistence. A late background result has no persistence
+callback and cannot overwrite the terminal file. Every failure path returns a
+non-empty deterministic fallback.
 Each internal Harness result also carries structured call/token/outcome metrics
-independently of the bounded judge trace, plus versioned
+independently of the judge trace, plus versioned
 code/config/prompt/skill/RAG/tool/model provenance. Runtime failures expose only
 stable safe error codes in the judge response. Local diagnostics are opt-in
 through an injected

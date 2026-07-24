@@ -68,11 +68,11 @@ class LLMFinalizer:
                 messages=messages,
                 temperature=0.0,
                 max_tokens=max_tokens,
-                deadline=budget.deadline,
+                budget=budget,
+                stage="finalizer",
             )
             if budget.deadline.must_finalize():
                 return FinalizationResult(deterministic_text, False, "finalize_cutoff")
-            budget.record_tokens(max(1, len(response) // 4))
             budget.ensure_stage("solution_parser")
             finalized = self._parser.parse(
                 response,

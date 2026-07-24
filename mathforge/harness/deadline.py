@@ -24,17 +24,16 @@ class DeadlineController:
             <= hard_deadline_seconds
         ):
             raise ValueError("deadline thresholds must be positive and ordered")
-        if deterministic_finalize_reserve_seconds < 0:
-            raise ValueError("deterministic finalize reserve must be nonnegative")
+        if not 0 <= deterministic_finalize_reserve_seconds < hard_deadline_seconds:
+            raise ValueError(
+                "deterministic finalize reserve must be nonnegative and below hard deadline"
+            )
         if model_call_start_margin_seconds < 0:
             raise ValueError("model call start margin must be nonnegative")
         self.soft_deadline_seconds = soft_deadline_seconds
         self.exploration_deadline_seconds = exploration_deadline_seconds
         self.hard_deadline_seconds = hard_deadline_seconds
-        self.finalize_reserve_seconds = min(
-            deterministic_finalize_reserve_seconds,
-            hard_deadline_seconds * 0.25,
-        )
+        self.finalize_reserve_seconds = deterministic_finalize_reserve_seconds
         self.model_call_start_margin_seconds = model_call_start_margin_seconds
         self._clock = clock
         self._started_at = clock()
@@ -56,18 +55,15 @@ class DeadlineController:
 
     def exploration_allowed(self) -> bool:
         return (
-            self.optional_work_allowed()
-            and self.elapsed_seconds() < self.exploration_deadline_seconds
-            and self.remaining_for_model_call() > 0
+            self.elapsed_seconds() < self.exploration_deadline_seconds
+            and self.remaining_for_model_call()
+            > self.model_call_start_margin_seconds
         )
 
     def can_start_model_call(self, *, optional: bool = False) -> bool:
         if optional and not self.optional_work_allowed():
             return False
-        return (
-            self.remaining_for_model_call()
-            > self.model_call_start_margin_seconds
-        )
+        return self.exploration_allowed()
 
     def can_start_stage(self, *, optional: bool = False) -> bool:
         if optional and not self.optional_work_allowed():
@@ -79,4 +75,15 @@ class DeadlineController:
 
     def hard_expired(self) -> bool:
         return self.remaining_seconds() <= 0
+
+    def phase(self) -> str:
+        if self.hard_expired():
+            return "hard_expired"
+        if self.must_finalize():
+            return "deterministic_finalize"
+        if not self.exploration_allowed():
+            return "local_validation_only"
+        if not self.optional_work_allowed():
+            return "evidence_driven_exploration"
+        return "normal"
 

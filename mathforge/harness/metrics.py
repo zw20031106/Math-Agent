@@ -4,8 +4,8 @@ from dataclasses import asdict, dataclass, fields
 from typing import Any, ClassVar
 
 
-RUN_METRICS_SCHEMA_VERSION = "1.0"
-_OUTCOMES = frozenset({"primary", "fallback", "error"})
+RUN_METRICS_SCHEMA_VERSION = "1.1"
+_OUTCOMES = frozenset({"primary", "fallback", "error", "timeout"})
 _ERROR_CODES = frozenset(
     {
         "",
@@ -16,6 +16,7 @@ _ERROR_CODES = frozenset(
         "proof_incomplete",
         "all_candidates_failed",
         "config",
+        "per_case_wall_clock_exceeded",
     }
 )
 
@@ -31,6 +32,21 @@ class RunMetrics:
     request_fingerprint: str = ""
     model_calls: int = 0
     estimated_tokens: int = 0
+    prompt_tokens: int = 0
+    official_prompt_tokens: int = 0
+    fallback_prompt_tokens: int = 0
+    requested_output_tokens: int = 0
+    observed_output_tokens: int = 0
+    output_chars: int = 0
+    model_call_timeout_count: int = 0
+    per_case_wall_clock_timeout_count: int = 0
+    final_response_tokens: int = 0
+    context_window_tokens: int = 0
+    safety_margin_tokens: int = 0
+    model_call_elapsed_seconds: float = 0.0
+    token_limit_mode: str = ""
+    final_response_counting_mode: str = ""
+    deadline_phase: str = ""
     claims: int = 0
     tool_calls: int = 0
     isolated_tool_calls: int = 0
@@ -70,6 +86,17 @@ class RunMetrics:
         integer_fields = (
             "model_calls",
             "estimated_tokens",
+            "prompt_tokens",
+            "official_prompt_tokens",
+            "fallback_prompt_tokens",
+            "requested_output_tokens",
+            "observed_output_tokens",
+            "output_chars",
+            "model_call_timeout_count",
+            "per_case_wall_clock_timeout_count",
+            "final_response_tokens",
+            "context_window_tokens",
+            "safety_margin_tokens",
             "claims",
             "tool_calls",
             "isolated_tool_calls",
@@ -92,7 +119,11 @@ class RunMetrics:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"RunMetrics.{name} must be a nonnegative integer")
-        for name in ("tool_seconds", "elapsed_seconds"):
+        for name in (
+            "tool_seconds",
+            "elapsed_seconds",
+            "model_call_elapsed_seconds",
+        ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
                 raise ValueError(f"RunMetrics.{name} must be nonnegative")
@@ -101,6 +132,9 @@ class RunMetrics:
             "request_fingerprint",
             "final_phase",
             "error_code",
+            "token_limit_mode",
+            "final_response_counting_mode",
+            "deadline_phase",
         ):
             if not isinstance(getattr(self, name), str):
                 raise ValueError(f"RunMetrics.{name} must be a string")
@@ -108,6 +142,19 @@ class RunMetrics:
             raise ValueError("RunMetrics.fallback_used must be a boolean")
         if self.fallback_used != (self.outcome == "fallback"):
             raise ValueError("RunMetrics fallback flag does not match outcome")
+        if (
+            self.official_prompt_tokens + self.fallback_prompt_tokens
+            != self.prompt_tokens
+        ):
+            raise ValueError("prompt counting-mode totals do not match prompt tokens")
+        if self.model_call_timeout_count > self.model_calls:
+            raise ValueError("model timeout count cannot exceed model calls")
+        if self.per_case_wall_clock_timeout_count not in {0, 1}:
+            raise ValueError("per-case wall-clock timeout count must be zero or one")
+        if (self.outcome == "timeout") != (
+            self.per_case_wall_clock_timeout_count == 1
+        ):
+            raise ValueError("per-case wall-clock timeout count does not match outcome")
         if self.context_view_failures > self.context_view_attempts:
             raise ValueError("context failures cannot exceed attempts")
         if self.tool_timeouts + self.tool_unknowns + self.tool_errors > self.tool_checks:
@@ -173,6 +220,23 @@ def collect_run_metrics(
         request_fingerprint=request_fingerprint,
         model_calls=budget.used_calls,
         estimated_tokens=budget.used_tokens,
+        prompt_tokens=budget.prompt_tokens,
+        official_prompt_tokens=budget.official_prompt_tokens,
+        fallback_prompt_tokens=budget.fallback_prompt_tokens,
+        requested_output_tokens=budget.requested_output_tokens,
+        observed_output_tokens=budget.observed_output_tokens,
+        output_chars=budget.output_chars,
+        model_call_timeout_count=budget.model_call_timeout_count,
+        final_response_tokens=budget.final_response_tokens,
+        context_window_tokens=budget.model_context_window_tokens,
+        safety_margin_tokens=budget.context_safety_margin_tokens,
+        model_call_elapsed_seconds=round(
+            budget.model_call_elapsed_seconds,
+            6,
+        ),
+        token_limit_mode=budget.token_limit_mode,
+        final_response_counting_mode=budget.final_response_counting_mode,
+        deadline_phase=budget.deadline.phase(),
         claims=budget.used_claims,
         tool_calls=budget.used_tool_calls,
         isolated_tool_calls=budget.used_isolated_tool_calls,
