@@ -17,7 +17,8 @@ class OfflineClient:
         return '{"method":"offline","solution_text":"1+1=2","final_answer":"2"}'
 
 result = ReasoningAgent(OfflineClient()).solve("Calculate the integer 1+1", {})
-assert set(result) == {"id", "final_response", "trace"}
+assert set(result) == {"id", "status", "final_response", "trace"}
+assert result["status"] == "success"
 assert result["final_response"]
 assert isinstance(result["trace"], list)
 """

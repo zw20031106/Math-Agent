@@ -21,6 +21,7 @@ def test_case_output_has_exact_flat_contract_and_atomic_filename(tmp_path):
     assert path == tmp_path / "7.json"
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "id": 7,
+        "status": "success",
         "final_response": "Final answer: 2",
         "trace": [{"event": "run_completed", "outcome": "success"}],
     }

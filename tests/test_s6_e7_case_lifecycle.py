@@ -11,6 +11,7 @@ from scripts.run_case_outputs import (
     PerCaseWallClockRunner,
     RUN_MANIFEST_FILENAME,
     validate_case_output,
+    verify_model_availability,
     write_case_output,
 )
 
@@ -73,7 +74,8 @@ def test_manifest_resume_validates_schema_and_bound_output_hash(tmp_path):
         (output_dir / RUN_MANIFEST_FILENAME).read_text(encoding="utf-8")
     )
 
-    assert set(public) == {"id", "final_response", "trace"}
+    assert set(public) == {"id", "status", "final_response", "trace"}
+    assert public["status"] == "success"
     assert internal["status"] == "completed"
     assert internal["cases"]["1"]["run_metrics"]["schema_version"] == "1.2"
     assert internal["cases"]["1"]["output_sha256"] == sha256(
@@ -116,6 +118,7 @@ def test_resume_rejects_invalid_existing_public_schema(tmp_path):
             {
                 "result": {
                     "id": 1,
+                    "status": "success",
                     "final_response": "2",
                     "trace": [],
                 }
@@ -136,7 +139,7 @@ def test_resume_rejects_invalid_existing_public_schema(tmp_path):
         )
 
 
-def test_failed_case_is_a_terminal_atomic_three_field_output(tmp_path):
+def test_failed_case_is_a_terminal_atomic_four_field_output(tmp_path):
     output_dir = tmp_path / "outputs"
     runner = PerCaseWallClockRunner(
         lambda *_: (_ for _ in ()).throw(RuntimeError("private failure"))
@@ -152,7 +155,8 @@ def test_failed_case_is_a_terminal_atomic_three_field_output(tmp_path):
     path = output_dir / "failed.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
 
-    assert set(payload) == {"id", "final_response", "trace"}
+    assert set(payload) == {"id", "status", "final_response", "trace"}
+    assert payload["status"] == "failed"
     assert payload["final_response"].strip()
     assert payload["trace"][-1] == {
         **payload["trace"][-1],
@@ -163,3 +167,19 @@ def test_failed_case_is_a_terminal_atomic_three_field_output(tmp_path):
     }
     assert records[0].run_metrics.outcome == "error"
     assert not list(output_dir.glob(".*.tmp"))
+
+
+def test_model_availability_preflight_requires_non_empty_content():
+    class EmptyClient:
+        def chat(self, **_):
+            return ""
+
+    with pytest.raises(RuntimeError, match="preflight"):
+        verify_model_availability(EmptyClient())
+
+    client = type(
+        "AvailableClient",
+        (),
+        {"chat": lambda self, **_: "OK"},
+    )()
+    verify_model_availability(client)

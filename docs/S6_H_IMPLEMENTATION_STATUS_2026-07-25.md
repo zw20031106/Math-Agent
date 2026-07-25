@@ -10,16 +10,18 @@ restart-safe lifecycle from input preflight through terminal atomic output.
 1. Load JSONL and reject duplicate IDs before creating an online client.
 2. Validate or create `run_manifest.json`, binding the run to input/config
    SHA-256, case IDs, seed, and exact model identity.
-3. Under `--resume`, validate existing public files and their manifest hashes,
+3. Require a non-empty real response from the configured model before starting
+   any case.
+4. Under `--resume`, validate existing public files and their manifest hashes,
    then skip only verified cases.
-4. Run each missing case under the 900-second wall-clock watchdog. The Harness
+5. Run each missing case under the 900-second wall-clock watchdog. The Harness
    return boundary remains 870 seconds, leaving 30 seconds for persistence.
-5. Convert success, internal failure, and timeout into a non-empty result with
+6. Convert success, internal failure, and timeout into a non-empty result with
    terminal Trace.
-6. Sync a temporary case file and atomically replace `<id>.json`.
-7. Atomically update the internal manifest with output hash, latency, score,
+7. Sync a temporary case file and atomically replace `<id>.json`.
+8. Atomically update the internal manifest with output hash, latency, score,
    RunMetrics, request fingerprint, and terminal state.
-8. Print and flush `CASE_COMPLETED` immediately.
+9. Print and flush `CASE_COMPLETED` immediately.
 
 ## Public/private boundary
 
@@ -27,9 +29,13 @@ Every case file contains exactly:
 
 ```text
 id
+status
 final_response
 trace
 ```
+
+`status=success` means a primary solution was produced. Fallback and execution
+failure use `failed`; the wall-clock watchdog uses `timeout`.
 
 `run_metrics`, scoring, model identity, provenance-compatible fingerprints,
 and file hashes are confined to `run_manifest.json`; no `result` wrapper is
@@ -50,7 +56,8 @@ introduced.
 ## Acceptance evidence
 
 - Duplicate-ID preflight regression.
-- Exact three-field success, failure, and timeout output regressions.
+- Exact four-field success, failure, and timeout output regressions.
+- Model content-preflight success and empty-response failure regressions.
 - Immediate completion persistence regression with a concurrent slow peer.
 - Resume and manifest-bound output hash regression.
 - Invalid existing Schema and tampering rejection regressions.

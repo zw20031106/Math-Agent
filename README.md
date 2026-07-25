@@ -34,6 +34,7 @@ mapping:
 ```json
 {
   "id": 7,
+  "status": "success",
   "final_response": "Final answer: ...",
   "trace": []
 }
@@ -41,7 +42,9 @@ mapping:
 
 `id` is read from `metadata.id`, falling back to `metadata.idx`. Internal
 `MathForgeHarness` results retain metrics and provenance for evaluation, but
-those fields are not exposed by the public agent.
+those fields are not exposed by the public agent. `status` is `success` only
+for a primary solution, `failed` for fallback or execution failure, and
+`timeout` for the 900-second per-case deadline.
 
 For one atomic JSON file per input case, written immediately when that case
 finishes, use:
@@ -51,17 +54,26 @@ export INTERN_MODEL=intern-s2-preview-397b
 python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --concurrency 4
 ```
 
-Files are named `<id>.json` and contain exactly `id`, `final_response`, and
-`trace`, without a `result` wrapper. Each terminal success, failure, or timeout
-is flushed through a temporary file and atomically replaced before
+Files are named `<id>.json` and contain exactly `id`, `status`,
+`final_response`, and `trace`, without a `result` wrapper. A real model-response
+preflight must succeed before any case starts. Each terminal success, failure,
+or timeout is flushed through a temporary file and atomically replaced before
 `CASE_COMPLETED` is printed. Internal metrics and output hashes live only in
 `case-outputs/run_manifest.json`.
 
 To continue an interrupted run, repeat the command with `--resume`. The runner
 validates the input/config hashes, rejects duplicate or unknown case IDs,
-validates every existing three-field JSON file and its manifest-bound hash,
+validates every existing four-field JSON file and its manifest-bound hash,
 then executes only missing cases. The official `main.py` remains byte-frozen
 and retains the competition sample's `idx/status` wrapper.
+
+Public Trace is an ordered audit narrative rather than a framework event dump.
+It keeps complete candidate public steps, final answers, claims, evidence,
+repair/lemma records, arbitration, and terminal cause without a character
+limit. Repeated phase transitions, context-view bookkeeping, and duplicate
+completion telemetry are omitted. Provider failures are exposed only through
+safe reason codes such as `model_call_failed`; credentials and raw exceptions
+remain private.
 
 `INTERN_MODEL` is mandatory and must be the exact lowercase ID shown above.
 Aliases such as `intern-s2-preview` and caller-supplied display labels are

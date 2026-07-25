@@ -2,14 +2,30 @@
 
 ## Unreleased
 
+### Public output and rerun hardening
+
+- Upgraded the flat public result to exactly
+  `id`/`status`/`final_response`/`trace`; only primary completion maps to
+  `success`, while fallback/error maps to `failed` and the watchdog maps to
+  `timeout`.
+- Added a public Trace projection that preserves complete candidate solution
+  content, evidence, lemma/repair history, arbitration, and terminal causes
+  while removing repeated phase/context telemetry and compacting provenance,
+  skill, and budget summaries.
+- Classified provider-side branch exceptions as the safe
+  `model_call_failed` reason without exposing raw exception text.
+- Added a real content preflight through the injected official client before
+  any batch case starts, preventing provider outages from producing a batch
+  of fallback files.
+
 ### S6-H
 
 - Added pre-online duplicate-ID and input validation to the per-case runner and
   benchmark entry point.
 - Added an atomic `run_manifest.json` with input/config hashes, exact model
   identity, per-case output hashes, terminal states, latency, scoring, and
-  internal RunMetrics. Public case JSON remains exactly
-  `id`/`final_response`/`trace`.
+  internal RunMetrics. Public case JSON contains exactly
+  `id`/`status`/`final_response`/`trace`.
 - Added `--resume` with manifest compatibility checks, strict validation of
   existing public files, hash-bound reuse, orphan-output recovery, unknown-file
   rejection, and execution of missing cases only.

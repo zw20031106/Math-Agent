@@ -161,8 +161,8 @@ class CandidateOrchestrator:
                                     reason,
                                 ),
                             )
-                    except Exception:
-                        reason = "solver_branch_failed"
+                    except Exception as error:
+                        reason = _branch_failure_reason(error)
                         failures.append(BranchFailure(candidate_id, reason))
                         if event_callback is not None:
                             event_callback(
@@ -249,3 +249,11 @@ def candidate_failure_trace_payload(
             "claims": [],
         },
     }
+
+
+def _branch_failure_reason(error: Exception) -> str:
+    if isinstance(error, RuntimeError):
+        return "model_call_failed"
+    if isinstance(error, (TypeError, ValueError)):
+        return "model_response_invalid"
+    return "solver_branch_failed"

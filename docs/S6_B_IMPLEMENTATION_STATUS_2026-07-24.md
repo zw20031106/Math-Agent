@@ -107,7 +107,7 @@ VerifierSkeptic、RepairAgent 和 LLMFinalizer 都只把配置的 0/正数意图
 - 独立的 timeout 指标。
 
 结果仍由原有同目录临时文件加 `os.replace()` 原子写入，公开 JSON 顶层仍只有
-`id/final_response/trace`。后台线程只能写入 Runner 的局部内存槽，没有文件
+`id/status/final_response/trace`。后台线程只能写入 Runner 的局部内存槽，没有文件
 路径或持久化回调，因此晚返回不能二次覆盖已经写出的 timeout JSON。
 
 ## 6. Metrics 与 Trace
@@ -144,7 +144,7 @@ E1 新增或更新的测试覆盖：
 - Trace 总字符和事件数的 0 sentinel；
 - 超大模型响应和 final response 256K 门禁；
 - 缩短时钟下的 900 秒等价 Runner timeout；
-- timeout 三字段原子文件；
+- timeout 四字段原子文件；
 - 后台晚返回不覆盖；
 - immutable baseline。
 

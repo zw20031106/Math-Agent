@@ -327,7 +327,8 @@ def test_runner_timeout_is_terminal_atomic_and_late_result_cannot_overwrite(tmp_
     payload = json.loads(before)
 
     assert elapsed < 0.08
-    assert set(payload) == {"id", "final_response", "trace"}
+    assert set(payload) == {"id", "status", "final_response", "trace"}
+    assert payload["status"] == "timeout"
     assert payload["trace"][-1]["event"] == "run_completed"
     assert payload["trace"][-1]["outcome"] == "timeout"
     assert payload["trace"][-1]["final_phase"] == "timeout_completed"

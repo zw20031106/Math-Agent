@@ -55,8 +55,10 @@ def validate(max_file_mb: float = 5.0) -> list[str]:
                 {},
             )
         json.dumps(result)
-        if set(result) != {"id", "final_response", "trace"}:
+        if set(result) != {"id", "status", "final_response", "trace"}:
             errors.append("public result fields are invalid")
+        if result.get("status") not in {"success", "failed", "timeout"}:
+            errors.append("public result status is invalid")
         if not isinstance(result.get("trace"), list):
             errors.append("trace is not a list")
         if not str(result.get("final_response", "")).strip():

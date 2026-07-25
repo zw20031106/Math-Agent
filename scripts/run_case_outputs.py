@@ -38,6 +38,7 @@ PER_CASE_WALL_CLOCK_SECONDS = 900.0
 RESULT_SERIALIZATION_RESERVE_SECONDS = 30.0
 RUN_MANIFEST_SCHEMA_VERSION = "1.0"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
+MODEL_PREFLIGHT_MAX_TOKENS = 64
 
 
 class PerCaseWallClockRunner:
@@ -456,8 +457,11 @@ def main() -> int:
         model_identity = require_exact_intern_model()
         manifest.record_model_identity(model_identity.to_dict())
         config = load_benchmark_config(args.config)
+        client = InternChatClient()
+        verify_model_availability(client)
+        print("MODEL_PREFLIGHT_OK", flush=True)
         harness = MathForgeHarness(
-            InternChatClient(),
+            client,
             config,
             model_identity=model_identity,
         )
@@ -500,6 +504,25 @@ def write_case_output(record: BenchmarkRecord, output_dir: Path) -> Path:
     return destination
 
 
+def verify_model_availability(client: Any) -> None:
+    response = client.chat(
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a model availability probe.",
+            },
+            {
+                "role": "user",
+                "content": "Reply with exactly OK and no explanation.",
+            },
+        ],
+        temperature=0.0,
+        max_tokens=MODEL_PREFLIGHT_MAX_TOKENS,
+    )
+    if not isinstance(response, str) or not response.strip():
+        raise RuntimeError("model availability preflight returned no content")
+
+
 def validate_case_output(path: Path, identifier: str) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -513,10 +536,13 @@ def validate_case_output(path: Path, identifier: str) -> dict[str, Any]:
 def _validate_public_payload(payload: Any, identifier: str) -> None:
     if not isinstance(payload, dict) or set(payload) != {
         "id",
+        "status",
         "final_response",
         "trace",
     }:
-        raise ValueError("case output must contain exactly id, final_response, trace")
+        raise ValueError(
+            "case output must contain exactly id, status, final_response, trace"
+        )
     if payload["id"] != _json_identifier(identifier):
         raise ValueError("case output id does not match filename")
     if (
@@ -532,6 +558,9 @@ def _validate_public_payload(payload: Any, identifier: str) -> None:
         or trace[-1].get("event") != "run_completed"
     ):
         raise ValueError("case output trace must have a terminal run_completed event")
+    expected_status = _terminal_status(str(trace[-1].get("outcome", "")))
+    if payload["status"] != expected_status:
+        raise ValueError("case output status conflicts with terminal outcome")
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -600,9 +629,9 @@ def _case_request_fingerprint(
 def _terminal_status(outcome: str) -> str:
     if outcome == "timeout":
         return "timeout"
-    if outcome == "error":
-        return "failed"
-    return "success"
+    if outcome in {"primary", "success"}:
+        return "success"
+    return "failed"
 
 
 def _file_sha256(path: Path) -> str:
