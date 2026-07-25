@@ -40,14 +40,14 @@ RUN_MANIFEST_SCHEMA_VERSION = "1.0"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 MODEL_PREFLIGHT_MAX_TOKENS = 65_536
 MODEL_HTTP_TIMEOUT_MARGIN_SECONDS = 5.0
-MODEL_FAST_FAILURE_ATTEMPTS = 5
-MODEL_FAST_FAILURE_SECONDS = 20.0
+MODEL_FAST_FAILURE_ATTEMPTS = 2
+MODEL_FAST_FAILURE_SECONDS = 180.0
 MODEL_FAST_FAILURE_BACKOFF_SECONDS = 1.0
-MODEL_FAST_RETRY_RESERVE_SECONDS = 100.0
+MODEL_FAST_RETRY_RESERVE_SECONDS = 235.0
 
 
 class SerializedFastRetryClient:
-    """Serialize calls and retry only quick provider-side rejections."""
+    """Serialize calls and retry one bounded provider-side failure."""
 
     def __init__(
         self,

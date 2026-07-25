@@ -9,12 +9,15 @@
   comparison used the documented Legacy alias, which currently targets 35B
   and therefore was not a valid 397B acceptance test.
 - Reclassified the earlier 397B formal-request failure as a 120-second client
-  timeout, not an invalid model ID. The per-case runner retains a 735-second
-  underlying request window for long 397B reasoning.
+  timeout, not an invalid model ID.
 - Verified the corrected path with a real end-to-end case using
   `intern-s2-preview-397b`: the formal model call completed in 85.15 seconds,
   parsed as strict CandidateSolution JSON, and produced the symbolically
   correct answer under a terminal `success`/`primary` result.
+- After observing consecutive provider failures at 126.6 and 158.9 seconds,
+  expanded the bounded retry window to 180 seconds, allowed one retry, and set
+  each underlying HTTP request to 600 seconds. The worst retry path remains
+  inside the 15-minute per-case deadline.
 - Capped competition completions and the batch preflight at 65,536 tokens while
   retaining the 262,144-token context window, 8,192-token safety margin, and
   unlimited public Trace.
@@ -34,9 +37,9 @@
 - Aligned the per-case runner's official-client HTTP timeout with the Harness
   model-call window and disabled client-internal retries that could cross the
   15-minute case deadline.
-- Serialized real model calls and added bounded exponential retries only for
-  failures returned within 20 seconds. The competition profile reserves 100
-  seconds for those quick failures and permits a 735-second long request.
+- Serialized real model calls and allowed one bounded retry for failures
+  returned within 180 seconds. The competition profile reserves 235 seconds
+  for failure handling and permits a 600-second underlying request.
 - Set the competition model-call gate to one concurrent call so alternative
   branches wait at the deadline-aware semaphore instead of starting parallel
   requests against the unstable provider.

@@ -200,13 +200,18 @@ def test_model_http_timeout_uses_the_harness_call_window():
         deterministic_finalize_reserve_seconds=30.0,
     )
 
-    assert model_http_timeout_seconds(config) == 735
+    assert model_http_timeout_seconds(config) == 600
 
 
-def test_model_client_retries_fast_failures_and_returns_content(monkeypatch):
+def test_model_client_retries_observed_medium_failure_and_returns_content(monkeypatch):
     monkeypatch.setattr(
         "scripts.run_case_outputs.sleep",
         lambda _: None,
+    )
+    ticks = iter([0.0, 159.0, 160.0])
+    monkeypatch.setattr(
+        "scripts.run_case_outputs.perf_counter",
+        lambda: next(ticks),
     )
 
     class FlakyClient:
@@ -215,7 +220,7 @@ def test_model_client_retries_fast_failures_and_returns_content(monkeypatch):
 
         def chat(self, **_):
             self.calls += 1
-            if self.calls < 3:
+            if self.calls < 2:
                 raise RuntimeError("temporary provider rejection")
             return "candidate content"
 
@@ -225,11 +230,11 @@ def test_model_client_retries_fast_failures_and_returns_content(monkeypatch):
     assert client.chat(messages=[], temperature=0.0, max_tokens=1) == (
         "candidate content"
     )
-    assert base.calls == 3
+    assert base.calls == 2
 
 
-def test_model_client_does_not_retry_a_long_failure(monkeypatch):
-    ticks = iter([0.0, 21.0])
+def test_model_client_does_not_retry_a_failure_beyond_the_reserved_window(monkeypatch):
+    ticks = iter([0.0, 181.0])
     monkeypatch.setattr(
         "scripts.run_case_outputs.perf_counter",
         lambda: next(ticks),

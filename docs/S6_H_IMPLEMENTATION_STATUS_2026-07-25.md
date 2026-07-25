@@ -23,12 +23,13 @@ restart-safe lifecycle from input preflight through terminal atomic output.
    RunMetrics, request fingerprint, and terminal state.
 9. Print and flush `CASE_COMPLETED` immediately.
 
-The runner serializes injected official-client calls. Failures returned within
-20 seconds receive bounded exponential retries; 100 seconds of the call window
-is reserved for that policy, leaving a 735-second underlying HTTP timeout.
-The sample client's default three 120-second attempts are not used because
-they prematurely cut off long Intern-S2 generations and can outlive the
-deterministic finalization boundary.
+The runner serializes injected official-client calls. A provider failure
+returned within 180 seconds receives one bounded retry; 235 seconds of the call
+window is reserved for failure handling, leaving a 600-second underlying HTTP
+timeout. This covers observed 397B failures at 126–159 seconds while keeping
+the worst retry path inside the case deadline. The sample client's default
+three 120-second attempts are not used because they prematurely cut off long
+Intern-S2 generations and can outlive the deterministic finalization boundary.
 
 The competition `model_max_concurrency` is one. Parallel candidate tasks wait
 at the Harness deadline-aware model gate and cannot create concurrent provider

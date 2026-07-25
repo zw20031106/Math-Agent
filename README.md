@@ -61,15 +61,15 @@ or timeout is flushed through a temporary file and atomically replaced before
 `CASE_COMPLETED` is printed. Internal metrics and output hashes live only in
 `case-outputs/run_manifest.json`.
 
-The per-case runner serializes official-client calls and retries only provider
-failures that return within 20 seconds. Each underlying HTTP request gets up
-to 735 seconds under the competition configuration; the reserved fast-failure
-backoff plus that request still fits inside the Harness model-call window.
-This avoids both the sample client's default 120-second cutoff for a long
-Intern-S2 reasoning call and concurrent bursts against an unstable endpoint.
-The competition model-call gate is therefore fixed at one concurrent request;
-candidate branches still exist, but enter the provider in deadline-aware
-sequence.
+The per-case runner serializes official-client calls and permits one retry when
+a provider failure returns within 180 seconds. Each underlying HTTP request
+gets up to 600 seconds under the competition configuration; a failed first
+attempt, backoff, and full second request still fit inside the Harness
+model-call window. This covers observed 397B failures around 127–159 seconds
+without returning to the sample client's premature 120-second cutoff or
+creating concurrent bursts against an unstable endpoint. The competition
+model-call gate is therefore fixed at one concurrent request; candidate
+branches still exist, but enter the provider in deadline-aware sequence.
 
 To continue an interrupted run, repeat the command with `--resume`. The runner
 validates the input/config hashes, rejects duplicate or unknown case IDs,
