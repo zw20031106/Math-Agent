@@ -47,7 +47,7 @@ For one atomic JSON file per input case, written immediately when that case
 finishes, use:
 
 ```bash
-export INTERN_MODEL=intern-s2-preview-397b
+export INTERN_MODEL=intern-s2-preview-397B
 python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --concurrency 4
 ```
 
@@ -63,7 +63,7 @@ validates every existing three-field JSON file and its manifest-bound hash,
 then executes only missing cases. The official `main.py` remains byte-frozen
 and retains the competition sample's `idx/status` wrapper.
 
-`INTERN_MODEL` is mandatory and must be the exact lowercase ID shown above.
+`INTERN_MODEL` is mandatory and must be the exact case-sensitive ID shown above.
 Aliases such as `intern-s2-preview` and caller-supplied display labels are
 rejected. The official chat surface returns assistant content but no response
 model or thinking-mode metadata, so provenance records the requested model and
@@ -118,7 +118,7 @@ wheelhouse; installation and the smoke test are offline.
 
 ## Runtime configuration
 
-- `INTERN_MODEL=intern-s2-preview-397b`: required exact model request; aliases fail closed.
+- `INTERN_MODEL=intern-s2-preview-397B`: required exact model request; aliases fail closed.
 - `MATHFORGE_MODEL_MAX_CONCURRENCY`: bounded shared client concurrency (default `4`).
 - `MATHFORGE_INTERN_S2_TOKENIZER_DIR`: optional pinned local tokenizer snapshot;
   a mismatch activates the recorded UTF-8 fallback instead of loading it.

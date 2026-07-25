@@ -4,6 +4,8 @@
 
 ### S6-H
 
+- Corrected the case-sensitive competition model identity to the API's
+  canonical `intern-s2-preview-397B` identifier.
 - Added pre-online duplicate-ID and input validation to the per-case runner and
   benchmark entry point.
 - Added an atomic `run_manifest.json` with input/config hashes, exact model
