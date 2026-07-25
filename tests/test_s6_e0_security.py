@@ -19,12 +19,12 @@ from user_agent import ReasoningAgent
         {"INTERN_MODEL": "intern-s2-preview"},
         {"INTERN_MODEL": "intern-latest"},
         {"INTERN_MODEL": "INTERN-S2-PREVIEW-397B"},
-        {"INTERN_MODEL": "intern-s2-preview-397b"},
-        {"INTERN_MODEL": " intern-s2-preview-397B"},
+        {"INTERN_MODEL": "intern-s2-preview-397B"},
+        {"INTERN_MODEL": " intern-s2-preview-397b"},
     ],
 )
 def test_exact_model_gate_rejects_missing_alias_and_noncanonical_values(environment):
-    with pytest.raises(RuntimeError, match="intern-s2-preview-397B"):
+    with pytest.raises(RuntimeError, match="intern-s2-preview-397b"):
         require_exact_intern_model(environment)
 
 

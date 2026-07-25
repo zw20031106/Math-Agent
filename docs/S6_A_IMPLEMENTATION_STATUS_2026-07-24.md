@@ -9,7 +9,7 @@
 ## 结论
 
 E0 的代码、自动化门禁与文档工作已完成。运行入口现在只接受环境变量
-`INTERN_MODEL=intern-s2-preview-397B`；缺失、别名、大小写变体和前后空格均会在模型调用前失败。
+`INTERN_MODEL=intern-s2-preview-397b`；缺失、别名、大小写变体和前后空格均会在模型调用前失败。
 调用方不能再通过 `--model-identifier` 或构造参数制造与实际请求不一致的展示标签。
 
 平台侧 API Key 轮换无法由仓库代码执行或验证。此前在对话中出现的凭证必须由持有人在
@@ -32,7 +32,7 @@ Intern 平台撤销并生成新凭证；新凭证只能通过本地 `INTERN_API_
 ### 1. 精确模型身份门禁
 
 - 新增 `mathforge.model_identity`；
-- 唯一允许的模型 ID 为 `intern-s2-preview-397B`；
+- 唯一允许的模型 ID 为 `intern-s2-preview-397b`；
 - 唯一可信来源为 `environment:INTERN_MODEL`；
 - `ReasoningAgent`、逐题输出 Runner 和 benchmark Runner 均使用同一门禁；
 - 在构造 Harness 和发起模型调用前完成校验；
@@ -99,7 +99,7 @@ Artifact 不再使用含义模糊的 `model_identifier`，也不生成虚构的 
 PowerShell：
 
 ```powershell
-$env:INTERN_MODEL = "intern-s2-preview-397B"
+$env:INTERN_MODEL = "intern-s2-preview-397b"
 $env:INTERN_API_KEY = "<rotated-key>"
 python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs
 ```
