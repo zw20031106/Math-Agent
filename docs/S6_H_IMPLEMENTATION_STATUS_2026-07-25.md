@@ -23,6 +23,12 @@ restart-safe lifecycle from input preflight through terminal atomic output.
    RunMetrics, request fingerprint, and terminal state.
 9. Print and flush `CASE_COMPLETED` immediately.
 
+The injected official client uses one HTTP attempt with an 835-second timeout,
+which fits inside the 840-second Harness model-call window. The sample
+client's default three 120-second attempts are not used by this runner because
+they prematurely cut off long Intern-S2 generations and can outlive the
+deterministic finalization boundary.
+
 ## Public/private boundary
 
 Every case file contains exactly:

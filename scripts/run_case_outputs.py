@@ -38,7 +38,8 @@ PER_CASE_WALL_CLOCK_SECONDS = 900.0
 RESULT_SERIALIZATION_RESERVE_SECONDS = 30.0
 RUN_MANIFEST_SCHEMA_VERSION = "1.0"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
-MODEL_PREFLIGHT_MAX_TOKENS = 64
+MODEL_PREFLIGHT_MAX_TOKENS = 244_000
+MODEL_HTTP_TIMEOUT_MARGIN_SECONDS = 5.0
 
 
 class PerCaseWallClockRunner:
@@ -457,7 +458,10 @@ def main() -> int:
         model_identity = require_exact_intern_model()
         manifest.record_model_identity(model_identity.to_dict())
         config = load_benchmark_config(args.config)
-        client = InternChatClient()
+        client = InternChatClient(
+            timeout=model_http_timeout_seconds(config),
+            retry=1,
+        )
         verify_model_availability(client)
         print("MODEL_PREFLIGHT_OK", flush=True)
         harness = MathForgeHarness(
@@ -521,6 +525,17 @@ def verify_model_availability(client: Any) -> None:
     )
     if not isinstance(response, str) or not response.strip():
         raise RuntimeError("model availability preflight returned no content")
+
+
+def model_http_timeout_seconds(config: Any) -> int:
+    available = (
+        float(config.hard_deadline_seconds)
+        - float(config.deterministic_finalize_reserve_seconds)
+        - MODEL_HTTP_TIMEOUT_MARGIN_SECONDS
+    )
+    if available < 1:
+        raise ValueError("model HTTP timeout window is not positive")
+    return int(available)
 
 
 def validate_case_output(path: Path, identifier: str) -> dict[str, Any]:

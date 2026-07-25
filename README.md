@@ -61,6 +61,12 @@ or timeout is flushed through a temporary file and atomically replaced before
 `CASE_COMPLETED` is printed. Internal metrics and output hashes live only in
 `case-outputs/run_manifest.json`.
 
+The per-case runner configures the official client for one HTTP attempt whose
+timeout fits inside the Harness model-call window (835 seconds under the
+competition configuration). This avoids the sample client's default
+120-second retries prematurely terminating a long Intern-S2 reasoning call or
+continuing beyond the deterministic finalization reserve.
+
 To continue an interrupted run, repeat the command with `--resume`. The runner
 validates the input/config hashes, rejects duplicate or unknown case IDs,
 validates every existing four-field JSON file and its manifest-bound hash,

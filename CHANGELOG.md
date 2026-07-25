@@ -17,6 +17,10 @@
 - Added a real content preflight through the injected official client before
   any batch case starts, preventing provider outages from producing a batch
   of fallback files.
+- Aligned the per-case runner's official-client HTTP timeout with the Harness
+  model-call window and disabled client-internal retries that could cross the
+  15-minute case deadline; the competition profile permits one 835-second
+  request instead of three 120-second requests.
 
 ### S6-H
 

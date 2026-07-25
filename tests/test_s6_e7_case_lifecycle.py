@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +11,7 @@ from scripts.run_case_outputs import (
     CaseRunManifest,
     PerCaseWallClockRunner,
     RUN_MANIFEST_FILENAME,
+    model_http_timeout_seconds,
     validate_case_output,
     verify_model_availability,
     write_case_output,
@@ -183,3 +185,12 @@ def test_model_availability_preflight_requires_non_empty_content():
         {"chat": lambda self, **_: "OK"},
     )()
     verify_model_availability(client)
+
+
+def test_model_http_timeout_uses_the_harness_call_window():
+    config = SimpleNamespace(
+        hard_deadline_seconds=870.0,
+        deterministic_finalize_reserve_seconds=30.0,
+    )
+
+    assert model_http_timeout_seconds(config) == 835
