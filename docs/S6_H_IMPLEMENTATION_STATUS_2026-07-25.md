@@ -34,10 +34,17 @@ The competition `model_max_concurrency` is one. Parallel candidate tasks wait
 at the Harness deadline-aware model gate and cannot create concurrent provider
 bursts.
 
-The enforced request field is `intern-s2-preview`, matching the callable field
-used by the injected official client. Batch preflight and competition
-completions are capped at 65,536 tokens; the total context window remains
-262,144 tokens with an 8,192-token safety margin.
+The enforced request field is the official exact version ID
+`intern-s2-preview-397b`. The Legacy `intern-s2-preview` field currently
+targets 35B and is not accepted as 397B evidence. Batch preflight and
+competition completions are capped at 65,536 tokens; the total context window
+remains 262,144 tokens with an 8,192-token safety margin.
+
+A live one-case acceptance run with the exact 397B field completed successfully:
+the model call took 85.15 seconds, the complete Harness path took 86.90 seconds,
+the CandidateSolution used strict JSON parsing, and the symbolic scorer accepted
+the final answer. This also confirms that the earlier failure near 127 seconds
+was evidence of the old 120-second client cutoff, not an invalid model field.
 
 ## Public/private boundary
 

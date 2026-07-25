@@ -9,7 +9,7 @@
 ## 结论
 
 E0 的代码、自动化门禁与文档工作已完成。运行入口现在只接受环境变量
-`INTERN_MODEL=intern-s2-preview`；缺失、后缀变体、大小写变体和前后空格均会在模型调用前失败。
+`INTERN_MODEL=intern-s2-preview-397b`；缺失、别名、大小写变体和前后空格均会在模型调用前失败。
 调用方不能再通过 `--model-identifier` 或构造参数制造与实际请求不一致的展示标签。
 
 平台侧 API Key 轮换无法由仓库代码执行或验证。此前在对话中出现的凭证必须由持有人在
@@ -32,7 +32,7 @@ Intern 平台撤销并生成新凭证；新凭证只能通过本地 `INTERN_API_
 ### 1. 精确模型身份门禁
 
 - 新增 `mathforge.model_identity`；
-- 唯一允许的可调用模型 ID 为 `intern-s2-preview`；
+- 唯一允许的模型 ID 为 `intern-s2-preview-397b`；
 - 唯一可信来源为 `environment:INTERN_MODEL`；
 - `ReasoningAgent`、逐题输出 Runner 和 benchmark Runner 均使用同一门禁；
 - 在构造 Harness 和发起模型调用前完成校验；
@@ -75,8 +75,8 @@ Artifact 不再使用含义模糊的 `model_identifier`，也不生成虚构的 
 新增或更新的测试覆盖：
 
 - 模型变量缺失时早失败且没有模型调用；
-- `intern-s2-preview-397b`、`intern-latest`、大小写变体和空白变体被拒绝；
-- requested model 精确为官方 Client 可调用的 `intern-s2-preview`；
+- Legacy `intern-s2-preview`、`intern-latest`、大小写变体和空白变体被拒绝；
+- requested model 精确为小写 397B 版本 ID；
 - 调用方伪造展示标签无效；
 - response model 与 thinking mode 明确不可观测；
 - provenance 记录 Git dirty 状态；
@@ -89,7 +89,7 @@ Artifact 不再使用含义模糊的 `model_identifier`，也不生成虚构的 
 
 | 标准 | E0 结果 | 后续阶段 |
 |---|---|---|
-| C05 Competition 配置绑定 | 精确可调用模型字段门禁完成 | E1 继续完成 256K 与 900 秒配置 |
+| C05 Competition 配置绑定 | 精确 397B 模型门禁完成 | E1 继续完成 256K 与 900 秒配置 |
 | C20 终态和错误码 | 模型身份配置在调用前安全失败 | 完整 timeout 终态由 E1/E7 完成 |
 | C21 Benchmark/污染 | 移除自填模型标签，模型身份和 provenance 同源 | Trace/逐题恢复由 E2/E7 完成 |
 | C25 Provenance/人工审核 | commit、dirty、模型可观测边界与各组件 hash 已记录 | 平台 Key 轮换和最终人工签名仍需外部完成 |
@@ -99,7 +99,7 @@ Artifact 不再使用含义模糊的 `model_identifier`，也不生成虚构的 
 PowerShell：
 
 ```powershell
-$env:INTERN_MODEL = "intern-s2-preview"
+$env:INTERN_MODEL = "intern-s2-preview-397b"
 $env:INTERN_API_KEY = "<rotated-key>"
 python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs
 ```

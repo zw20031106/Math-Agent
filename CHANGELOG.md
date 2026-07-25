@@ -4,11 +4,17 @@
 
 ### Public output and rerun hardening
 
-- Switched the enforced API request field to `intern-s2-preview`, matching the
-  official injected client's callable model name. A full PrimarySolver prompt
-  succeeded at 16K and 64K output limits with this field, while the suffixed
-  `intern-s2-preview-397b` field failed the same formal request despite passing
-  a trivial probe.
+- Restored the enforced API request field to the official exact version ID
+  `intern-s2-preview-397b`. The apparently successful `intern-s2-preview`
+  comparison used the documented Legacy alias, which currently targets 35B
+  and therefore was not a valid 397B acceptance test.
+- Reclassified the earlier 397B formal-request failure as a 120-second client
+  timeout, not an invalid model ID. The per-case runner retains a 735-second
+  underlying request window for long 397B reasoning.
+- Verified the corrected path with a real end-to-end case using
+  `intern-s2-preview-397b`: the formal model call completed in 85.15 seconds,
+  parsed as strict CandidateSolution JSON, and produced the symbolically
+  correct answer under a terminal `success`/`primary` result.
 - Capped competition completions and the batch preflight at 65,536 tokens while
   retaining the 262,144-token context window, 8,192-token safety margin, and
   unlimited public Trace.
@@ -185,8 +191,8 @@
 
 ### S6-A
 
-- Required the exact callable `intern-s2-preview` model request from
-  `INTERN_MODEL`; missing values, suffixed/case variants, and caller-supplied
+- Required the exact lowercase `intern-s2-preview-397b` model request from
+  `INTERN_MODEL`; missing values, aliases, case variants, and caller-supplied
   display labels now fail closed or are ignored before any model call.
 - Upgraded run provenance to schema 1.1 and benchmark artifacts to schema 3.2,
   recording the requested model, its environment source, Git dirty state, and

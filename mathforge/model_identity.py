@@ -5,7 +5,7 @@ import os
 from typing import Any, Mapping
 
 
-EXACT_INTERN_MODEL = "intern-s2-preview"
+EXACT_INTERN_MODEL = "intern-s2-preview-397b"
 MODEL_ENVIRONMENT_VARIABLE = "INTERN_MODEL"
 UNOBSERVABLE_REASON = "official_client_returns_assistant_content_only"
 

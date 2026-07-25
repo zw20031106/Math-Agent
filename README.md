@@ -50,7 +50,7 @@ For one atomic JSON file per input case, written immediately when that case
 finishes, use:
 
 ```bash
-export INTERN_MODEL=intern-s2-preview
+export INTERN_MODEL=intern-s2-preview-397b
 python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --concurrency 1
 ```
 
@@ -85,12 +85,12 @@ completion telemetry are omitted. Provider failures are exposed only through
 safe reason codes such as `model_call_failed`; credentials and raw exceptions
 remain private.
 
-`INTERN_MODEL` is mandatory and must be the exact callable ID shown above.
-Suffixed or case-variant IDs such as `intern-s2-preview-397b` and
-caller-supplied display labels are rejected. The official chat surface returns
-assistant content but no response model or thinking-mode metadata, so
-provenance records the requested model and marks those response-side fields as
-unobservable instead of inferring them.
+`INTERN_MODEL` is mandatory and must be the exact version ID shown above.
+The legacy `intern-s2-preview` field currently targets a 35B model; aliases,
+case variants, and caller-supplied display labels are rejected. The official
+chat surface returns assistant content but no response model or thinking-mode
+metadata, so provenance records the requested model and marks those
+response-side fields as unobservable instead of inferring them.
 
 Every role call uses one context-budget service. The competition profile caps
 each completion at 65,536 tokens, and the provider passes the positive value
@@ -141,7 +141,7 @@ wheelhouse; installation and the smoke test are offline.
 
 ## Runtime configuration
 
-- `INTERN_MODEL=intern-s2-preview`: required exact callable model request; variants fail closed.
+- `INTERN_MODEL=intern-s2-preview-397b`: required exact 397B model request; aliases fail closed.
 - `MATHFORGE_MODEL_MAX_CONCURRENCY`: bounded shared client concurrency (default `4`).
 - `MATHFORGE_INTERN_S2_TOKENIZER_DIR`: optional pinned local tokenizer snapshot;
   a mismatch activates the recorded UTF-8 fallback instead of loading it.
