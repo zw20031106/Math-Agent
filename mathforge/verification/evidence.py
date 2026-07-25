@@ -108,6 +108,8 @@ class EvidenceLedger:
         obligation_ids: list[str],
         status: str,
         description: str,
+        missing_condition: str = "",
+        counterexample_summary: str = "",
     ) -> EvidenceRecord:
         self._validate_reference(candidate_id, claim_id)
         self._reserve_record()
@@ -119,7 +121,11 @@ class EvidenceLedger:
             status=status if status in {"pass", "fail", "unknown"} else "unknown",
             strength="soft",
             description=description,
-            payload={"obligation_ids": list(obligation_ids)},
+            payload={
+                "obligation_ids": list(obligation_ids),
+                "missing_condition": str(missing_condition),
+                "counterexample_summary": str(counterexample_summary),
+            },
             invocation={
                 "role": "VerifierSkeptic",
                 "obligation_ids": list(obligation_ids),

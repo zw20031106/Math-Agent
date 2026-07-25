@@ -22,6 +22,62 @@ _ANSWER_PATTERNS = (
     re.compile(r"(?:最终答案|答案)\s*[:：]\s*(.+)$", re.MULTILINE),
     re.compile(r"\\boxed\{([^{}]+)\}"),
 )
+_REQUIRED_MODEL_FIELDS = frozenset(
+    {
+        "method",
+        "method_steps",
+        "solution_text",
+        "public_solution_steps",
+        "final_answer",
+        "assumptions",
+        "theorems",
+        "claims",
+        "unresolved_obligations",
+    }
+)
+_NONEMPTY_MODEL_FIELDS = frozenset(
+    {
+        "method",
+        "method_steps",
+        "solution_text",
+        "public_solution_steps",
+        "final_answer",
+        "claims",
+    }
+)
+_TOP_LEVEL_ALIASES = {
+    "structured_method_steps": "method_steps",
+    "public_steps": "public_solution_steps",
+}
+_CLAIM_ALIASES = {
+    "id": "claim_id",
+    "dependencies": "depends_on",
+}
+_METHOD_STEP_ALIASES = {
+    "id": "step_id",
+    "claims": "claim_ids",
+}
+_ALLOWED_CLAIM_IMPORTANCE = frozenset({"critical", "supporting"})
+_ALLOWED_CHECK_TYPES = frozenset(
+    {
+        "reasoning",
+        "definition",
+        "theorem_preconditions",
+        "necessity",
+        "sufficiency",
+        "existence",
+        "uniqueness",
+        "boundary",
+        "interchange",
+        "safe_parse_expression",
+        "symbolic_equivalence",
+        "simplify_expression",
+        "numerical_residual",
+        "matrix_shape_check",
+        "latex_syntax_check",
+        "answer_type_check",
+    }
+)
 
 
 class SolutionParser:
@@ -36,9 +92,18 @@ class SolutionParser:
         text = response.strip()
         payload, status = self._payload(text)
         if payload is not None:
-            return self._from_payload(payload, text, candidate_id, role, answer_type, status)
+            payload, alias_deviations = self._normalize_aliases(payload)
+            return self._from_payload(
+                payload,
+                text,
+                candidate_id,
+                role,
+                answer_type,
+                status,
+                alias_deviations,
+            )
         answer = self._extract_answer(text)
-        parse_status = "regex_answer" if answer != text else "raw_text"
+        parse_status = status or ("regex_answer" if answer != text else "raw_text")
         candidate = CandidateSolution(
             candidate_id=candidate_id,
             role=role,
@@ -54,26 +119,142 @@ class SolutionParser:
 
     @staticmethod
     def _payload(text: str) -> tuple[dict[str, Any] | None, str]:
-        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE)
         try:
-            value = json.loads(cleaned)
+            value = json.loads(text)
             return (value, "strict_json") if isinstance(value, dict) else (None, "")
         except (json.JSONDecodeError, TypeError):
-            cleaned = cleaned.strip()
-        decoder = json.JSONDecoder()
-        for match in re.finditer(r"\{", cleaned):
+            pass
+        fenced = re.fullmatch(
+            r"\s*```(?:json)?\s*(.*?)\s*```\s*",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if fenced is not None:
+            cleaned = fenced.group(1).strip()
             try:
-                value, _ = decoder.raw_decode(cleaned[match.start() :])
-                if isinstance(value, dict):
-                    return value, "outer_json"
-            except json.JSONDecodeError:
-                continue
+                value = json.loads(cleaned)
+                return (value, "fenced_json") if isinstance(value, dict) else (None, "")
+            except (json.JSONDecodeError, TypeError):
+                pass
+        else:
+            cleaned = re.sub(
+                r"^\s*```(?:json)?\s*",
+                "",
+                text,
+                count=1,
+                flags=re.IGNORECASE,
+            ).strip()
+        decoder = json.JSONDecoder()
+        if not cleaned.startswith("{"):
+            for match in re.finditer(r"\{", cleaned):
+                try:
+                    value, _ = decoder.raw_decode(cleaned[match.start() :])
+                    if isinstance(value, dict):
+                        return value, "outer_json"
+                except json.JSONDecodeError:
+                    continue
         repaired = re.sub(r",\s*([}\]])", r"\1", cleaned)
         try:
             value = ast.literal_eval(repaired)
             return (value, "repaired_json") if isinstance(value, dict) else (None, "")
         except (ValueError, SyntaxError):
-            return None, ""
+            return None, SolutionParser._json_failure_status(cleaned)
+
+    @staticmethod
+    def _json_failure_status(text: str) -> str:
+        candidate = text.lstrip()
+        if not candidate.startswith("{"):
+            return ""
+        stack: list[str] = []
+        in_string = False
+        escaped = False
+        pairs = {"}": "{", "]": "["}
+        for character in candidate:
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == '"':
+                    in_string = False
+                continue
+            if character == '"':
+                in_string = True
+            elif character in "[{":
+                stack.append(character)
+            elif character in "]}":
+                if not stack or stack.pop() != pairs[character]:
+                    return "malformed_json"
+        if in_string or stack:
+            return "truncated_json"
+        return "malformed_json"
+
+    @staticmethod
+    def _normalize_aliases(
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[str]]:
+        normalized = dict(payload)
+        deviations: list[str] = []
+        SolutionParser._normalize_object_aliases(
+            normalized,
+            _TOP_LEVEL_ALIASES,
+            deviations,
+            prefix="",
+        )
+        claims = normalized.get("claims")
+        if isinstance(claims, list):
+            normalized_claims: list[Any] = []
+            for index, item in enumerate(claims):
+                if isinstance(item, dict):
+                    normalized_item = dict(item)
+                    SolutionParser._normalize_object_aliases(
+                        normalized_item,
+                        _CLAIM_ALIASES,
+                        deviations,
+                        prefix=f"claims[{index}]",
+                    )
+                    normalized_claims.append(normalized_item)
+                else:
+                    normalized_claims.append(item)
+            normalized["claims"] = normalized_claims
+        method_steps = normalized.get("method_steps")
+        if isinstance(method_steps, list):
+            normalized_steps: list[Any] = []
+            for index, item in enumerate(method_steps):
+                if isinstance(item, dict):
+                    normalized_item = dict(item)
+                    SolutionParser._normalize_object_aliases(
+                        normalized_item,
+                        _METHOD_STEP_ALIASES,
+                        deviations,
+                        prefix=f"method_steps[{index}]",
+                    )
+                    normalized_steps.append(normalized_item)
+                else:
+                    normalized_steps.append(item)
+            normalized["method_steps"] = normalized_steps
+        return normalized, deviations
+
+    @staticmethod
+    def _normalize_object_aliases(
+        payload: dict[str, Any],
+        aliases: dict[str, str],
+        deviations: list[str],
+        *,
+        prefix: str,
+    ) -> None:
+        for alias, canonical in aliases.items():
+            if alias not in payload:
+                continue
+            label = f"{prefix}.{alias}" if prefix else alias
+            if canonical not in payload:
+                payload[canonical] = payload[alias]
+                deviations.append(f"{label}:alias_normalized:{canonical}")
+            elif payload[canonical] != payload[alias]:
+                deviations.append(f"{label}:alias_conflict:{canonical}")
+            else:
+                deviations.append(f"{label}:alias_duplicate:{canonical}")
+            payload.pop(alias, None)
 
     @staticmethod
     def _from_payload(
@@ -83,8 +264,23 @@ class SolutionParser:
         role: str,
         answer_type: str,
         status: str,
+        initial_deviations: list[str] | None = None,
     ) -> CandidateSolution:
-        deviations: list[str] = []
+        deviations = list(initial_deviations or [])
+        missing_fields = sorted(_REQUIRED_MODEL_FIELDS - set(payload))
+        deviations.extend(f"{name}:missing" for name in missing_fields)
+        empty_fields = sorted(
+            name
+            for name in _NONEMPTY_MODEL_FIELDS.intersection(payload)
+            if payload[name] is None or payload[name] == "" or payload[name] == []
+        )
+        deviations.extend(f"{name}:empty" for name in empty_fields)
+        if missing_fields or empty_fields:
+            status = (
+                "incomplete_json"
+                if status == "strict_json"
+                else f"{status}:incomplete_candidate"
+            )
         host_fields = {
             "candidate_id",
             "role",
@@ -150,6 +346,18 @@ class SolutionParser:
                 deviations,
                 prefix=prefix,
             )
+            if check_suggestion not in _ALLOWED_CHECK_TYPES:
+                deviations.append(f"{prefix}.check_type:value")
+            importance = SolutionParser._model_string(
+                item,
+                "importance",
+                "supporting",
+                deviations,
+                prefix=prefix,
+            )
+            if importance not in _ALLOWED_CLAIM_IMPORTANCE:
+                deviations.append(f"{prefix}.importance:value")
+                importance = "supporting"
             claims.append(
                 Claim(
                     claim_id=SolutionParser._model_string(
@@ -173,13 +381,7 @@ class SolutionParser:
                         prefix=prefix,
                     ),
                     check_type=check_suggestion,
-                    importance=SolutionParser._model_string(
-                        item,
-                        "importance",
-                        "supporting",
-                        deviations,
-                        prefix=prefix,
-                    ),
+                    importance=importance,
                     claim_kind=derive_claim_kind(check_suggestion),
                 )
             )

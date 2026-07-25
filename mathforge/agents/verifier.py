@@ -36,6 +36,8 @@ class SkepticFinding:
     obligation_ids: list[str]
     status: str
     description: str
+    missing_condition: str = ""
+    counterexample_summary: str = ""
 
 
 @dataclass(frozen=True)
@@ -65,8 +67,14 @@ class VerifierSkepticAgent:
         *,
         max_tokens: int,
         context_view: RoleContextView | None = None,
+        evidence: list[EvidenceRecord] | None = None,
     ) -> BatchVerificationResult:
-        payload = self._review_payload(problem, candidates, obligations)
+        payload = self._review_payload(
+            problem,
+            candidates,
+            obligations,
+            evidence or [],
+        )
         try:
             budget.consume(stage="verifier")
             visible_payload = (
@@ -79,10 +87,10 @@ class VerifierSkepticAgent:
                 else json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
             )
             user = (
-                "Review this structured batch. Do not reconstruct or rewrite the full "
-                "solutions. Return {\"findings\":[{\"candidate_id\":\"...\","
-                "\"claim_id\":\"...\",\"obligation_ids\":[\"...\"],"
-                "\"status\":\"pass|fail|unknown\",\"description\":\"...\"}]}.\n\n"
+                "Review this structured public batch without reconstructing or rewriting "
+                "the full solutions. Return exactly one JSON object with findings that "
+                "contain candidate_id, claim_id, obligation_ids, status, public_rationale, "
+                "missing_condition, and counterexample_summary.\n\n"
                 f"Batch:\n{visible_payload}"
             )
             messages = self._contracts.messages(
@@ -91,7 +99,8 @@ class VerifierSkepticAgent:
                 (
                     "Challenge the supplied claims and required proof obligations. "
                     "Return JSON only. A pass must name both a real claim_id and one or more "
-                    "obligation_ids supported by that claim. Unknown is not pass."
+                    "obligation_ids supported by that claim. Unknown is not pass. "
+                    "Do not emit native tool calls or private reasoning."
                 ),
             )
             budget.record_prompt_chars(
@@ -120,11 +129,11 @@ class VerifierSkepticAgent:
         problem: ProblemIR,
         candidates: list[CandidateSolution],
         obligations: dict[str, list[ProofObligation]],
+        evidence: list[EvidenceRecord],
     ) -> dict:
         return {
             "problem": problem.normalized_problem,
-            "problem_type": problem.problem_type,
-            "assumptions": list(problem.assumptions),
+            "conditions": list(problem.assumptions),
             "candidates": [
                 {
                     "candidate_id": candidate.candidate_id,
@@ -133,6 +142,18 @@ class VerifierSkepticAgent:
                     "assumptions": list(candidate.assumptions),
                     "theorems": list(candidate.theorems),
                     "claims": [claim.to_dict() for claim in candidate.claims],
+                    "method_steps": [
+                        method_step.to_dict()
+                        for method_step in candidate.method_steps
+                    ],
+                    "public_solution_steps": list(
+                        candidate.public_solution_steps
+                    ),
+                    "evidence": [
+                        record.to_dict()
+                        for record in evidence
+                        if record.candidate_id == candidate.candidate_id
+                    ],
                     "obligations": [
                         obligation.to_dict()
                         for obligation in obligations.get(candidate.candidate_id, [])
@@ -146,11 +167,32 @@ class VerifierSkepticAgent:
     def _review_payload_from_view(context_view: RoleContextView) -> dict:
         payload = context_view.payload
         obligations = payload.get("obligations", [])
+        evidence = payload.get("evidence", [])
         return {
             "problem": payload.get("original_problem", ""),
             "candidates": [
                 {
-                    **candidate,
+                    key: candidate[key]
+                    for key in (
+                        "candidate_id",
+                        "method",
+                        "final_answer",
+                        "assumptions",
+                        "theorems",
+                        "claims",
+                        "method_steps",
+                        "public_solution_steps",
+                        "unresolved_obligations",
+                    )
+                    if key in candidate
+                }
+                | {
+                    "evidence": [
+                        record
+                        for record in evidence
+                        if record.get("candidate_id")
+                        == candidate.get("candidate_id")
+                    ],
                     "obligations": [
                         obligation
                         for obligation in obligations
@@ -222,7 +264,14 @@ class VerifierSkepticAgent:
                     claim_id,
                     obligation_ids,
                     status,
-                    str(item.get("description", "VerifierSkeptic finding"))[:1000],
+                    str(
+                        item.get(
+                            "public_rationale",
+                            item.get("description", "VerifierSkeptic finding"),
+                        )
+                    )[:1000],
+                    str(item.get("missing_condition", ""))[:1000],
+                    str(item.get("counterexample_summary", ""))[:1000],
                 )
             )
         return results

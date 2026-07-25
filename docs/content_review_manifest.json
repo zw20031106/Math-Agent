@@ -33,10 +33,10 @@
       "path": "prompts",
       "pattern": "contract.md",
       "expected_count": 7,
-      "version": "frontmatter-version",
-      "engineering_reviewer": "codex-s5-audit",
-      "review_date": "2026-07-23",
-      "sha256": "944b15dacd74e8e71d7d54fb4ba643b480cb0556d04250879db71069a1b801e1"
+      "version": "prompt-contract-2",
+      "engineering_reviewer": "codex-s6-e4-audit",
+      "review_date": "2026-07-25",
+      "sha256": "03fa2ce3e70eb604a915baa833c111a4b35aba525c028b68a4dc027e4d657daa"
     },
     {
       "id": "proof-obligations",

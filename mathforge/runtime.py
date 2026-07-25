@@ -997,7 +997,7 @@ class MathForgeHarness:
                     trace,
                     role="VerifierSkeptic",
                     candidates=viable,
-                    evidence=[],
+                    evidence=session.evidence,
                 )
                 verifier_result = self._verifier_agent.review(
                     session.problem_ir,
@@ -1006,6 +1006,7 @@ class MathForgeHarness:
                     session.budget,
                     max_tokens=self._config.primary_max_tokens,
                     context_view=verifier_context,
+                    evidence=session.evidence,
                 )
                 for finding in verifier_result.findings:
                     ledger.record_verifier_finding(
@@ -1014,6 +1015,8 @@ class MathForgeHarness:
                         obligation_ids=finding.obligation_ids,
                         status=finding.status,
                         description=finding.description,
+                        missing_condition=finding.missing_condition,
+                        counterexample_summary=finding.counterexample_summary,
                     )
                     skeptic_reviewed.add(finding.candidate_id)
                 trace.add(

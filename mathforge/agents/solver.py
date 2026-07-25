@@ -11,11 +11,14 @@ from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
 from mathforge.parsing.solution_parser import SolutionParser
 
 
-_OUTPUT_INSTRUCTION = """Return a CandidateSolution JSON object when possible, with
-method, structured method_steps, solution_text, final_answer, answer_type,
-assumptions, theorems, claims, and unresolved_obligations. Each method step must
-use a controlled kind and reference real claim IDs. Keep the exact final answer
-explicit."""
+_OUTPUT_INSTRUCTION = (
+    "Return exactly one complete CandidateSolution model-fields JSON object. "
+    "Include method, method_steps, solution_text, public_solution_steps, "
+    "final_answer, assumptions, theorems, claims, and unresolved_obligations. "
+    "Do not include Markdown fences, Host-owned fields, tool calls, or private "
+    "scratchpad fields. Each method step must use a controlled kind and reference "
+    "real Claim IDs."
+)
 
 
 @dataclass(frozen=True)
@@ -52,7 +55,7 @@ class PrimarySolver:
             user,
             (
                 "Produce a rigorous independently verifiable solution. "
-                f"{_OUTPUT_INSTRUCTION} Set method exactly to the assigned method family."
+                f"{_OUTPUT_INSTRUCTION} Copy method exactly from the assigned method family."
             ),
         )
 
@@ -80,7 +83,7 @@ class AlternativeSolver:
             user,
             (
                 "Solve independently using only the assigned core method family. "
-                f"{_OUTPUT_INSTRUCTION} Set method exactly to the assigned method family."
+                f"{_OUTPUT_INSTRUCTION} Copy method exactly from the assigned method family."
             ),
         )
 

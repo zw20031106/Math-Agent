@@ -13,7 +13,6 @@ def candidate_view(candidate: dict, role: str, allowed_claim_ids: set[str] | Non
         }
     elif role == "VerifierSkeptic":
         view.pop("solution_text", None)
-        view.pop("public_solution_steps", None)
     elif role == "RepairAgent" and allowed_claim_ids is not None:
         view["claims"] = [
             claim for claim in view.get("claims", []) if claim.get("claim_id") in allowed_claim_ids

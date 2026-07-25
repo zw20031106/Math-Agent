@@ -58,7 +58,10 @@ class RepairAgent:
             user,
             (
                 "Repair only the supplied failed claim impact closure. "
-                "Return CandidateSolution JSON with replacement claims."
+                "Return exactly one CandidateSolution model-fields JSON object with "
+                "replacement claims, corrected public steps, the corrected or unchanged "
+                "exact final answer, and unresolved obligations. Do not rewrite unrelated "
+                "content or emit native tool calls."
             ),
         )
         budget.record_prompt_chars(

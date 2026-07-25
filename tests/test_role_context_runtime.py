@@ -53,20 +53,43 @@ class ContextCaptureClient:
             if system.startswith("You are PrimarySolver")
             else "INDEPENDENT_ALTERNATIVE"
         )
+        assigned_method = messages[-1]["content"].split(
+            "Required core method family: ",
+            1,
+        )[1].split(".", 1)[0]
         return json.dumps(
             {
-                "method": "direct",
+                "method": assigned_method,
+                "method_steps": [
+                    {
+                        "step_id": f"step-{index}",
+                        "kind": "conclusion",
+                        "claim_ids": [kind],
+                        "theorem": "",
+                    }
+                    for index, kind in enumerate(
+                        ("definition", "sufficiency", "boundary"),
+                        start=1,
+                    )
+                ],
                 "solution_text": private_text,
+                "public_solution_steps": [
+                    "PUBLIC CHECKABLE STEP",
+                ],
                 "final_answer": "QED",
-                "answer_type": "text",
+                "assumptions": [],
+                "theorems": [],
                 "claims": [
                     {
                         "claim_id": kind,
                         "statement": f"{kind}: justified step",
+                        "depends_on": [],
                         "check_type": kind,
+                        "importance": "critical",
                     }
                     for kind in ("definition", "sufficiency", "boundary")
                 ],
+                "unresolved_obligations": [],
             }
         )
 

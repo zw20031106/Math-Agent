@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### S6-E
+
+- Upgraded all seven role contracts to Prompt Contract v2. Solver roles now
+  require exactly one complete JSON object, exact assigned MethodFamily,
+  complete public solution text and steps, structured Claims and MethodSteps,
+  explicit controlled enums, no Host-owned output fields, and no native tool
+  calls or private scratchpad fields.
+- Removed the model-owned `answer_type` request and all soft "when possible"
+  wording. Alternative solving now requires a visibly independent public
+  method, while Repair and Finalizer contracts preserve local-patch and
+  verified-content boundaries.
+- Gave VerifierSkeptic only problem conditions, structured Claims,
+  MethodSteps, public steps, Evidence, and Proof Obligations. Findings now
+  preserve public rationale, missing conditions, and counterexample summaries
+  without exposing full Solver solution text.
+- Classified strict, fenced, outer, repaired, truncated, malformed, and
+  contract-incomplete JSON separately. Added conflict-safe normalization for a
+  small approved alias set while retaining auditable deviations.
+- Added a fixed 20-case injected-client Prompt Contract probe covering scalar,
+  matrix/vector-input scalar, interval-input numeric, polynomial, set/group,
+  proof/derivation, and cross-domain cases. Its deterministic contract fixture
+  passes all E4 thresholds at 100%; a credentialed Intern-S2 live run remains
+  an explicit external validation gate.
+
 ### S6-D
 
 - Upgraded `ProblemIR` to schema 1.3, reworked problem parsing around the final

@@ -12,5 +12,7 @@ max_context_chars: 16000
 version: 2
 execution_mode: inactive_review_template
 ---
-Inactive review template. Production lemma curation is a deterministic host
+Inactive review template. Production lemma curation is a deterministic Host
 service under ADR-001 and does not render this contract into model messages.
+It receives public Claims, obligations, and Evidence only; it never requests or
+stores private model reasoning.
