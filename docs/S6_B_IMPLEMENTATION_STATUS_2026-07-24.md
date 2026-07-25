@@ -21,15 +21,15 @@ effective_max_output_tokens
     )
 ```
 
-若右侧不为正，调用会在进入 Client 前失败。正数配置仍保留原有硬上限语义；
-`primary_max_tokens=0` 表示使用上下文允许的最大输出，`max_model_tokens=0`
-表示只记录总 Token、不按估算总量触发回退。
+若右侧不为正，调用会在进入 Client 前失败。当前 Competition 配置使用
+`primary_max_tokens=65536`，避免向服务端申请接近整个上下文窗口的 Completion；
+`max_model_tokens=0` 表示只记录总 Token、不按估算总量触发回退。
 
 ## 1. Config 1.2
 
 Competition 配置固定为：
 
-- `primary_max_tokens=0`；
+- `primary_max_tokens=65536`；
 - `max_model_tokens=0`；
 - `model_context_window_tokens=262144`；
 - `context_safety_margin_tokens=8192`；

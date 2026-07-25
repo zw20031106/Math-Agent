@@ -4,7 +4,7 @@
   "status": "candidate-unvalidated",
   "model_max_concurrency": 1,
   "primary_temperature": 0.2,
-  "primary_max_tokens": 0,
+  "primary_max_tokens": 65536,
   "max_model_calls": 6,
   "skill_char_budget": 6000,
   "raw_context_max_chars": 48000,

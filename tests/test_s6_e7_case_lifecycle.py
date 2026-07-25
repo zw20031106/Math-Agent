@@ -9,6 +9,7 @@ import pytest
 from mathforge.benchmark import BenchmarkCase, run_benchmark
 from scripts.run_case_outputs import (
     CaseRunManifest,
+    MODEL_PREFLIGHT_MAX_TOKENS,
     PerCaseWallClockRunner,
     RUN_MANIFEST_FILENAME,
     SerializedFastRetryClient,
@@ -180,12 +181,17 @@ def test_model_availability_preflight_requires_non_empty_content():
     with pytest.raises(RuntimeError, match="preflight"):
         verify_model_availability(EmptyClient())
 
-    client = type(
-        "AvailableClient",
-        (),
-        {"chat": lambda self, **_: "OK"},
-    )()
+    class AvailableClient:
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, **kwargs):
+            self.calls.append(kwargs)
+            return "OK"
+
+    client = AvailableClient()
     verify_model_availability(client)
+    assert client.calls[0]["max_tokens"] == MODEL_PREFLIGHT_MAX_TOKENS == 65_536
 
 
 def test_model_http_timeout_uses_the_harness_call_window():

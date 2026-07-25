@@ -89,11 +89,11 @@ def _minimal_config(**changes) -> HarnessConfig:
     )
 
 
-def test_competition_config_uses_e1_dynamic_limits_and_deadlines():
+def test_competition_config_uses_reliable_completion_cap_and_e1_deadlines():
     config = load_competition_config()
 
     assert config.schema_version == "1.2"
-    assert config.primary_max_tokens == 0
+    assert config.primary_max_tokens == 65536
     assert config.max_model_tokens == 0
     assert config.model_context_window_tokens == 262144
     assert config.context_safety_margin_tokens == 8192

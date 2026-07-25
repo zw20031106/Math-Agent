@@ -59,6 +59,9 @@ python scripts/run_case_outputs.py \
 客户端默认的 120 秒截断 Intern-S2 长推理，也不会让重试越过单题截止时间。
 竞赛配置的模型调用 Gate 并发数为 1；多候选仍会生成，但按截止时间感知的
 顺序进入模型服务，避免并发请求造成服务拒绝。
+运行时必须使用实际可调用字段 `INTERN_MODEL=intern-s2-preview`。批量预检和
+Competition 主求解 Completion 上限均为 65,536 Token；总上下文仍为 262,144
+Token，另保留 8,192 Token 安全余量。
 
 每道题结束后立即：
 

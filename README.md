@@ -50,8 +50,8 @@ For one atomic JSON file per input case, written immediately when that case
 finishes, use:
 
 ```bash
-export INTERN_MODEL=intern-s2-preview-397b
-python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --concurrency 4
+export INTERN_MODEL=intern-s2-preview
+python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --concurrency 1
 ```
 
 Files are named `<id>.json` and contain exactly `id`, `status`,
@@ -85,17 +85,18 @@ completion telemetry are omitted. Provider failures are exposed only through
 safe reason codes such as `model_call_failed`; credentials and raw exceptions
 remain private.
 
-`INTERN_MODEL` is mandatory and must be the exact lowercase ID shown above.
-Aliases such as `intern-s2-preview` and caller-supplied display labels are
-rejected. The official chat surface returns assistant content but no response
-model or thinking-mode metadata, so provenance records the requested model and
-marks those response-side fields as unobservable instead of inferring them.
+`INTERN_MODEL` is mandatory and must be the exact callable ID shown above.
+Suffixed or case-variant IDs such as `intern-s2-preview-397b` and
+caller-supplied display labels are rejected. The official chat surface returns
+assistant content but no response model or thinking-mode metadata, so
+provenance records the requested model and marks those response-side fields as
+unobservable instead of inferring them.
 
-Every role call uses one context-budget service. With the competition sentinel
-`primary_max_tokens=0`, the provider passes the positive value
-`262144 - prompt_tokens - 8192` to the client. A positive configured cap is
-still honored, but can never exceed that dynamic value. The preferred counter
-is the pinned tokenizer snapshot for
+Every role call uses one context-budget service. The competition profile caps
+each completion at 65,536 tokens, and the provider passes the positive value
+`min(65536, 262144 - prompt_tokens - 8192)` to the client. This retains the
+256K total-context invariant while avoiding unstable near-window completion
+requests. The preferred counter is the pinned tokenizer snapshot for
 `internlm/Intern-S2-Preview-397B@35eba5f142353d180472cdad2d70b09d0a383113`;
 set `MATHFORGE_INTERN_S2_TOKENIZER_DIR` to a local snapshot containing the
 hash-verified tokenizer config, tokenizer JSON, and chat template. If it is
@@ -140,7 +141,7 @@ wheelhouse; installation and the smoke test are offline.
 
 ## Runtime configuration
 
-- `INTERN_MODEL=intern-s2-preview-397b`: required exact model request; aliases fail closed.
+- `INTERN_MODEL=intern-s2-preview`: required exact callable model request; variants fail closed.
 - `MATHFORGE_MODEL_MAX_CONCURRENCY`: bounded shared client concurrency (default `4`).
 - `MATHFORGE_INTERN_S2_TOKENIZER_DIR`: optional pinned local tokenizer snapshot;
   a mismatch activates the recorded UTF-8 fallback instead of loading it.

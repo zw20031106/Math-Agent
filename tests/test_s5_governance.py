@@ -162,10 +162,10 @@ def test_run_and_benchmark_provenance_are_complete_and_tamper_evident(tmp_path):
     )
     assert validate_artifact(artifact) == []
     alias_artifact = json.loads(json.dumps(artifact))
-    alias_artifact["requested_model"] = "intern-s2-preview"
+    alias_artifact["requested_model"] = "intern-s2-preview-397b"
     alias_artifact["run_provenance"]["model_identity"][
         "requested_model"
-    ] = "intern-s2-preview"
+    ] = "intern-s2-preview-397b"
     alias_artifact = finalize_artifact(alias_artifact)
     assert validate_artifact(alias_artifact) == [
         "artifact requested model is not the exact competition model"

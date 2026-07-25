@@ -4,6 +4,14 @@
 
 ### Public output and rerun hardening
 
+- Switched the enforced API request field to `intern-s2-preview`, matching the
+  official injected client's callable model name. A full PrimarySolver prompt
+  succeeded at 16K and 64K output limits with this field, while the suffixed
+  `intern-s2-preview-397b` field failed the same formal request despite passing
+  a trivial probe.
+- Capped competition completions and the batch preflight at 65,536 tokens while
+  retaining the 262,144-token context window, 8,192-token safety margin, and
+  unlimited public Trace.
 - Upgraded the flat public result to exactly
   `id`/`status`/`final_response`/`trace`; only primary completion maps to
   `success`, while fallback/error maps to `failed` and the watchdog maps to
@@ -177,8 +185,8 @@
 
 ### S6-A
 
-- Required the exact lowercase `intern-s2-preview-397b` model request from
-  `INTERN_MODEL`; missing values, aliases, case variants, and caller-supplied
+- Required the exact callable `intern-s2-preview` model request from
+  `INTERN_MODEL`; missing values, suffixed/case variants, and caller-supplied
   display labels now fail closed or are ignored before any model call.
 - Upgraded run provenance to schema 1.1 and benchmark artifacts to schema 3.2,
   recording the requested model, its environment source, Git dirty state, and

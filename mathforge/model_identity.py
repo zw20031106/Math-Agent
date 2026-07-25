@@ -5,7 +5,7 @@ import os
 from typing import Any, Mapping
 
 
-EXACT_INTERN_MODEL = "intern-s2-preview-397b"
+EXACT_INTERN_MODEL = "intern-s2-preview"
 MODEL_ENVIRONMENT_VARIABLE = "INTERN_MODEL"
 UNOBSERVABLE_REASON = "official_client_returns_assistant_content_only"
 
@@ -58,7 +58,7 @@ def require_exact_intern_model(
         )
     if requested_model != EXACT_INTERN_MODEL:
         raise RuntimeError(
-            f"{MODEL_ENVIRONMENT_VARIABLE} must equal the exact lowercase model ID "
+            f"{MODEL_ENVIRONMENT_VARIABLE} must equal the exact callable model ID "
             f"{EXACT_INTERN_MODEL}; aliases are not accepted"
         )
     return ModelIdentity(

@@ -34,6 +34,11 @@ The competition `model_max_concurrency` is one. Parallel candidate tasks wait
 at the Harness deadline-aware model gate and cannot create concurrent provider
 bursts.
 
+The enforced request field is `intern-s2-preview`, matching the callable field
+used by the injected official client. Batch preflight and competition
+completions are capped at 65,536 tokens; the total context window remains
+262,144 tokens with an 8,192-token safety margin.
+
 ## Public/private boundary
 
 Every case file contains exactly:
