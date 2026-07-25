@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 import tempfile
 from threading import Event, Lock, Thread
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -40,6 +40,55 @@ RUN_MANIFEST_SCHEMA_VERSION = "1.0"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 MODEL_PREFLIGHT_MAX_TOKENS = 244_000
 MODEL_HTTP_TIMEOUT_MARGIN_SECONDS = 5.0
+MODEL_FAST_FAILURE_ATTEMPTS = 5
+MODEL_FAST_FAILURE_SECONDS = 20.0
+MODEL_FAST_FAILURE_BACKOFF_SECONDS = 1.0
+MODEL_FAST_RETRY_RESERVE_SECONDS = 100.0
+
+
+class SerializedFastRetryClient:
+    """Serialize calls and retry only quick provider-side rejections."""
+
+    def __init__(
+        self,
+        client: Any,
+        *,
+        max_attempts: int = MODEL_FAST_FAILURE_ATTEMPTS,
+        fast_failure_seconds: float = MODEL_FAST_FAILURE_SECONDS,
+        backoff_seconds: float = MODEL_FAST_FAILURE_BACKOFF_SECONDS,
+    ) -> None:
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+        if fast_failure_seconds < 0 or backoff_seconds < 0:
+            raise ValueError("retry timing must be nonnegative")
+        chat = getattr(client, "chat", None)
+        if not callable(chat):
+            raise TypeError("client must expose a callable chat method")
+        self._chat = chat
+        self._max_attempts = max_attempts
+        self._fast_failure_seconds = fast_failure_seconds
+        self._backoff_seconds = backoff_seconds
+        self._lock = Lock()
+
+    def chat(self, *, messages, temperature, max_tokens) -> str:
+        with self._lock:
+            for attempt in range(self._max_attempts):
+                started = perf_counter()
+                try:
+                    return self._chat(
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                except Exception:
+                    elapsed = perf_counter() - started
+                    if (
+                        attempt + 1 >= self._max_attempts
+                        or elapsed > self._fast_failure_seconds
+                    ):
+                        raise
+                    sleep(self._backoff_seconds * (2**attempt))
+        raise RuntimeError("unreachable model retry state")
 
 
 class PerCaseWallClockRunner:
@@ -458,9 +507,11 @@ def main() -> int:
         model_identity = require_exact_intern_model()
         manifest.record_model_identity(model_identity.to_dict())
         config = load_benchmark_config(args.config)
-        client = InternChatClient(
-            timeout=model_http_timeout_seconds(config),
-            retry=1,
+        client = SerializedFastRetryClient(
+            InternChatClient(
+                timeout=model_http_timeout_seconds(config),
+                retry=1,
+            )
         )
         verify_model_availability(client)
         print("MODEL_PREFLIGHT_OK", flush=True)
@@ -532,6 +583,7 @@ def model_http_timeout_seconds(config: Any) -> int:
         float(config.hard_deadline_seconds)
         - float(config.deterministic_finalize_reserve_seconds)
         - MODEL_HTTP_TIMEOUT_MARGIN_SECONDS
+        - MODEL_FAST_RETRY_RESERVE_SECONDS
     )
     if available < 1:
         raise ValueError("model HTTP timeout window is not positive")

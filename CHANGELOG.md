@@ -19,8 +19,13 @@
   of fallback files.
 - Aligned the per-case runner's official-client HTTP timeout with the Harness
   model-call window and disabled client-internal retries that could cross the
-  15-minute case deadline; the competition profile permits one 835-second
-  request instead of three 120-second requests.
+  15-minute case deadline.
+- Serialized real model calls and added bounded exponential retries only for
+  failures returned within 20 seconds. The competition profile reserves 100
+  seconds for those quick failures and permits a 735-second long request.
+- Set the competition model-call gate to one concurrent call so alternative
+  branches wait at the deadline-aware semaphore instead of starting parallel
+  requests against the unstable provider.
 
 ### S6-H
 

@@ -11,6 +11,7 @@ from scripts.run_case_outputs import (
     CaseRunManifest,
     PerCaseWallClockRunner,
     RUN_MANIFEST_FILENAME,
+    SerializedFastRetryClient,
     model_http_timeout_seconds,
     validate_case_output,
     verify_model_availability,
@@ -193,4 +194,52 @@ def test_model_http_timeout_uses_the_harness_call_window():
         deterministic_finalize_reserve_seconds=30.0,
     )
 
-    assert model_http_timeout_seconds(config) == 835
+    assert model_http_timeout_seconds(config) == 735
+
+
+def test_model_client_retries_fast_failures_and_returns_content(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.run_case_outputs.sleep",
+        lambda _: None,
+    )
+
+    class FlakyClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, **_):
+            self.calls += 1
+            if self.calls < 3:
+                raise RuntimeError("temporary provider rejection")
+            return "candidate content"
+
+    base = FlakyClient()
+    client = SerializedFastRetryClient(base)
+
+    assert client.chat(messages=[], temperature=0.0, max_tokens=1) == (
+        "candidate content"
+    )
+    assert base.calls == 3
+
+
+def test_model_client_does_not_retry_a_long_failure(monkeypatch):
+    ticks = iter([0.0, 21.0])
+    monkeypatch.setattr(
+        "scripts.run_case_outputs.perf_counter",
+        lambda: next(ticks),
+    )
+
+    class FailingClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, **_):
+            self.calls += 1
+            raise RuntimeError("long provider failure")
+
+    base = FailingClient()
+    client = SerializedFastRetryClient(base)
+
+    with pytest.raises(RuntimeError, match="long provider failure"):
+        client.chat(messages=[], temperature=0.0, max_tokens=1)
+    assert base.calls == 1

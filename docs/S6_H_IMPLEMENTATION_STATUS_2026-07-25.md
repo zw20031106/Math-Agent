@@ -23,11 +23,16 @@ restart-safe lifecycle from input preflight through terminal atomic output.
    RunMetrics, request fingerprint, and terminal state.
 9. Print and flush `CASE_COMPLETED` immediately.
 
-The injected official client uses one HTTP attempt with an 835-second timeout,
-which fits inside the 840-second Harness model-call window. The sample
-client's default three 120-second attempts are not used by this runner because
+The runner serializes injected official-client calls. Failures returned within
+20 seconds receive bounded exponential retries; 100 seconds of the call window
+is reserved for that policy, leaving a 735-second underlying HTTP timeout.
+The sample client's default three 120-second attempts are not used because
 they prematurely cut off long Intern-S2 generations and can outlive the
 deterministic finalization boundary.
+
+The competition `model_max_concurrency` is one. Parallel candidate tasks wait
+at the Harness deadline-aware model gate and cannot create concurrent provider
+bursts.
 
 ## Public/private boundary
 

@@ -2,7 +2,7 @@
   "schema_version": "1.2",
   "profile": "competition",
   "status": "candidate-unvalidated",
-  "model_max_concurrency": 4,
+  "model_max_concurrency": 1,
   "primary_temperature": 0.2,
   "primary_max_tokens": 0,
   "max_model_calls": 6,
