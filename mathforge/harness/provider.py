@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from threading import BoundedSemaphore, Event, Thread
+from threading import BoundedSemaphore, Event, Lock, Thread
 from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
@@ -21,7 +21,15 @@ class ModelCallGate:
             raise ValueError("max_concurrency must be positive")
         self._semaphore = BoundedSemaphore(max_concurrency)
 
-    def call(self, function, /, *, deadline=None, **kwargs):
+    def call(
+        self,
+        function,
+        /,
+        *,
+        deadline=None,
+        background_tail_callback=None,
+        **kwargs,
+    ):
         if deadline is None:
             with self._semaphore:
                 return function(**kwargs)
@@ -34,6 +42,8 @@ class ModelCallGate:
 
         done = Event()
         outcome: dict[str, Any] = {}
+        state_lock = Lock()
+        state = {"completed": False, "timed_out": False}
 
         def invoke() -> None:
             try:
@@ -41,8 +51,13 @@ class ModelCallGate:
             except BaseException as exc:
                 outcome["error"] = exc
             finally:
+                with state_lock:
+                    state["completed"] = True
+                    is_background_tail = state["timed_out"]
                 self._semaphore.release()
                 done.set()
+                if is_background_tail and background_tail_callback is not None:
+                    background_tail_callback("completed")
 
         Thread(
             target=invoke,
@@ -50,6 +65,13 @@ class ModelCallGate:
             daemon=True,
         ).start()
         if not done.wait(deadline.remaining_for_model_call()):
+            with state_lock:
+                state["timed_out"] = True
+                already_completed = state["completed"]
+                if background_tail_callback is not None:
+                    background_tail_callback("started")
+            if already_completed and background_tail_callback is not None:
+                background_tail_callback("completed")
             raise BudgetExceeded("model response exceeded deadline")
         if "error" in outcome:
             raise outcome["error"]
@@ -99,6 +121,11 @@ class OfficialClientProvider:
             response = self._gate.call(
                 self._chat,
                 deadline=active_deadline,
+                background_tail_callback=(
+                    budget.record_background_tail
+                    if budget is not None
+                    else None
+                ),
                 messages=messages,
                 temperature=temperature,
                 max_tokens=allocation.max_output_tokens,

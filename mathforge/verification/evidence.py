@@ -141,6 +141,7 @@ class EvidenceLedger:
         candidate_id: str,
         claim_id: str,
         check_suggestion: str,
+        reason: str = "unsupported check suggestion",
     ) -> EvidenceRecord:
         self._validate_reference(candidate_id, claim_id)
         self._reserve_record()
@@ -151,8 +152,11 @@ class EvidenceLedger:
             evidence_type="host:check_type_resolution",
             status="unknown",
             strength="soft",
-            description="unsupported check suggestion",
-            payload={"check_suggestion": str(check_suggestion)},
+            description=str(reason),
+            payload={
+                "check_suggestion": str(check_suggestion),
+                "reason": str(reason),
+            },
             invocation={"resolver": "host_capability_matrix"},
             capability=VerificationCapability.NONE.value,
         )
@@ -185,8 +189,10 @@ class ClaimEvidenceVerifier:
         domains: dict[str, str] | None = None,
         assumptions: list[str] | None = None,
         budget: CallBudget | None = None,
+        selected_tools: list[str] | None = None,
     ) -> list[EvidenceRecord]:
         allowed = set(only_claim_ids) if only_claim_ids is not None else None
+        route_tools = set(selected_tools) if selected_tools is not None else None
         effective_assumptions = list(
             dict.fromkeys([*(assumptions or []), *candidate.assumptions])
         )
@@ -208,6 +214,20 @@ class ClaimEvidenceVerifier:
                         break
                     records.append(record)
                 continue
+            if route_tools is not None and tool_name not in route_tools:
+                claim.verification_state = ClaimVerificationState.UNKNOWN.value
+                try:
+                    records.append(
+                        ledger.record_unknown_check(
+                            candidate_id=candidate.candidate_id,
+                            claim_id=claim.claim_id,
+                            check_suggestion=claim.check_type,
+                            reason="check not selected by route",
+                        )
+                    )
+                except BudgetExceeded:
+                    break
+                continue
             arguments = self._arguments(
                 candidate,
                 tool_name,
@@ -217,6 +237,17 @@ class ClaimEvidenceVerifier:
             )
             if arguments is None:
                 claim.verification_state = ClaimVerificationState.UNKNOWN.value
+                try:
+                    records.append(
+                        ledger.record_unknown_check(
+                            candidate_id=candidate.candidate_id,
+                            claim_id=claim.claim_id,
+                            check_suggestion=claim.check_type,
+                            reason="safe argument reconstruction unavailable",
+                        )
+                    )
+                except BudgetExceeded:
+                    break
                 continue
             timeout = self._tools.default_timeout
             if budget is not None:
@@ -279,6 +310,8 @@ class ClaimEvidenceVerifier:
             "simplify_expression",
             "numerical_residual",
             "matrix_shape_check",
+            "density_normalization",
+            "small_case_enumeration",
             "latex_syntax_check",
             "answer_type_check",
         }:
@@ -311,6 +344,38 @@ class ClaimEvidenceVerifier:
             return {"text": statement}
         if check_type == "answer_type_check":
             return {"answer": candidate.final_answer, "answer_type": candidate.answer_type}
+        if check_type == "density_normalization":
+            matched = re.fullmatch(
+                r"\s*density\[\s*expression=(?P<expression>[^;]+);\s*"
+                r"variable=(?P<variable>[A-Za-z][A-Za-z0-9_]*);\s*"
+                r"lower=(?P<lower>[^;]+);\s*upper=(?P<upper>[^\]]+)\]\s*",
+                statement,
+            )
+            if matched is None:
+                return None
+            return {
+                key: value.strip()
+                for key, value in matched.groupdict().items()
+            }
+        if check_type == "small_case_enumeration":
+            matched = re.fullmatch(
+                r"\s*cases\[\s*variable=(?P<variable>[A-Za-z][A-Za-z0-9_]*);\s*"
+                r"values=(?P<values>-?\d+(?:\s*,\s*-?\d+)*);\s*"
+                r"expression=(?P<expression>[^;]+);\s*"
+                r"expected=(?P<expected>[^\]]+)\]\s*",
+                statement,
+            )
+            if matched is None:
+                return None
+            return {
+                "variable": matched.group("variable"),
+                "values": [
+                    int(value.strip())
+                    for value in matched.group("values").split(",")
+                ],
+                "expression": matched.group("expression").strip(),
+                "expected": matched.group("expected").strip(),
+            }
         return None
 
 

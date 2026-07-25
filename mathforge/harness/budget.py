@@ -70,6 +70,9 @@ class CallBudget:
         self.output_chars = 0
         self.model_call_elapsed_seconds = 0.0
         self.model_call_timeout_count = 0
+        self.background_tail_started = 0
+        self.background_tail_active = 0
+        self.background_tail_completed = 0
         self.model_call_records: list[dict] = []
         self.final_response_tokens = 0
         self.final_response_counting_mode = ""
@@ -191,6 +194,28 @@ class CallBudget:
                 }
             )
 
+    def record_background_tail(self, event: str) -> None:
+        with self._lock:
+            if event == "started":
+                self.background_tail_started += 1
+                self.background_tail_active += 1
+            elif event == "completed":
+                self.background_tail_completed += 1
+                self.background_tail_active = max(
+                    0,
+                    self.background_tail_active - 1,
+                )
+            else:
+                raise ValueError("unknown background-tail event")
+
+    def background_tail_snapshot(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                "started": self.background_tail_started,
+                "active": self.background_tail_active,
+                "completed": self.background_tail_completed,
+            }
+
     def record_final_response(self, tokens: int, counting_mode: str) -> None:
         with self._lock:
             self.final_response_tokens = max(0, int(tokens))
@@ -280,6 +305,9 @@ class CallBudget:
                     6,
                 ),
                 "model_call_timeout_count": self.model_call_timeout_count,
+                "background_tail_started": self.background_tail_started,
+                "background_tail_active": self.background_tail_active,
+                "background_tail_completed": self.background_tail_completed,
                 "final_response_tokens": self.final_response_tokens,
                 "final_response_counting_mode": (
                     self.final_response_counting_mode

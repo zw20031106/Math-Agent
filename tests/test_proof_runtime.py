@@ -230,11 +230,14 @@ def test_optional_repair_cannot_consume_required_verifier_call():
     assert any(role.startswith("You are VerifierSkeptic") for role in client.roles)
     assert not any(role.startswith("You are RepairAgent") for role in client.roles)
     allocation = next(
-        event for event in result["trace"] if event["event"] == "call_allocation_planned"
+        event
+        for event in result["trace"]
+        if event["event"] == "call_allocation_rebalanced"
     )
     assert allocation["verifier"] == 1
     assert allocation["repair_reserve"] == 0
     assert "repair" in allocation["unreachable_by_budget"]
+    assert allocation["repair_unreachable_reason"]
     assert result["run_metrics"]["model_calls"] == 3
 
 

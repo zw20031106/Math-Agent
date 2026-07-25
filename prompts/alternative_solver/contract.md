@@ -44,7 +44,7 @@ Allowed `claims[].check_type` suggestions:
 `sufficiency`, `existence`, `uniqueness`, `boundary`, `interchange`,
 `safe_parse_expression`, `symbolic_equivalence`, `simplify_expression`,
 `numerical_residual`, `matrix_shape_check`, `latex_syntax_check`,
-`answer_type_check`.
+`density_normalization`, `small_case_enumeration`, `answer_type_check`.
 
 Complete output example:
 

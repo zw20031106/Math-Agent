@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### S6-G
+
+- Made `RoutePlan.selected_tools` an enforced evidence gate and added
+  domain-aware symbolic, numerical, matrix, density-normalization, and
+  finite-case capability selection. Unsupported route choices and arguments
+  that the Host cannot safely reconstruct now produce explicit unknown
+  Evidence instead of silent skips.
+- Rebalanced the six-call model budget after initial hard Evidence. Repair and
+  Lemma calls are now reserved only when their evidence, problem-type, risk,
+  dependency-depth, and semantic-verification triggers are present; exhausted
+  stages carry a public unreachable reason.
+- Expanded public Trace coverage for proof obligations, candidate final
+  states, complete Lemma cards and round states, downstream Lemma use,
+  Repair claim-graph diffs, expanded-candidate re-verification, and
+  background provider tails.
+- Restricted Lemma expansion to high-risk proof/derivation problems with a
+  deep Claim dependency chain and a semantically verified local claim.
+  Expanded candidates pass the full validation, Evidence, obligation,
+  skeptic, completion, and arbitration path.
+- Added timeout-tail accounting to the provider, budget, Trace, and RunMetrics
+  schema 1.2. Late model returns cannot mutate the returned result or its
+  metrics snapshot.
+
 ### S6-F
 
 - Upgraded all 29 domain and six general skills to a validated Skill 2.0

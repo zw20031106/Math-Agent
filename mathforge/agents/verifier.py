@@ -276,8 +276,8 @@ class VerifierSkepticAgent:
                             item.get("description", "VerifierSkeptic finding"),
                         )
                     )[:1000],
-                    str(item.get("missing_condition", ""))[:1000],
-                    str(item.get("counterexample_summary", ""))[:1000],
+                    str(item.get("missing_condition", "")),
+                    str(item.get("counterexample_summary", "")),
                 )
             )
         return results

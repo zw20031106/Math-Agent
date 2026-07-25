@@ -87,6 +87,25 @@ def test_runtime_accepts_fully_reverified_repair_and_rebuilds_solution_text():
     repair = next(event for event in result["trace"] if event["event"] == "repair_completed")
     assert repair["rolled_back"] is False
     assert repair["reason"] == "accepted"
+    rebalanced = next(
+        event
+        for event in result["trace"]
+        if event["event"] == "call_allocation_rebalanced"
+    )
+    assert rebalanced["evidence_repair_triggers"] == {
+        "primary-1": ["failed"]
+    }
+    assert rebalanced["repair_reserve"] == 1
+    final_states = next(
+        event
+        for event in result["trace"]
+        if event["event"] == "candidate_final_states"
+    )
+    assert any(
+        state["candidate_id"] == "primary-1-v2"
+        and state["status"] == "selected"
+        for state in final_states["candidates"]
+    )
     assert "x = x" in result["final_response"]
     assert "STALE BAD DERIVATION" not in result["final_response"]
     repair_prompt = next(

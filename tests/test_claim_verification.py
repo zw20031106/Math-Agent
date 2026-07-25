@@ -143,3 +143,69 @@ def test_shape_and_syntax_tools_only_update_their_own_capability_state():
     assert by_claim["syntax"].capability == "syntax.restricted_parse"
     assert candidate.claims[2].verification_state == "syntax_checked"
     assert candidate.claims[2].status == "unverified"
+
+
+def test_route_selected_tools_gate_claim_checks_and_explain_skips():
+    candidate = CandidateSolution(
+        "c",
+        "PrimarySolver",
+        "algebra",
+        "1",
+        "expression",
+        claims=[
+            Claim(
+                "identity",
+                "x = x",
+                check_type="symbolic_equivalence",
+            )
+        ],
+    )
+    records = ClaimEvidenceVerifier(ToolExecutor()).verify(
+        candidate,
+        EvidenceLedger(),
+        selected_tools=["latex_syntax_check"],
+    )
+    assert len(records) == 1
+    assert records[0].status == "unknown"
+    assert records[0].description == "check not selected by route"
+    assert candidate.claims[0].status == "unverified"
+
+
+def test_host_reconstructs_only_controlled_density_and_finite_case_arguments():
+    candidate = CandidateSolution(
+        "c",
+        "PrimarySolver",
+        "probability",
+        "1",
+        "expression",
+        claims=[
+            Claim(
+                "density",
+                "density[expression=1; variable=x; lower=0; upper=1]",
+                check_type="density_normalization",
+            ),
+            Claim(
+                "cases",
+                "cases[variable=n; values=0,1,2; expression=n-n; expected=0]",
+                check_type="small_case_enumeration",
+            ),
+            Claim(
+                "unsafe",
+                "integrate whatever the model meant",
+                check_type="density_normalization",
+            ),
+        ],
+    )
+    records = ClaimEvidenceVerifier(ToolExecutor()).verify(
+        candidate,
+        EvidenceLedger(),
+        selected_tools=["density_normalization", "small_case_enumeration"],
+    )
+    by_claim = {record.claim_id: record for record in records}
+    assert by_claim["density"].status == "pass"
+    assert by_claim["cases"].status == "pass"
+    assert by_claim["unsafe"].status == "unknown"
+    assert (
+        by_claim["unsafe"].description
+        == "safe argument reconstruction unavailable"
+    )

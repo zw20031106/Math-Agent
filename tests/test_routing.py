@@ -77,7 +77,7 @@ def test_final_risk_recomputes_every_derived_route_field():
     assert policy.candidate_count == 3
     assert policy.max_reasoning_rounds == 2
     assert policy.use_rag is True
-    assert policy.use_lemma_loop is True
+    assert policy.use_lemma_loop is False
 
     problem = ProblemParser().parse("solve this problem")
     plan = RouterPlanner().plan(

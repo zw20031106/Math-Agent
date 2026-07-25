@@ -34,9 +34,9 @@
       "pattern": "contract.md",
       "expected_count": 7,
       "version": "prompt-contract-2",
-      "engineering_reviewer": "codex-s6-e4-audit",
+      "engineering_reviewer": "codex-s6-e6-evidence-audit",
       "review_date": "2026-07-25",
-      "sha256": "03fa2ce3e70eb604a915baa833c111a4b35aba525c028b68a4dc027e4d657daa"
+      "sha256": "e03d1d373e1c65324ee9b3cda2265b78b7557600ab59fc779ef8cda901cf5b53"
     },
     {
       "id": "proof-obligations",

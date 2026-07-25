@@ -74,6 +74,8 @@ _ALLOWED_CHECK_TYPES = frozenset(
         "simplify_expression",
         "numerical_residual",
         "matrix_shape_check",
+        "density_normalization",
+        "small_case_enumeration",
         "latex_syntax_check",
         "answer_type_check",
     }

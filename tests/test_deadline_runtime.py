@@ -169,6 +169,51 @@ def test_hard_deadline_returns_fallback_within_tolerance():
         event for event in result["trace"] if event["event"] == "candidate_fanout_completed"
     )
     assert fanout["failures"][0]["reason"] == "deadline_cutoff"
+    tail = next(
+        event
+        for event in result["trace"]
+        if event["event"] == "background_tail_audit"
+    )
+    assert tail["started"] in {0, 1}
+    assert tail["active"] + tail["completed"] == tail["started"]
+    assert (
+        result["run_metrics"]["background_tail_started"]
+        == tail["started"]
+    )
+    assert (
+        result["run_metrics"]["background_tail_active"]
+        == tail["active"]
+    )
+
+
+def test_model_gate_audits_a_timed_out_background_tail_to_completion():
+    deadline = DeadlineController(
+        soft_deadline_seconds=0.06,
+        exploration_deadline_seconds=0.06,
+        hard_deadline_seconds=0.06,
+        deterministic_finalize_reserve_seconds=0.005,
+        model_call_start_margin_seconds=0.0,
+    )
+    budget = CallBudget(max_calls=1)
+
+    with pytest.raises(BudgetExceeded, match="response exceeded"):
+        ModelCallGate(1).call(
+            lambda: (sleep(0.1), "late")[1],
+            deadline=deadline,
+            background_tail_callback=budget.record_background_tail,
+        )
+
+    assert budget.background_tail_snapshot() == {
+        "started": 1,
+        "active": 1,
+        "completed": 0,
+    }
+    sleep(0.06)
+    assert budget.background_tail_snapshot() == {
+        "started": 1,
+        "active": 0,
+        "completed": 1,
+    }
 
 
 def test_soft_cutoff_disables_optional_runtime_stages_before_they_start():

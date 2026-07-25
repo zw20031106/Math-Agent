@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, fields
 from typing import Any, ClassVar
 
 
-RUN_METRICS_SCHEMA_VERSION = "1.1"
+RUN_METRICS_SCHEMA_VERSION = "1.2"
 _OUTCOMES = frozenset({"primary", "fallback", "error", "timeout"})
 _ERROR_CODES = frozenset(
     {
@@ -39,6 +39,9 @@ class RunMetrics:
     observed_output_tokens: int = 0
     output_chars: int = 0
     model_call_timeout_count: int = 0
+    background_tail_started: int = 0
+    background_tail_active: int = 0
+    background_tail_completed: int = 0
     per_case_wall_clock_timeout_count: int = 0
     final_response_tokens: int = 0
     context_window_tokens: int = 0
@@ -93,6 +96,9 @@ class RunMetrics:
             "observed_output_tokens",
             "output_chars",
             "model_call_timeout_count",
+            "background_tail_started",
+            "background_tail_active",
+            "background_tail_completed",
             "per_case_wall_clock_timeout_count",
             "final_response_tokens",
             "context_window_tokens",
@@ -149,6 +155,13 @@ class RunMetrics:
             raise ValueError("prompt counting-mode totals do not match prompt tokens")
         if self.model_call_timeout_count > self.model_calls:
             raise ValueError("model timeout count cannot exceed model calls")
+        if self.background_tail_completed > self.background_tail_started:
+            raise ValueError("completed background tails cannot exceed started tails")
+        if (
+            self.background_tail_active + self.background_tail_completed
+            != self.background_tail_started
+        ):
+            raise ValueError("background-tail counters are inconsistent")
         if self.per_case_wall_clock_timeout_count not in {0, 1}:
             raise ValueError("per-case wall-clock timeout count must be zero or one")
         if (self.outcome == "timeout") != (
@@ -227,6 +240,9 @@ def collect_run_metrics(
         observed_output_tokens=budget.observed_output_tokens,
         output_chars=budget.output_chars,
         model_call_timeout_count=budget.model_call_timeout_count,
+        background_tail_started=budget.background_tail_started,
+        background_tail_active=budget.background_tail_active,
+        background_tail_completed=budget.background_tail_completed,
         final_response_tokens=budget.final_response_tokens,
         context_window_tokens=budget.model_context_window_tokens,
         safety_margin_tokens=budget.context_safety_margin_tokens,

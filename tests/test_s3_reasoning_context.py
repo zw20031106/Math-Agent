@@ -433,6 +433,11 @@ class _LemmaIsolationClient:
                         "claim_id": f"identity{index}",
                         "statement": statement,
                         "check_type": "symbolic_equivalence",
+                        "depends_on": (
+                            [f"identity{index - 1}"]
+                            if index > 1
+                            else []
+                        ),
                     }
                     for index, statement in enumerate(
                         ("x = x", "x+0 = x", "2*x = 2*x", "x*1 = x"),
@@ -516,6 +521,24 @@ def test_lemma_second_round_is_history_free_and_expanded_candidate_is_batch_revi
     )
     assert reverified["accepted"] == ["lemma-round-2"]
     assert reverified["skeptic_reviewed"] == ["lemma-round-2"]
+    assert reverified["verification_chain"]["lemma-round-2"] == {
+        "schema_validated": True,
+        "answer_validated": True,
+        "answer_shape_checked": True,
+        "claims_reverified": True,
+        "obligations_regenerated": True,
+        "skeptic_reviewed": True,
+        "final_status": "accepted",
+    }
+    lemma_trace = next(
+        event
+        for event in result["trace"]
+        if event["event"] == "lemma_loop_completed"
+    )
+    assert lemma_trace["lemmas"]
+    assert lemma_trace["round_states"]
+    assert lemma_trace["downstream_usage"]["lemma-round-2"]
+    assert lemma_trace["eligibility"]["eligible"] is True
     arbitration = next(
         event for event in result["trace"] if event["event"] == "candidate_arbitrated"
     )

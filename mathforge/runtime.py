@@ -367,15 +367,8 @@ class MathForgeHarness:
                 router_calls=session.budget.used_calls,
                 candidate_count=session.route_plan.candidate_count,
                 verifier_required=verifier_required,
-                repair_requested=(
-                    self._config.enable_repair
-                    and self._config.enable_evidence
-                    and session.budget.deadline.exploration_allowed()
-                ),
-                lemma_requested=(
-                    self._config.enable_lemma_loop
-                    and session.route_plan.use_lemma_loop
-                ),
+                repair_requested=False,
+                lemma_requested=False,
                 finalizer_requested=(
                     self._config.enable_finalizer
                     and session.route_plan.use_llm_finalizer
@@ -388,10 +381,6 @@ class MathForgeHarness:
             session.route_plan = replace(
                 session.route_plan,
                 candidate_count=1 + allocation.alternatives,
-                use_lemma_loop=(
-                    session.route_plan.use_lemma_loop
-                    and allocation.lemma_reserve > 0
-                ),
                 use_llm_finalizer=(
                     session.route_plan.use_llm_finalizer
                     and allocation.finalizer_reserve > 0
@@ -666,6 +655,7 @@ class MathForgeHarness:
                             domains=session.problem_ir.domains,
                             assumptions=session.problem_ir.assumptions,
                             budget=session.budget,
+                            selected_tools=session.route_plan.selected_tools,
                         )
                         tool_results.extend(
                             {
@@ -715,6 +705,81 @@ class MathForgeHarness:
                     ),
                 )
             active_candidates = list(fanout.candidates)
+            repair_triggers = {
+                item.candidate_id: sorted(
+                    {
+                        record.claim_id or "__answer_shape__"
+                        for record in session.evidence
+                        if record.candidate_id == item.candidate_id
+                        and record.transaction_status == "active"
+                        and record.strength == "hard"
+                        and record.status == "fail"
+                    }
+                )
+                for item in active_candidates
+            }
+            repair_triggers = {
+                candidate_id: claims
+                for candidate_id, claims in repair_triggers.items()
+                if claims
+            }
+            lemma_eligible, lemma_reasons = self._lemma_eligibility(
+                session,
+                active_candidates,
+            )
+            allocation = CallAllocationPlan.build(
+                max_calls=self._config.max_model_calls,
+                router_calls=allocation.router,
+                candidate_count=session.route_plan.candidate_count,
+                verifier_required=verifier_required,
+                repair_requested=(
+                    self._config.enable_repair
+                    and self._config.enable_evidence
+                    and bool(repair_triggers)
+                    and session.budget.deadline.exploration_allowed()
+                ),
+                lemma_requested=(
+                    self._config.enable_lemma_loop
+                    and session.route_plan.use_lemma_loop
+                    and lemma_eligible
+                ),
+                finalizer_requested=(
+                    self._config.enable_finalizer
+                    and session.route_plan.use_llm_finalizer
+                ),
+            )
+            session.budget.set_allocation_plan(allocation)
+            session.route_plan = replace(
+                session.route_plan,
+                use_lemma_loop=(
+                    session.route_plan.use_lemma_loop
+                    and lemma_eligible
+                    and allocation.lemma_reserve > 0
+                ),
+                use_llm_finalizer=(
+                    session.route_plan.use_llm_finalizer
+                    and allocation.finalizer_reserve > 0
+                ),
+            )
+            repair_unreachable = (
+                "repair" in allocation.unreachable_by_budget
+                if repair_triggers
+                else False
+            )
+            trace.add(
+                "call_allocation_rebalanced",
+                evidence_repair_triggers=repair_triggers,
+                lemma_eligibility={
+                    "eligible": lemma_eligible,
+                    "reasons": lemma_reasons,
+                },
+                repair_unreachable_reason=(
+                    "model call budget reserved for required stages"
+                    if repair_unreachable
+                    else ""
+                ),
+                **allocation.to_dict(),
+            )
             if (
                 self._config.enable_repair
                 and self._config.enable_evidence
@@ -865,6 +930,16 @@ class MathForgeHarness:
                     session.proof_obligations[item.candidate_id] = self._obligation_engine.generate(
                         session.problem_ir, item
                     )
+            trace.add(
+                "proof_obligations_generated",
+                enabled=self._config.enable_proof_obligations,
+                candidates={
+                    candidate_id: [
+                        obligation.to_dict() for obligation in obligations
+                    ]
+                    for candidate_id, obligations in session.proof_obligations.items()
+                },
+            )
             self._transition(
                 session,
                 trace,
@@ -960,6 +1035,7 @@ class MathForgeHarness:
                         domains=session.problem_ir.domains,
                         assumptions=session.problem_ir.assumptions,
                         budget=session.budget,
+                        selected_tools=session.route_plan.selected_tools,
                     )
                     if ledger.has_hard_fail(expanded.candidate_id):
                         rejection_codes.append("claim_hard_fail")
@@ -1020,6 +1096,20 @@ class MathForgeHarness:
                     generated_candidates=[
                         item.candidate_id for item in lemma_result.generated_candidates
                     ],
+                    lemmas=[lemma.to_dict() for lemma in lemma_result.lemmas],
+                    round_states=[
+                        round_state.to_dict()
+                        for round_state in lemma_result.rounds
+                    ],
+                    downstream_usage={
+                        candidate_id: list(lemma_ids)
+                        for candidate_id, lemma_ids
+                        in lemma_result.expansion_dependencies.items()
+                    },
+                    eligibility={
+                        "eligible": lemma_eligible,
+                        "reasons": lemma_reasons,
+                    },
                     active_skills=list(
                         skill_compositions["LemmaCurator"].included
                     )
@@ -1109,6 +1199,19 @@ class MathForgeHarness:
                 trace.add(
                     "proof_completion_gate",
                     accepted=sorted(completed_ids),
+                    decisions=[
+                        {
+                            **decision.to_dict(),
+                            "obligations": [
+                                obligation.to_dict()
+                                for obligation in session.proof_obligations.get(
+                                    decision.candidate_id,
+                                    [],
+                                )
+                            ],
+                        }
+                        for decision in completion_decisions
+                    ],
                     rejected=[
                         {
                             "candidate_id": decision.candidate_id,
@@ -1133,6 +1236,41 @@ class MathForgeHarness:
                 rejected=sorted(expanded_ids - set(accepted_expanded)),
                 skeptic_reviewed=sorted(skeptic_reviewed.intersection(expanded_ids)),
                 precheck_rejections=expanded_precheck_rejections,
+                verification_chain={
+                    expanded_id: {
+                        "schema_validated": (
+                            "schema_or_claim_budget"
+                            not in expanded_precheck_rejections.get(expanded_id, [])
+                        ),
+                        "answer_validated": not any(
+                            code
+                            not in {
+                                "schema_or_claim_budget",
+                                "answer_type_hard_fail",
+                                "claim_hard_fail",
+                            }
+                            for code in expanded_precheck_rejections.get(
+                                expanded_id,
+                                [],
+                            )
+                        ),
+                        "answer_shape_checked": self._config.enable_tools,
+                        "claims_reverified": (
+                            self._config.enable_tools
+                            and self._config.enable_evidence
+                        ),
+                        "obligations_regenerated": (
+                            expanded_id in session.proof_obligations
+                        ),
+                        "skeptic_reviewed": expanded_id in skeptic_reviewed,
+                        "final_status": (
+                            "accepted"
+                            if expanded_id in accepted_expanded
+                            else "rejected"
+                        ),
+                    }
+                    for expanded_id in sorted(expanded_ids)
+                },
             )
             if not viable:
                 raise RuntimeError("no proof candidate passed completion gate")
@@ -1164,6 +1302,16 @@ class MathForgeHarness:
                 equivalence_unknown_pairs=arbitration.unknown_pairs,
                 equivalence_disagreement_pairs=arbitration.disagreement_pairs,
                 used_llm_arbiter=arbitration.used_llm_arbiter,
+            )
+            trace.add(
+                "candidate_final_states",
+                candidates=self._candidate_final_states(
+                    session,
+                    viable,
+                    candidate.candidate_id,
+                    fanout.failures,
+                    expanded_precheck_rejections,
+                ),
             )
             self._transition(
                 session,
@@ -1314,6 +1462,13 @@ class MathForgeHarness:
         session.budget.record_final_response(
             final_count.tokens,
             final_count.counting_mode,
+        )
+        trace.add(
+            "background_tail_audit",
+            **session.budget.background_tail_snapshot(),
+            note=(
+                "timed-out provider threads cannot mutate the returned result"
+            ),
         )
         trace.add(
             "budget_summary",
@@ -1535,6 +1690,7 @@ class MathForgeHarness:
                 domains=session.problem_ir.domains,
                 assumptions=session.problem_ir.assumptions,
                 budget=session.budget,
+                selected_tools=session.route_plan.selected_tools,
             )
         )
         return records
@@ -1688,12 +1844,148 @@ class MathForgeHarness:
         return [
             {
                 "claim_id": claim_id,
-                "before": old_claims[claim_id].statement,
-                "after": new_claims[claim_id].statement,
+                "before": {
+                    "statement": old_claims[claim_id].statement,
+                    "depends_on": list(old_claims[claim_id].depends_on),
+                    "check_type": old_claims[claim_id].check_type,
+                    "importance": old_claims[claim_id].importance,
+                },
+                "after": {
+                    "statement": new_claims[claim_id].statement,
+                    "depends_on": list(new_claims[claim_id].depends_on),
+                    "check_type": new_claims[claim_id].check_type,
+                    "importance": new_claims[claim_id].importance,
+                },
             }
             for claim_id in changed_claim_ids
             if claim_id in old_claims and claim_id in new_claims
         ]
+
+    @staticmethod
+    def _lemma_eligibility(session, candidates) -> tuple[bool, list[str]]:
+        reasons: list[str] = []
+        if session.route_plan.risk_level != "high":
+            reasons.append("risk_not_high")
+        if session.problem_ir.problem_type not in {"proof", "derivation"}:
+            reasons.append("problem_not_proof_or_derivation")
+        claim_ids = {
+            claim.claim_id
+            for candidate in candidates
+            for claim in candidate.claims
+        }
+        depths: dict[str, int] = {}
+        for _ in range(len(claim_ids) + 1):
+            changed = False
+            for candidate in candidates:
+                for claim in candidate.claims:
+                    dependency_depths = [
+                        depths.get(dependency, 0)
+                        for dependency in claim.depends_on
+                        if dependency in claim_ids
+                    ]
+                    depth = 1 + max(dependency_depths, default=0)
+                    if depth > depths.get(claim.claim_id, 0):
+                        depths[claim.claim_id] = depth
+                        changed = True
+            if not changed:
+                break
+        if max(depths.values(), default=0) < 3:
+            reasons.append("claim_dependency_chain_too_shallow")
+        semantic_pass_claim_ids = {
+            record.claim_id
+            for record in session.evidence
+            if record.claim_id is not None
+            and record.transaction_status == "active"
+            and record.status == "pass"
+            and record.strength == "hard"
+            and record.capability
+            not in {
+                "none",
+                "syntax.latex_brace_balance",
+                "syntax.restricted_parse",
+                "answer.shape",
+            }
+        }
+        if not semantic_pass_claim_ids:
+            reasons.append("no_semantically_verified_local_claim")
+        return not reasons, reasons or ["all_lemma_preconditions_satisfied"]
+
+    @staticmethod
+    def _candidate_final_states(
+        session,
+        viable,
+        selected_candidate_id: str,
+        generation_failures,
+        expanded_precheck_rejections: dict[str, list[str]],
+    ) -> list[dict[str, Any]]:
+        viable_ids = {candidate.candidate_id for candidate in viable}
+        states: list[dict[str, Any]] = []
+        for candidate in session.candidates:
+            hard_failures = [
+                record.evidence_id
+                for record in session.evidence
+                if record.candidate_id == candidate.candidate_id
+                and record.transaction_status == "active"
+                and record.strength == "hard"
+                and record.status == "fail"
+            ]
+            reasons = list(
+                expanded_precheck_rejections.get(candidate.candidate_id, [])
+            )
+            if hard_failures:
+                reasons.append("hard_evidence_failure")
+            if candidate.candidate_id == selected_candidate_id:
+                status = "selected"
+                reasons.append("arbitration_selected")
+            elif candidate.candidate_id in viable_ids:
+                status = "viable_not_selected"
+                reasons.append("arbitration_not_selected")
+            else:
+                status = "rejected"
+                if not reasons:
+                    reasons.append("superseded_or_not_viable")
+            states.append(
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "version": candidate.version,
+                    "status": status,
+                    "reason_codes": sorted(set(reasons)),
+                    "hard_failure_evidence_ids": hard_failures,
+                    "claims": [
+                        {
+                            "claim_id": claim.claim_id,
+                            "depends_on": list(claim.depends_on),
+                            "status": claim.status,
+                            "verification_state": claim.verification_state,
+                        }
+                        for claim in candidate.claims
+                    ],
+                    "proof_obligations": [
+                        obligation.to_dict()
+                        for obligation in session.proof_obligations.get(
+                            candidate.candidate_id,
+                            [],
+                        )
+                    ],
+                }
+            )
+        states.extend(
+            {
+                "candidate_id": failure.candidate_id,
+                "version": 0,
+                "status": "generation_failed",
+                "reason_codes": [failure.reason],
+                "hard_failure_evidence_ids": [],
+                "claims": [],
+                "proof_obligations": [],
+            }
+            for failure in generation_failures
+            if all(
+                state["candidate_id"] != failure.candidate_id
+                for state in states
+            )
+        )
+        return states
 
     @staticmethod
     def _arbitration_rejections(

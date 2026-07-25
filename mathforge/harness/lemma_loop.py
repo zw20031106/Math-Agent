@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from mathforge.agents.lemma_curator import LemmaCurator
@@ -22,6 +22,7 @@ class LemmaLoopResult:
     rounds: list[RoundState]
     stop_reason: str
     generated_candidates: list[CandidateSolution]
+    expansion_dependencies: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def error_rate(self) -> float:
@@ -59,6 +60,7 @@ class VerifiedLemmaLoop:
         input_verified: list[str] = []
         working_candidates = list(candidates)
         generated_candidates: list[CandidateSolution] = []
+        expansion_dependencies: dict[str, list[str]] = {}
         for round_id in range(1, max_rounds + 1):
             cards = self._curator.curate(
                 working_candidates,
@@ -103,11 +105,19 @@ class VerifiedLemmaLoop:
             input_verified.extend(card.lemma_id for card in verified)
             if not cards:
                 return LemmaLoopResult(
-                    all_lemmas, rounds, "no_new_lemmas", generated_candidates
+                    all_lemmas,
+                    rounds,
+                    "no_new_lemmas",
+                    generated_candidates,
+                    expansion_dependencies,
                 )
             if progress <= 0:
                 return LemmaLoopResult(
-                    all_lemmas, rounds, "no_new_progress", generated_candidates
+                    all_lemmas,
+                    rounds,
+                    "no_new_progress",
+                    generated_candidates,
+                    expansion_dependencies,
                 )
             if round_id < max_rounds and verified and expand_round is not None:
                 try:
@@ -118,11 +128,21 @@ class VerifiedLemmaLoop:
                         rounds,
                         "round_expansion_failed",
                         generated_candidates,
+                        expansion_dependencies,
                     )
                 if expanded is not None:
                     working_candidates.append(expanded)
                     generated_candidates.append(expanded)
-        return LemmaLoopResult(all_lemmas, rounds, "round_limit", generated_candidates)
+                    expansion_dependencies[expanded.candidate_id] = [
+                        lemma.lemma_id for lemma in verified
+                    ]
+        return LemmaLoopResult(
+            all_lemmas,
+            rounds,
+            "round_limit",
+            generated_candidates,
+            expansion_dependencies,
+        )
 
     @staticmethod
     def _resolve_obligations(

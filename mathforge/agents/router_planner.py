@@ -407,7 +407,10 @@ def derive_route_policy(risk_level: str, problem_type: str) -> RoutePolicy:
         candidate_count={"low": 1, "medium": 2, "high": 3}[risk_level],
         max_reasoning_rounds=2 if risk_level == "high" else 1,
         use_rag=risk_level in {"medium", "high"},
-        use_lemma_loop=risk_level == "high",
+        use_lemma_loop=(
+            risk_level == "high"
+            and problem_type in {"proof", "derivation"}
+        ),
         use_llm_finalizer=problem_type in {"proof", "explanation"},
     )
 
@@ -458,6 +461,62 @@ def selected_skills_for(
     if risk_level == "high" and problem.problem_type in {"proof", "derivation"}:
         skills.append("lemma-compression")
     return list(dict.fromkeys(skills))
+
+
+def selected_tools_for(
+    problem: ProblemIR,
+    *,
+    primary_subject: str,
+    auxiliary_subject: str | None,
+) -> list[str]:
+    subjects = {primary_subject, auxiliary_subject}
+    lowered = problem.normalized_problem.lower()
+    tools = [
+        "answer_type_check",
+        "latex_syntax_check",
+    ]
+    if (
+        problem.answer_type in {"expression", "fraction", "polynomial"}
+        or subjects.intersection(
+            {
+                "algebra",
+                "calculus",
+                "complex-analysis",
+                "differential-equations",
+                "general-math",
+                "number-theory",
+            }
+        )
+    ):
+        tools.extend(
+            [
+                "safe_parse_expression",
+                "simplify_expression",
+                "symbolic_equivalence",
+            ]
+        )
+    if (
+        "numerical-analysis" in subjects
+        or any(
+            marker in lowered
+            for marker in ("数值", "近似", "误差", "numerical", "residual")
+        )
+    ):
+        tools.append("numerical_residual")
+    if (
+        problem.answer_type == "matrix"
+        or subjects.intersection(
+            {"linear-algebra", "advanced-linear-algebra", "regression"}
+        )
+    ):
+        tools.append("matrix_shape_check")
+    if subjects.intersection({"probability", "statistics", "stochastic-processes"}):
+        tools.append("density_normalization")
+    if subjects.intersection(
+        {"combinatorics", "discrete-math", "operations-research"}
+    ):
+        tools.append("small_case_enumeration")
+    return list(dict.fromkeys(tools))
 
 
 class RouterRuleEngine:
@@ -550,9 +609,11 @@ class RouterRuleEngine:
             auxiliary_subject=auxiliary,
             risk_level=risk,
         )
-        tools = ["answer_type_check"]
-        if problem.answer_type in {"expression", "polynomial"}:
-            tools.append("symbolic_equivalence")
+        tools = selected_tools_for(
+            problem,
+            primary_subject=primary,
+            auxiliary_subject=auxiliary,
+        )
         plan = RoutePlan(
             primary_subject=primary,
             auxiliary_subject=auxiliary,
@@ -715,12 +776,18 @@ class RouterPlanner:
                 auxiliary_subject=auxiliary,
                 risk_level=risk,
             )
+            selected_tools = selected_tools_for(
+                problem,
+                primary_subject=primary,
+                auxiliary_subject=auxiliary,
+            )
             planned = replace(
                 rule_plan,
                 primary_subject=primary,
                 auxiliary_subject=auxiliary,
                 risk_level=risk,
                 selected_skills=selected,
+                selected_tools=selected_tools,
                 candidate_count=policy.candidate_count,
                 max_reasoning_rounds=policy.max_reasoning_rounds,
                 use_rag=policy.use_rag,
