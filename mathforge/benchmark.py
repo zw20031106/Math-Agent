@@ -170,16 +170,12 @@ def preflight_benchmark_cases(
     if not 0.0 <= minimum_auto_score_coverage <= 1.0:
         raise ValueError("minimum auto-score coverage must be in [0, 1]")
     parser = ProblemParser()
+    validate_unique_case_ids(cases)
     invalid: dict[str, str] = {}
     expected_count = 0
     auto_scored_count = 0
     manual_count = 0
-    seen_ids: set[str] = set()
     for case in cases:
-        if case.idx in seen_ids:
-            invalid[case.idx] = "duplicate_case_id"
-            continue
-        seen_ids.add(case.idx)
         if case.expected_answer is None or not str(case.expected_answer).strip():
             if require_expected:
                 invalid[case.idx] = "missing_expected_answer"
@@ -223,6 +219,20 @@ def preflight_benchmark_cases(
     return result
 
 
+def validate_unique_case_ids(cases: list[BenchmarkCase]) -> None:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for case in cases:
+        if case.idx in seen:
+            duplicates.add(case.idx)
+        seen.add(case.idx)
+    if duplicates:
+        raise ValueError(
+            "duplicate benchmark case IDs: "
+            + ", ".join(sorted(duplicates))
+        )
+
+
 def run_benchmark(
     cases: list[BenchmarkCase],
     solve: Callable[[str, dict], dict],
@@ -234,6 +244,7 @@ def run_benchmark(
     late_mutation_grace_seconds: float = 0.0,
     on_record_completed: Callable[[BenchmarkRecord], None] | None = None,
 ) -> tuple[list[BenchmarkRecord], dict]:
+    validate_unique_case_ids(cases)
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
     if late_mutation_grace_seconds < 0:

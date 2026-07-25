@@ -52,7 +52,15 @@ python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs
 ```
 
 Files are named `<id>.json` and contain exactly `id`, `final_response`, and
-`trace`, without a `result` wrapper. The official `main.py` remains byte-frozen
+`trace`, without a `result` wrapper. Each terminal success, failure, or timeout
+is flushed through a temporary file and atomically replaced before
+`CASE_COMPLETED` is printed. Internal metrics and output hashes live only in
+`case-outputs/run_manifest.json`.
+
+To continue an interrupted run, repeat the command with `--resume`. The runner
+validates the input/config hashes, rejects duplicate or unknown case IDs,
+validates every existing three-field JSON file and its manifest-bound hash,
+then executes only missing cases. The official `main.py` remains byte-frozen
 and retains the competition sample's `idx/status` wrapper.
 
 `INTERN_MODEL` is mandatory and must be the exact lowercase ID shown above.

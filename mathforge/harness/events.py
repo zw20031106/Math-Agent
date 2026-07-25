@@ -39,6 +39,7 @@ EVENT_STAGES = {
     "context_budget_infeasible": "context",
     "fallback_used": "fallback",
     "per_case_wall_clock_timeout": "deadline",
+    "case_execution_failed": "completion",
     "run_completed": "completion",
     "phase_transition": "state",
 }
@@ -63,6 +64,7 @@ PROTECTED_TRACE_EVENTS = frozenset(
         "proof_obligations_generated",
         "candidate_final_states",
         "background_tail_audit",
+        "case_execution_failed",
         "candidate_arbitrated",
         "final_answer_selected",
         "budget_summary",

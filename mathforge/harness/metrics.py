@@ -17,6 +17,7 @@ _ERROR_CODES = frozenset(
         "all_candidates_failed",
         "config",
         "per_case_wall_clock_exceeded",
+        "case_execution_failed",
     }
 )
 

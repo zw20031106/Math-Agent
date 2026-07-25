@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### S6-H
+
+- Added pre-online duplicate-ID and input validation to the per-case runner and
+  benchmark entry point.
+- Added an atomic `run_manifest.json` with input/config hashes, exact model
+  identity, per-case output hashes, terminal states, latency, scoring, and
+  internal RunMetrics. Public case JSON remains exactly
+  `id`/`final_response`/`trace`.
+- Added `--resume` with manifest compatibility checks, strict validation of
+  existing public files, hash-bound reuse, orphan-output recovery, unknown-file
+  rejection, and execution of missing cases only.
+- Hardened the 900-second watchdog so every success, internal failure, and
+  timeout produces a non-empty terminal result. Timed-out worker threads are
+  closed out of the shared result slot and cannot overwrite a persisted file.
+- Synced and atomically replaced both case files and the manifest, then emitted
+  a flushed `CASE_COMPLETED` line immediately after each case was durable.
+
 ### S6-G
 
 - Made `RoutePlan.selected_tools` an enforced evidence gate and added
