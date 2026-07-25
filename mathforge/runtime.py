@@ -60,6 +60,15 @@ _ROLE_CONTRACT_DIRECTORIES = {
     "LLMFinalizer": "finalizer",
 }
 
+_SKILL_RUNTIME_ROLES = (
+    "PrimarySolver",
+    "AlternativeSolver",
+    "LemmaCurator",
+    "VerifierSkeptic",
+    "RepairAgent",
+    "LLMFinalizer",
+)
+
 _PUBLIC_METADATA_KEYS = (
     "idx",
     "benchmark_nonce",
@@ -394,14 +403,22 @@ class MathForgeHarness:
                     "working",
                     {"route_plan": session.route_plan.to_dict()},
                 )
-            skill_context = (
-                self._skills.compose(
-                    session.route_plan.selected_skills,
-                    self._config.skill_char_budget,
-                )
+            skill_compositions = (
+                {
+                    role: self._skills.compose_for_role(
+                        session.route_plan.selected_skills,
+                        max_chars=self._config.skill_char_budget,
+                        role=role,
+                    )
+                    for role in _SKILL_RUNTIME_ROLES
+                }
                 if self._config.enable_skills
-                else ""
+                else {}
             )
+            role_skill_contexts = {
+                role: composition.text
+                for role, composition in skill_compositions.items()
+            }
             if (
                 session.route_plan.use_rag
                 and session.budget.deadline.optional_work_allowed()
@@ -420,18 +437,34 @@ class MathForgeHarness:
                     retrieval_status = "discarded_by_deadline"
                     trace.add("deadline_finalize", stage="after_rag")
                 cards = [hit.card for hit in retrieval_hits]
+                injected_card_ids: list[str] = []
                 if cards:
-                    rag_context = "\n\n".join(
-                        f"## Reviewed knowledge: {card.title}\n{card.statement}\n"
-                        f"Conditions: {', '.join(card.preconditions) or 'none'}\n"
-                        f"Source: {card.source_ref} @ {card.source_version}"
-                        for card in cards
+                    primary_context = role_skill_contexts.get(
+                        "PrimarySolver",
+                        "",
                     )
-                    skill_context = f"{skill_context}\n\n{rag_context}"[: self._config.skill_char_budget]
+                    for card in cards:
+                        block = (
+                            f"## Reviewed knowledge: {card.title}\n{card.statement}\n"
+                            f"Conditions: {', '.join(card.preconditions) or 'none'}\n"
+                            f"Source: {card.source_ref} @ {card.source_version}"
+                        )
+                        separator = "\n\n" if primary_context else ""
+                        if (
+                            len(primary_context)
+                            + len(separator)
+                            + len(block)
+                            > self._config.skill_char_budget
+                        ):
+                            continue
+                        primary_context = f"{primary_context}{separator}{block}"
+                        injected_card_ids.append(card.id)
+                    role_skill_contexts["PrimarySolver"] = primary_context
                 trace.add(
                     "retrieval_completed",
                     status=retrieval_status,
                     card_ids=[card.id for card in cards],
+                    injected_card_ids=injected_card_ids,
                     ranking=[
                         {
                             "card_id": hit.card.id,
@@ -461,6 +494,10 @@ class MathForgeHarness:
                 selected_skills=session.route_plan.selected_skills,
                 selected_tools=session.route_plan.selected_tools,
                 method_families=session.route_plan.method_families,
+                routing_reasons=self._router.routing_reasons(
+                    session.problem_ir,
+                    session.route_plan,
+                ),
             )
             skill_manifest = {
                 item["name"]: item for item in self._skills.manifest
@@ -474,18 +511,26 @@ class MathForgeHarness:
                             "version",
                             "unknown",
                         ),
-                        "role": "PrimarySolver",
+                        "role": role,
                         "reason": (
-                            "selected by deterministic route for "
-                            f"{session.route_plan.primary_subject}"
+                            "domain route"
+                            if self._skills.definition(name).kind == "domain"
+                            else "role-compatible general guidance"
                         ),
                     }
-                    for name in (
-                        session.route_plan.selected_skills
-                        if self._config.enable_skills
-                        else []
-                    )
+                    for role, composition in skill_compositions.items()
+                    for name in composition.included
                 ],
+                omitted_by_role={
+                    role: list(composition.omitted)
+                    for role, composition in skill_compositions.items()
+                    if composition.omitted
+                },
+                unknown_by_role={
+                    role: list(composition.unknown)
+                    for role, composition in skill_compositions.items()
+                    if composition.unknown
+                },
                 skill_fingerprint=self._skills.fingerprint,
             )
             trace.add(
@@ -528,11 +573,12 @@ class MathForgeHarness:
             fanout = self._candidate_orchestrator.fanout(
                 session.problem_ir,
                 session.route_plan,
-                skill_context,
+                role_skill_contexts.get("PrimarySolver", ""),
                 session.budget,
                 temperature=self._config.primary_temperature,
                 max_tokens=self._config.primary_max_tokens,
                 context_views=solver_contexts,
+                role_skill_contexts=role_skill_contexts,
                 event_callback=trace.add,
             )
             bounded_candidates = []
@@ -699,6 +745,7 @@ class MathForgeHarness:
                             candidate,
                             affected,
                             local_evidence,
+                            role_skill_contexts.get("RepairAgent", ""),
                         ),
                         reverify=lambda candidate, affected: self._reverify_repair_candidate(
                             session,
@@ -860,7 +907,7 @@ class MathForgeHarness:
                     trace,
                     verified,
                     round_id,
-                    skill_context,
+                    role_skill_contexts.get("PrimarySolver", ""),
                 ),
             )
             session.lemmas.extend(lemma_result.lemmas)
@@ -973,6 +1020,11 @@ class MathForgeHarness:
                     generated_candidates=[
                         item.candidate_id for item in lemma_result.generated_candidates
                     ],
+                    active_skills=list(
+                        skill_compositions["LemmaCurator"].included
+                    )
+                    if "LemmaCurator" in skill_compositions
+                    else [],
                 )
             required_obligations = [
                 obligation
@@ -1007,6 +1059,10 @@ class MathForgeHarness:
                     max_tokens=self._config.primary_max_tokens,
                     context_view=verifier_context,
                     evidence=session.evidence,
+                    skill_context=role_skill_contexts.get(
+                        "VerifierSkeptic",
+                        "",
+                    ),
                 )
                 for finding in verifier_result.findings:
                     ledger.record_verifier_finding(
@@ -1162,6 +1218,10 @@ class MathForgeHarness:
                         session.budget,
                         max_tokens=self._config.primary_max_tokens,
                         context_view=finalizer_context,
+                        skill_context=role_skill_contexts.get(
+                            "LLMFinalizer",
+                            "",
+                        ),
                     )
                     final_response = finalization.text
                     trace.add(
@@ -1396,6 +1456,7 @@ class MathForgeHarness:
         candidate,
         affected_claim_ids: list[str],
         local_evidence,
+        skill_context: str,
     ):
         context_view = self._build_role_context(
             session,
@@ -1414,6 +1475,7 @@ class MathForgeHarness:
             session.budget,
             max_tokens=self._config.primary_max_tokens,
             context_view=context_view,
+            skill_context=skill_context,
         )
 
     def _run_answer_type_check(self, session, candidate, ledger: EvidenceLedger):
@@ -1486,17 +1548,30 @@ class MathForgeHarness:
         round_id: int,
         skill_context: str,
     ):
-        lemma_context = "\n".join(
+        lemma_lines = [
             f"- {lemma.statement} (conditions: {', '.join(lemma.conditions) or 'none'})"
             for lemma in verified_lemmas
-        )
+        ]
+        expanded_skill_context = skill_context
+        for line in lemma_lines:
+            prefix = (
+                "\n\nVerified problem-local lemmas:\n"
+                if "Verified problem-local lemmas:" not in expanded_skill_context
+                else "\n"
+            )
+            if (
+                len(expanded_skill_context) + len(prefix) + len(line)
+                > self._config.skill_char_budget
+            ):
+                continue
+            expanded_skill_context = (
+                f"{expanded_skill_context}{prefix}{line}"
+            )
         request = SolverRequest(
             candidate_id=f"lemma-round-{round_id}",
             problem=session.problem_ir,
             route=session.route_plan,
-            skill_context=(
-                f"{skill_context}\n\nVerified problem-local lemmas:\n{lemma_context}"
-            )[: self._config.skill_char_budget],
+            skill_context=expanded_skill_context,
             method_family="lemma-guided",
             context_view=self._build_role_context(
                 session,

@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "dataset": "data/dev_set_2_gold.jsonl",
+  "case_count": 88,
+  "measurement": "pre-E5 deterministic RouterRuleEngine",
+  "top1_hits": 8,
+  "top1_accuracy": 0.09090909090909091,
+  "top2_hits": 8,
+  "top2_accuracy": 0.09090909090909091,
+  "general_top1_count": 45
+}

@@ -31,6 +31,7 @@ class RepairAgent:
         *,
         max_tokens: int,
         context_view: RoleContextView | None = None,
+        skill_context: str = "",
     ) -> CandidateSolution:
         local_claims = [
             claim.to_dict() for claim in candidate.claims if claim.claim_id in affected_claim_ids
@@ -51,6 +52,11 @@ class RepairAgent:
                     f"Affected claims:\n{json.dumps(local_claims, ensure_ascii=False)}\n"
                     f"Evidence:\n{json.dumps(local_evidence, ensure_ascii=False)}"
                 )
+            )
+            + (
+                f"\n\nAuthorized skill guidance:\n{skill_context}"
+                if skill_context.strip()
+                else ""
             )
         )
         messages = self._contracts.messages(

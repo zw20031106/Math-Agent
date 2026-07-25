@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### S6-F
+
+- Upgraded all 29 domain and six general skills to a validated Skill 2.0
+  contract with triggers, fixed-role compatibility, method decision trees,
+  theorem preconditions, common-error and counterexample gates, compatible
+  checks, answer normalization, and public Trace guidance.
+- Added dedicated skills and deterministic routing for advanced algebra,
+  analysis, ODE/PDE, stochastic processes, operations research, regression,
+  and differential geometry while retaining all legacy mathematical domains.
+- Added atomic, role-specific runtime skill composition for Solver, Lemma,
+  Verifier, Repair, and Finalizer stages. Oversized skills and RAG cards are
+  omitted whole and recorded rather than character-sliced.
+- Added route trigger reasons, parser-confidence and missing-domain risk
+  escalation, and role/version/omission details to public Trace events.
+- Added an 88-case reviewed router evaluator and frozen pre-E5 baseline.
+  Deterministic routing now reaches 87/88 Top-1 and 88/88 Top-2 with no
+  unexplained `general-math` Top-1 fallback.
+
 ### S6-E
 
 - Upgraded all seven role contracts to Prompt Contract v2. Solver roles now

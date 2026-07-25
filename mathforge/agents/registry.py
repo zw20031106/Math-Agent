@@ -31,6 +31,25 @@ REQUIRED_CONTRACT_FIELDS = (
     "max_context_chars",
     "version",
 )
+SKILL_REQUIRED_FIELDS = (
+    "name",
+    "subject",
+    "kind",
+    "version",
+    "triggers",
+    "roles",
+)
+SKILL_REQUIRED_SECTIONS = (
+    "triggers",
+    "roles",
+    "method decision tree",
+    "theorem preconditions",
+    "common errors",
+    "counterexample checklist",
+    "compatible check types",
+    "answer normalization",
+    "trace step guidance",
+)
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -56,7 +75,18 @@ class SkillDefinition:
     subject: str
     kind: str
     version: str
+    triggers: tuple[str, ...]
+    roles: tuple[str, ...]
+    sections: tuple[str, ...]
     body: str
+
+
+@dataclass(frozen=True)
+class SkillComposition:
+    text: str
+    included: tuple[str, ...]
+    omitted: tuple[str, ...]
+    unknown: tuple[str, ...]
 
 
 class SkillRegistry:
@@ -77,6 +107,7 @@ class SkillRegistry:
                 {
                     "name": fields.get("name", path.stem),
                     "version": fields.get("version", "1"),
+                    "roles": fields.get("roles", ""),
                     "sha256": _normalized_file_hash(path),
                 }
             )
@@ -88,14 +119,49 @@ class SkillRegistry:
             return loaded
         for path in sorted(self._root.rglob("*.md")):
             fields, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
-            name = fields.get("name", path.stem)
+            missing_fields = [
+                field for field in SKILL_REQUIRED_FIELDS if not fields.get(field)
+            ]
+            if missing_fields:
+                raise ValueError(
+                    f"{path.name} skill fields missing: {', '.join(missing_fields)}"
+                )
+            name = fields["name"]
             if name in loaded:
                 raise ValueError(f"duplicate skill: {name}")
+            if fields["version"] != "2.0":
+                raise ValueError(f"{name} must use Skill version 2.0")
+            if fields["kind"] not in {"domain", "general"}:
+                raise ValueError(f"{name} has invalid skill kind")
+            triggers = _split_frontmatter_list(fields["triggers"])
+            roles = _split_frontmatter_list(fields["roles"])
+            if not triggers:
+                raise ValueError(f"{name} must declare triggers")
+            invalid_roles = sorted(set(roles) - set(FIXED_ROLES))
+            if not roles or invalid_roles:
+                raise ValueError(f"{name} has invalid roles: {invalid_roles}")
+            sections = tuple(
+                line[3:].strip().lower()
+                for line in body.splitlines()
+                if line.startswith("## ")
+            )
+            missing_sections = [
+                section
+                for section in SKILL_REQUIRED_SECTIONS
+                if section not in sections
+            ]
+            if missing_sections:
+                raise ValueError(
+                    f"{name} skill sections missing: {', '.join(missing_sections)}"
+                )
             loaded[name] = SkillDefinition(
                 name=name,
-                subject=fields.get("subject", "general-math"),
-                kind=fields.get("kind", "domain"),
-                version=fields.get("version", "1"),
+                subject=fields["subject"],
+                kind=fields["kind"],
+                version=fields["version"],
+                triggers=triggers,
+                roles=roles,
+                sections=sections,
                 body=body,
             )
         return loaded
@@ -103,23 +169,62 @@ class SkillRegistry:
     def names(self) -> list[str]:
         return sorted(self._skills)
 
+    def definition(self, name: str) -> SkillDefinition:
+        return self._skills[name]
+
+    def names_for_role(
+        self,
+        names: Iterable[str],
+        role: str,
+    ) -> list[str]:
+        return [
+            name
+            for name in dict.fromkeys(names)
+            if name in self._skills and role in self._skills[name].roles
+        ]
+
     def compose(self, names: Iterable[str], max_chars: int) -> str:
+        return self.compose_for_role(names, max_chars=max_chars).text
+
+    def compose_for_role(
+        self,
+        names: Iterable[str],
+        *,
+        max_chars: int,
+        role: str | None = None,
+    ) -> SkillComposition:
+        if max_chars < 0:
+            raise ValueError("skill composition budget must be nonnegative")
         blocks: list[str] = []
         seen: set[str] = set()
         used = 0
+        included: list[str] = []
+        omitted: list[str] = []
+        unknown: list[str] = []
         for name in names:
-            if name in seen or name not in self._skills:
+            if name in seen:
                 continue
             seen.add(name)
-            block = f"## Skill: {name}\n{self._skills[name].body}".strip()
-            if used + len(block) > max_chars:
-                remaining = max_chars - used
-                if remaining > 0:
-                    blocks.append(block[:remaining])
-                break
+            definition = self._skills.get(name)
+            if definition is None:
+                unknown.append(name)
+                continue
+            if role is not None and role not in definition.roles:
+                continue
+            block = f"# Skill: {name}\n{definition.body}".strip()
+            separator_chars = 2 if blocks else 0
+            if used + separator_chars + len(block) > max_chars:
+                omitted.append(name)
+                continue
             blocks.append(block)
-            used += len(block)
-        return "\n\n".join(blocks)
+            included.append(name)
+            used += separator_chars + len(block)
+        return SkillComposition(
+            text="\n\n".join(blocks),
+            included=tuple(included),
+            omitted=tuple(omitted),
+            unknown=tuple(unknown),
+        )
 
 
 @dataclass(frozen=True)
@@ -205,3 +310,11 @@ class PromptContractLoader:
 
 def _normalized_file_hash(path: Path) -> str:
     return sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _split_frontmatter_list(value: str) -> tuple[str, ...]:
+    return tuple(
+        item.strip()
+        for item in value.replace("|", ",").split(",")
+        if item.strip()
+    )

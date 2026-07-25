@@ -68,6 +68,7 @@ class VerifierSkepticAgent:
         max_tokens: int,
         context_view: RoleContextView | None = None,
         evidence: list[EvidenceRecord] | None = None,
+        skill_context: str = "",
     ) -> BatchVerificationResult:
         payload = self._review_payload(
             problem,
@@ -92,6 +93,11 @@ class VerifierSkepticAgent:
                 "contain candidate_id, claim_id, obligation_ids, status, public_rationale, "
                 "missing_condition, and counterexample_summary.\n\n"
                 f"Batch:\n{visible_payload}"
+                + (
+                    f"\n\nAuthorized skill guidance:\n{skill_context}"
+                    if skill_context.strip()
+                    else ""
+                )
             )
             messages = self._contracts.messages(
                 "verifier_skeptic",

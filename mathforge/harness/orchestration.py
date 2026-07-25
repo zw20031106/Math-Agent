@@ -54,9 +54,11 @@ class CandidateOrchestrator:
         temperature: float,
         max_tokens: int,
         context_views: dict[str, RoleContextView] | None = None,
+        role_skill_contexts: dict[str, str] | None = None,
         event_callback: Callable[..., None] | None = None,
     ) -> FanoutResult:
         views = context_views or {}
+        skill_contexts = role_skill_contexts or {}
         count = max(1, min(3, route.candidate_count))
         method_families = list(
             dict.fromkeys(
@@ -80,7 +82,7 @@ class CandidateOrchestrator:
                     "primary-1",
                     problem,
                     route,
-                    skill_context,
+                    skill_contexts.get("PrimarySolver", skill_context),
                     method_families[0],
                     tuple(method_families[1:count]),
                     views.get("PrimarySolver"),
@@ -96,7 +98,7 @@ class CandidateOrchestrator:
                         f"alternative-{index}",
                         problem,
                         route,
-                        skill_context,
+                        skill_contexts.get("AlternativeSolver", skill_context),
                         method_families[index],
                         tuple(
                             family

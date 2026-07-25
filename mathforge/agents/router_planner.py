@@ -11,27 +11,343 @@ from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.schemas import ProblemIR, RoutePlan
 
 
-_SUBJECT_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "algebra": ("方程", "多项式", "inequality", "polynomial", "equation"),
-    "geometry": ("三角形", "圆", "几何", "triangle", "circle", "angle"),
-    "number-theory": ("素数", "整除", "同余", "prime", "divisib", "modulo"),
-    "combinatorics": ("排列", "组合", "计数", "permutation", "combination", "counting"),
-    "probability": ("概率", "随机", "probability", "random"),
-    "calculus": ("导数", "积分", "极限", "derivative", "integral", "limit"),
-    "linear-algebra": ("矩阵", "向量", "特征值", "matrix", "vector", "eigenvalue"),
-    "differential-equations": ("微分方程", "differential equation", "ode", "pde"),
-    "complex-analysis": ("复变", "留数", "holomorphic", "residue", "complex plane"),
-    "real-analysis": ("一致收敛", "测度", "real analysis", "uniform convergence", "measure"),
-    "statistics": ("统计", "估计量", "回归", "statistics", "estimator", "regression"),
-    "optimization": ("最优化", "最大值", "最小值", "optimization", "maximum", "minimum"),
-    "discrete-math": ("图论", "递推", "graph", "recurrence"),
-    "logic": ("命题", "谓词", "逻辑", "predicate", "logic"),
-    "set-theory": ("集合", "基数", "set theory", "cardinality"),
-    "topology": ("拓扑", "紧致", "同胚", "topology", "compact", "homeomorph"),
-    "numerical-analysis": ("数值", "误差", "迭代法", "numerical", "rounding error"),
+_SUBJECT_SIGNALS: dict[str, tuple[tuple[str, float], ...]] = {
+    "abstract-algebra": (
+        ("抽象代数", 0.30),
+        ("有限域", 0.28),
+        ("\\mathbb f_", 0.30),
+        ("不可约", 0.18),
+        ("循环群", 0.28),
+        ("交错群", 0.28),
+        ("群同态", 0.30),
+        ("商环", 0.30),
+        ("理想", 0.22),
+        ("sylow", 0.30),
+        ("共轭类", 0.28),
+        ("finite field", 0.28),
+        ("quotient ring", 0.28),
+    ),
+    "advanced-linear-algebra": (
+        ("高等代数", 0.30),
+        ("jordan", 0.30),
+        ("矩阵", 0.12),
+        ("行列式", 0.18),
+        ("特征值", 0.22),
+        ("特征多项式", 0.26),
+        ("最小多项式", 0.28),
+        ("中心化子", 0.30),
+        ("kronecker", 0.28),
+        ("秩", 0.18),
+        ("零度", 0.20),
+        ("二次型", 0.26),
+        ("惯性指数", 0.28),
+        ("幂零", 0.24),
+        ("\\det", 0.24),
+    ),
+    "advanced-real-analysis": (
+        ("数学分析", 0.30),
+        ("极限", 0.16),
+        ("级数", 0.18),
+        ("幂级数", 0.24),
+        ("收敛区间", 0.26),
+        ("\\int", 0.12),
+        ("\\sum", 0.12),
+        ("g=f^{-1}", 0.24),
+        ("反函数", 0.22),
+        ("\\|f_n\\|_\\infty", 0.24),
+    ),
+    "functional-analysis": (
+        ("泛函分析", 0.30),
+        ("算子", 0.22),
+        ("谱", 0.22),
+        ("hilbert 空间", 0.28),
+        ("线性泛函", 0.30),
+        ("volterra", 0.30),
+        ("单边右移", 0.30),
+        ("算子范数", 0.30),
+        ("谱半径", 0.28),
+        ("\\operatorname{span}", 0.28),
+        ("到子空间", 0.24),
+        (" operator", 0.18),
+    ),
+    "measure-integration": (
+        ("测度", 0.30),
+        ("lebesgue", 0.30),
+        ("tonelli", 0.32),
+        ("fubini", 0.30),
+        ("\\mathbf1", 0.24),
+        ("l^2(0,1)", 0.18),
+        ("l^3(0,1)", 0.24),
+        ("smith–volterra", 0.32),
+        ("smith-volterra", 0.32),
+        ("\\lim_{n\\to\\infty}\\int", 0.12),
+        ("\\int_0^1\\int_0^1", 0.28),
+    ),
+    "ordinary-differential-equations": (
+        ("常微分方程", 0.32),
+        ("初值问题", 0.28),
+        ("y'=", 0.20),
+        ("y''", 0.22),
+        ("x'=a", 0.24),
+        ("euler 方程", 0.28),
+        ("ordinary differential", 0.28),
+        (" ode ", 0.28),
+    ),
+    "partial-differential-equations": (
+        ("偏微分方程", 0.32),
+        ("热方程", 0.30),
+        ("波动方程", 0.30),
+        ("\\Delta u", 0.28),
+        ("\\delta u", 0.28),
+        ("单位圆盘", 0.24),
+        ("u_t=", 0.24),
+        ("u_{tt}", 0.24),
+        ("边界", 0.10),
+        ("partial differential", 0.28),
+        (" pde ", 0.28),
+    ),
+    "stochastic-processes": (
+        ("随机过程", 0.32),
+        ("brownian", 0.32),
+        ("markov 链", 0.32),
+        ("poisson 过程", 0.50),
+        ("平稳分布", 0.28),
+        ("首次离开", 0.24),
+        ("stopping time", 0.28),
+    ),
+    "operations-research": (
+        ("运筹学", 0.32),
+        ("线性规划", 0.30),
+        ("对偶问题", 0.28),
+        ("最短路", 0.30),
+        ("最大流", 0.30),
+        ("网络容量", 0.26),
+        ("指派问题", 0.30),
+        ("零和博弈", 0.30),
+        ("博弈值", 0.26),
+        ("operations research", 0.30),
+    ),
+    "regression": (
+        ("线性回归", 0.32),
+        ("x^tx", 0.30),
+        ("最小二乘", 0.28),
+        ("ridge", 0.30),
+        ("帽子矩阵", 0.30),
+        ("留一法残差", 0.30),
+        ("残差平方和", 0.26),
+        ("回归模型", 0.28),
+    ),
+    "differential-geometry": (
+        ("微分几何", 0.32),
+        ("gaussian 曲率", 0.32),
+        ("测地曲率", 0.32),
+        ("环面参数", 0.28),
+        ("球面", 0.16),
+        ("differential geometry", 0.30),
+    ),
+    "complex-analysis": (
+        ("复分析", 0.30),
+        ("复变", 0.28),
+        ("\\oint", 0.28),
+        ("留数", 0.30),
+        ("rouché", 0.32),
+        ("rouche", 0.32),
+        ("整函数", 0.28),
+        ("无穷远点", 0.26),
+        ("taylor", 0.18),
+        ("holomorphic", 0.28),
+        ("residue", 0.28),
+        ("complex plane", 0.24),
+        ("\\int_{-\\infty}^{\\infty}", 0.24),
+    ),
+    "numerical-analysis": (
+        ("数值分析", 0.32),
+        ("simpson", 0.30),
+        ("newton 法", 0.30),
+        ("hermite 插值", 0.30),
+        ("gauss–seidel", 0.32),
+        ("gauss-seidel", 0.32),
+        ("条件数", 0.28),
+        ("迭代矩阵", 0.26),
+        ("有符号误差", 0.26),
+        ("rounding error", 0.24),
+        ("numerical", 0.20),
+    ),
+    "probability": (
+        ("概率论", 0.30),
+        ("概率", 0.16),
+        ("期望", 0.16),
+        ("方差", 0.16),
+        ("随机变量", 0.22),
+        ("poisson(", 0.24),
+        ("poisson", 0.28),
+        ("正态分布", 0.24),
+        ("n(0,1)", 0.24),
+        ("指数随机变量", 0.24),
+        ("随机游走", 0.24),
+        ("后验概率", 0.26),
+        ("次序统计量", 0.26),
+        ("probability", 0.08),
+        ("random variable", 0.08),
+    ),
+    "statistics": (
+        ("统计推断", 0.32),
+        ("最大似然", 0.30),
+        ("fisher 信息", 0.30),
+        ("cramér–rao", 0.32),
+        ("cramer-rao", 0.32),
+        ("估计量", 0.22),
+        ("样本来自", 0.18),
+        ("样本容量", 0.14),
+        ("statistics", 0.18),
+        ("estimator", 0.18),
+    ),
+    "topology": (
+        ("拓扑学", 0.32),
+        ("同调群", 0.32),
+        ("同胚", 0.26),
+        ("genus", 0.26),
+        ("映射度数", 0.30),
+        ("t^2", 0.18),
+        ("topology", 0.28),
+        ("homeomorph", 0.26),
+    ),
+    "algebra": (
+        ("方程", 0.08),
+        ("多项式", 0.08),
+        ("inequality", 0.08),
+        ("polynomial", 0.08),
+        ("equation", 0.08),
+    ),
+    "calculus": (
+        ("derivative", 0.08),
+        ("integral", 0.08),
+        ("limit", 0.08),
+    ),
+    "combinatorics": (
+        ("排列", 0.08),
+        ("组合", 0.08),
+        ("计数", 0.08),
+        ("permutation", 0.08),
+        ("combination", 0.08),
+        ("counting", 0.08),
+    ),
+    "differential-equations": (
+        ("differential equation", 0.16),
+        ("ode", 0.08),
+        ("pde", 0.08),
+    ),
+    "discrete-math": (
+        ("图论", 0.08),
+        ("递推", 0.08),
+        ("graph", 0.08),
+        ("recurrence", 0.08),
+    ),
+    "geometry": (
+        ("三角形", 0.08),
+        ("圆", 0.08),
+        ("几何", 0.08),
+        ("triangle", 0.08),
+        ("circle", 0.08),
+        ("angle", 0.08),
+    ),
+    "linear-algebra": (
+        ("matrix", 0.08),
+        ("vector", 0.08),
+        ("eigenvalue", 0.08),
+    ),
+    "logic": (
+        ("命题", 0.08),
+        ("谓词", 0.08),
+        ("逻辑", 0.08),
+        ("predicate", 0.08),
+        ("logic", 0.08),
+    ),
+    "number-theory": (
+        ("素数", 0.16),
+        ("整除", 0.16),
+        ("同余", 0.16),
+        ("prime", 0.08),
+        ("divisib", 0.08),
+        ("modulo", 0.08),
+    ),
+    "optimization": (
+        ("最优化", 0.18),
+        ("最大值", 0.08),
+        ("最小值", 0.08),
+        ("optimization", 0.08),
+        ("maximum", 0.08),
+        ("minimum", 0.08),
+    ),
+    "real-analysis": (
+        ("real analysis", 0.16),
+        ("uniform convergence", 0.16),
+        ("measure", 0.16),
+    ),
+    "set-theory": (
+        ("集合", 0.08),
+        ("基数", 0.16),
+        ("set theory", 0.16),
+        ("cardinality", 0.16),
+    ),
 }
 
 _METHOD_FAMILIES: dict[str, tuple[str, str, str]] = {
+    "abstract-algebra": (
+        "structural-transform",
+        "factorization-invariant",
+        "contradiction-extremal",
+    ),
+    "advanced-linear-algebra": (
+        "row-space",
+        "spectral",
+        "linear-map-invariant",
+    ),
+    "advanced-real-analysis": (
+        "direct-analytic",
+        "change-of-variable",
+        "estimate-limit",
+    ),
+    "functional-analysis": (
+        "spectral",
+        "direct-analytic",
+        "estimate-limit",
+    ),
+    "measure-integration": (
+        "direct-analytic",
+        "change-of-variable",
+        "estimate-limit",
+    ),
+    "ordinary-differential-equations": (
+        "substitution-elimination",
+        "spectral",
+        "constructive-computation",
+    ),
+    "partial-differential-equations": (
+        "spectral",
+        "change-of-variable",
+        "estimate-limit",
+    ),
+    "stochastic-processes": (
+        "conditioning",
+        "distribution-transform",
+        "indicator-linearity",
+    ),
+    "operations-research": (
+        "duality-transform",
+        "constructive-computation",
+        "invariant-extremal",
+    ),
+    "regression": (
+        "row-space",
+        "spectral",
+        "convexity-inequality",
+    ),
+    "differential-geometry": (
+        "direct-analytic",
+        "vector-transformation",
+        "structural-transform",
+    ),
     "algebra": ("substitution-elimination", "factorization-invariant", "structural-transform"),
     "geometry": ("synthetic-geometry", "coordinate-geometry", "vector-transformation"),
     "number-theory": ("congruence", "valuation-factorization", "descent-extremal"),
@@ -41,6 +357,26 @@ _METHOD_FAMILIES: dict[str, tuple[str, str, str]] = {
     "linear-algebra": ("row-space", "spectral", "linear-map-invariant"),
     "optimization": ("calculus-stationarity", "convexity-inequality", "duality-transform"),
     "logic": ("direct-deduction", "contradiction", "model-counterexample"),
+    "complex-analysis": ("direct-analytic", "structural-transform", "contradiction-extremal"),
+    "differential-equations": (
+        "substitution-elimination",
+        "spectral",
+        "constructive-computation",
+    ),
+    "discrete-math": (
+        "recurrence-generating",
+        "invariant-extremal",
+        "constructive-computation",
+    ),
+    "numerical-analysis": (
+        "constructive-computation",
+        "estimate-limit",
+        "spectral",
+    ),
+    "real-analysis": ("direct-analytic", "change-of-variable", "estimate-limit"),
+    "set-theory": ("direct-deduction", "model-counterexample", "structural-transform"),
+    "statistics": ("conditioning", "direct-analytic", "indicator-linearity"),
+    "topology": ("structural-transform", "invariant-extremal", "contradiction"),
     "general-math": ("direct-deduction", "constructive-computation", "contradiction-extremal"),
 }
 
@@ -61,6 +397,7 @@ class RouteAnalysis:
     ambiguity_margin: float
     complexity_flags: list[str]
     risk_level: str
+    trigger_reasons: list[str]
 
 
 def derive_route_policy(risk_level: str, problem_type: str) -> RoutePolicy:
@@ -82,15 +419,92 @@ def method_families_for(subject: str, problem_type: str) -> list[str]:
     return families
 
 
+def selected_skills_for(
+    problem: ProblemIR,
+    *,
+    primary_subject: str,
+    auxiliary_subject: str | None,
+    risk_level: str,
+) -> list[str]:
+    skills = [primary_subject]
+    if auxiliary_subject:
+        skills.append(auxiliary_subject)
+    skills.append("answer-normalization")
+    if problem.problem_type in {"proof", "derivation"}:
+        skills.append("proof-obligation")
+    if risk_level in {"medium", "high"}:
+        skills.append("counterexample-search")
+    if (
+        primary_subject != "general-math"
+        and problem.answer_type in {"expression", "polynomial"}
+    ):
+        skills.append("symbolic-equivalence")
+    if (
+        primary_subject == "numerical-analysis"
+        or auxiliary_subject == "numerical-analysis"
+        or any(
+            marker in problem.normalized_problem.lower()
+            for marker in (
+                "数值",
+                "误差",
+                "近似",
+                "条件数",
+                "ill-conditioned",
+                "numerical",
+            )
+        )
+    ):
+        skills.append("numerical-stability")
+    if risk_level == "high" and problem.problem_type in {"proof", "derivation"}:
+        skills.append("lemma-compression")
+    return list(dict.fromkeys(skills))
+
+
 class RouterRuleEngine:
     def rank(self, problem: ProblemIR) -> list[tuple[str, float]]:
         lowered = problem.normalized_problem.lower()
-        scores: list[tuple[str, float]] = []
-        for subject, keywords in _SUBJECT_KEYWORDS.items():
-            hits = sum(keyword in lowered for keyword in keywords)
-            if hits:
-                scores.append((subject, round(min(0.95, 0.72 + 0.08 * hits), 2)))
-        return sorted(scores, key=lambda item: (-item[1], item[0])) or [("general-math", 0.4)]
+        scores: list[tuple[str, float, float]] = []
+        for subject, signals in _SUBJECT_SIGNALS.items():
+            signal_score = sum(weight for signal, weight in signals if signal in lowered)
+            if signal_score:
+                scores.append(
+                    (
+                        subject,
+                        round(min(0.98, 0.72 + signal_score), 2),
+                        signal_score,
+                    )
+                )
+        ranked = sorted(scores, key=lambda item: (-item[2], item[0]))
+        return [(subject, confidence) for subject, confidence, _ in ranked] or [
+            ("general-math", 0.4)
+        ]
+
+    def trigger_reasons(
+        self,
+        problem: ProblemIR,
+        *,
+        limit: int = 2,
+    ) -> list[str]:
+        lowered = problem.normalized_problem.lower()
+        ranked_subjects = [subject for subject, _ in self.rank(problem)[:limit]]
+        reasons: list[str] = []
+        for subject in ranked_subjects:
+            if subject == "general-math":
+                reasons.append("general-math:no_registered_subject_trigger")
+                continue
+            matches = [
+                signal
+                for signal, _ in _SUBJECT_SIGNALS[subject]
+                if signal in lowered
+            ]
+            reasons.append(
+                f"{subject}:matched:{','.join(matches[:6])}"
+            )
+        return reasons
+
+    @staticmethod
+    def subjects() -> list[str]:
+        return sorted({*_SUBJECT_SIGNALS, "general-math"})
 
     def analyze(self, problem: ProblemIR) -> RouteAnalysis:
         ranked = self.rank(problem)
@@ -101,6 +515,7 @@ class RouterRuleEngine:
         complexity_flags = self._complexity_flags(
             problem,
             mixed_domain=len(ranked) > 1 and ambiguity_margin <= 0.12,
+            missing_dedicated_skill=ranked[0][0] == "general-math",
         )
         if "long_reasoning" in problem.risk_flags or len(complexity_flags) >= 3:
             risk = "high"
@@ -114,6 +529,7 @@ class RouterRuleEngine:
             ambiguity_margin=ambiguity_margin,
             complexity_flags=complexity_flags,
             risk_level=risk,
+            trigger_reasons=self.trigger_reasons(problem),
         )
 
     def plan(self, problem: ProblemIR) -> RoutePlan:
@@ -128,10 +544,12 @@ class RouterRuleEngine:
         del top_score
         risk = analysis.risk_level
         policy = derive_route_policy(risk, problem.problem_type)
-        skills = [primary]
-        if auxiliary:
-            skills.append(auxiliary)
-        skills.extend(["proof-obligation" if problem.problem_type == "proof" else "answer-normalization"])
+        skills = selected_skills_for(
+            problem,
+            primary_subject=primary,
+            auxiliary_subject=auxiliary,
+            risk_level=risk,
+        )
         tools = ["answer_type_check"]
         if problem.answer_type in {"expression", "polynomial"}:
             tools.append("symbolic_equivalence")
@@ -161,6 +579,7 @@ class RouterRuleEngine:
         problem: ProblemIR,
         *,
         mixed_domain: bool,
+        missing_dedicated_skill: bool,
     ) -> list[str]:
         lowered = problem.normalized_problem.lower()
         flags: list[str] = []
@@ -195,6 +614,10 @@ class RouterRuleEngine:
             flags.append("ill_conditioned_numerics")
         if mixed_domain:
             flags.append("mixed_domain")
+        if problem.parser_confidence < 0.70:
+            flags.append("low_parser_confidence")
+        if missing_dedicated_skill:
+            flags.append("general_math_fallback")
         if problem.problem_type in {"proof", "derivation"} or any(
             marker in lowered
             for marker in ("induction", "lemma", "case analysis", "contradiction")
@@ -211,6 +634,24 @@ class RouterPlanner:
     ) -> None:
         self._rules = rule_engine or RouterRuleEngine()
         self._contracts = contracts or PromptContractLoader()
+
+    def routing_reasons(
+        self,
+        problem: ProblemIR,
+        plan: RoutePlan | None = None,
+    ) -> list[str]:
+        reasons = self._rules.trigger_reasons(problem)
+        deterministic_primary = (
+            problem.subject_candidates[0][0]
+            if problem.subject_candidates
+            else "general-math"
+        )
+        if plan is not None and plan.primary_subject != deterministic_primary:
+            reasons.insert(
+                0,
+                f"llm_router:primary_subject:{plan.primary_subject}",
+            )
+        return reasons
 
     def plan(
         self,
@@ -256,10 +697,10 @@ class RouterPlanner:
             match = re.search(r"\{.*\}", response, re.DOTALL)
             payload = json.loads(match.group(0)) if match else {}
             primary = str(payload.get("primary_subject", "general-math"))
-            if primary not in {*_SUBJECT_KEYWORDS, "general-math"}:
+            if primary not in {*_SUBJECT_SIGNALS, "general-math"}:
                 primary = "general-math"
             auxiliary = payload.get("auxiliary_subject")
-            if auxiliary not in _SUBJECT_KEYWORDS or auxiliary == primary:
+            if auxiliary not in _SUBJECT_SIGNALS or auxiliary == primary:
                 auxiliary = None
             risk = str(payload.get("risk_level", rule_plan.risk_level))
             if risk not in {"low", "medium", "high"}:
@@ -268,8 +709,12 @@ class RouterPlanner:
             if risk_order[risk] < risk_order[rule_plan.risk_level]:
                 risk = rule_plan.risk_level
             policy = derive_route_policy(risk, problem.problem_type)
-            selected = [primary] + ([auxiliary] if auxiliary else [])
-            selected.append("proof-obligation" if problem.problem_type == "proof" else "answer-normalization")
+            selected = selected_skills_for(
+                problem,
+                primary_subject=primary,
+                auxiliary_subject=auxiliary,
+                risk_level=risk,
+            )
             planned = replace(
                 rule_plan,
                 primary_subject=primary,

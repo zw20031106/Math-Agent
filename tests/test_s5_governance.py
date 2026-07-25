@@ -133,7 +133,7 @@ def test_run_and_benchmark_provenance_are_complete_and_tamper_evident(tmp_path):
     assert provenance["config"]["schema_version"]
     assert len(provenance["config"]["sha256"]) == 64
     assert len(provenance["prompts"]) == 7
-    assert len(provenance["skills"]) == 24
+    assert len(provenance["skills"]) == 35
     assert len(provenance["tools"]) == 9
     assert provenance["rag"]["schema_version"]
     assert len(provenance["rag"]["knowledge_db_sha256"]) == 64

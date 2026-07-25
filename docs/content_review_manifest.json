@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0",
   "status": "pending-human",
-  "review_date": "2026-07-23",
-  "engineering_reviewer": "codex-s5-audit",
+  "review_date": "2026-07-25",
+  "engineering_reviewer": "codex-s6-e5-math-audit",
   "human_signatures": [],
   "scopes": [
     {
@@ -10,11 +10,11 @@
       "kind": "tree",
       "path": "skills/domains",
       "pattern": "*.md",
-      "expected_count": 18,
-      "version": "frontmatter-version",
-      "engineering_reviewer": "codex-s5-audit",
-      "review_date": "2026-07-23",
-      "sha256": "5b1e4d557fe881c5359ed2e095b6a78e2bee4ea7371fa7512964e22afe99a720"
+      "expected_count": 29,
+      "version": "skill-2.0",
+      "engineering_reviewer": "codex-s6-e5-math-audit",
+      "review_date": "2026-07-25",
+      "sha256": "79f40028c1e2e2d0cc08ed55273c877348cf2fccb12c6ec04650177ab3321b63"
     },
     {
       "id": "general-skills",
@@ -22,10 +22,10 @@
       "path": "skills/general",
       "pattern": "*.md",
       "expected_count": 6,
-      "version": "frontmatter-version",
-      "engineering_reviewer": "codex-s5-audit",
-      "review_date": "2026-07-23",
-      "sha256": "a9572e1a2604a5799d74c2ee5ee934eff061900603dd0b163f7b85031c7f56d7"
+      "version": "skill-2.0",
+      "engineering_reviewer": "codex-s6-e5-math-audit",
+      "review_date": "2026-07-25",
+      "sha256": "db7d866c278f8e6e91e303d8aa72681963bf420b4c33081b6060f175e06605be"
     },
     {
       "id": "prompt-contracts",
@@ -70,6 +70,19 @@
       "engineering_reviewer": "codex-s5-audit",
       "review_date": "2026-07-23",
       "sha256": "cbe3ed0bb603aded6884f73888e0f003bd6fa7ad73734bc214aeccd31bbaf1a7"
+    },
+    {
+      "id": "router-e5-gold",
+      "kind": "file_set",
+      "paths": [
+        "data/dev_set_2_gold.jsonl",
+        "data/router_e5_baseline.json"
+      ],
+      "expected_count": 2,
+      "version": "router-gold-88-1",
+      "engineering_reviewer": "codex-s6-e5-math-audit",
+      "review_date": "2026-07-25",
+      "sha256": "6d55a68d7f6be5ea2c0fec48260b15f80e85c6e734f569d808804aa95e73f400"
     },
     {
       "id": "golden-e2e",

@@ -41,6 +41,7 @@ class LLMFinalizer:
         *,
         max_tokens: int,
         context_view: RoleContextView | None = None,
+        skill_context: str = "",
     ) -> FinalizationResult:
         try:
             budget.consume(stage="finalizer", optional=True)
@@ -52,6 +53,11 @@ class LLMFinalizer:
             user = (
                 f"Problem:\n{problem.normalized_problem}\n\n{selected}\n\n"
                 f"Exact final answer (must not change): {candidate.final_answer}"
+                + (
+                    f"\n\nAuthorized skill guidance:\n{skill_context}"
+                    if skill_context.strip()
+                    else ""
+                )
             )
             messages = self._contracts.messages(
                 "finalizer",
