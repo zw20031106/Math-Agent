@@ -25,6 +25,39 @@ def _config() -> HarnessConfig:
     )
 
 
+def _candidate_payload(
+    final_answer: str,
+    solution_text: str,
+    claims: list[dict],
+) -> dict:
+    normalized_claims = [
+        {
+            **claim,
+            "depends_on": list(claim.get("depends_on", [])),
+            "importance": claim.get("importance", "critical"),
+        }
+        for claim in claims
+    ]
+    return {
+        "method": "direct",
+        "method_steps": [
+            {
+                "step_id": "s1",
+                "kind": "conclusion",
+                "claim_ids": [normalized_claims[0]["claim_id"]],
+                "theorem": "",
+            }
+        ],
+        "solution_text": solution_text,
+        "public_solution_steps": [solution_text],
+        "final_answer": final_answer,
+        "assumptions": [],
+        "theorems": [],
+        "claims": normalized_claims,
+        "unresolved_obligations": [],
+    }
+
+
 class RepairRuntimeClient:
     def __init__(self, repaired_answer: str) -> None:
         self.repaired_answer = repaired_answer
@@ -35,24 +68,23 @@ class RepairRuntimeClient:
         self.calls.append(messages)
         if messages[0]["content"].startswith("You are RepairAgent"):
             return json.dumps(
-                {
-                    "final_answer": self.repaired_answer,
-                    "claims": [
+                _candidate_payload(
+                    self.repaired_answer,
+                    "x = x",
+                    [
                         {
                             "claim_id": "failed",
                             "statement": "x = x",
                             "check_type": "symbolic_equivalence",
                         }
                     ],
-                }
+                )
             )
         return json.dumps(
-            {
-                "method": "bad",
-                "solution_text": "STALE BAD DERIVATION",
-                "final_answer": "A",
-                "answer_type": "choice",
-                "claims": [
+            _candidate_payload(
+                "A",
+                "STALE BAD DERIVATION",
+                [
                     {
                         "claim_id": "failed",
                         "statement": "x = x+1",
@@ -64,7 +96,7 @@ class RepairRuntimeClient:
                         "check_type": "reasoning",
                     },
                 ],
-            }
+            )
         )
 
 

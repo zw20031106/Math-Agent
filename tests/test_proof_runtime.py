@@ -26,6 +26,36 @@ def _proof_config() -> HarnessConfig:
     )
 
 
+def _proof_candidate(solution_text: str, claims: list[dict]) -> dict:
+    normalized_claims = []
+    for claim in claims:
+        normalized_claims.append(
+            {
+                **claim,
+                "depends_on": list(claim.get("depends_on", [])),
+                "importance": claim.get("importance", "critical"),
+            }
+        )
+    return {
+        "method": "direct",
+        "method_steps": [
+            {
+                "step_id": "s1",
+                "kind": "conclusion",
+                "claim_ids": [normalized_claims[-1]["claim_id"]],
+                "theorem": "",
+            }
+        ],
+        "solution_text": solution_text,
+        "public_solution_steps": [solution_text],
+        "final_answer": "QED",
+        "assumptions": [],
+        "theorems": [],
+        "claims": normalized_claims,
+        "unresolved_obligations": [],
+    }
+
+
 class ProofClient:
     def __init__(self, *, claimless: bool = False, invalid_verifier: bool = False) -> None:
         self.claimless = claimless
@@ -51,27 +81,30 @@ class ProofClient:
                     }
                 )
             return json.dumps({"findings": findings})
-        claims = []
-        if not self.claimless:
+        if self.claimless:
+            claims = [
+                {
+                    "claim_id": "assertion",
+                    "statement": "The result is asserted without proof.",
+                    "check_type": "reasoning",
+                    "importance": "critical",
+                }
+            ]
+        else:
             claims = [
                 {
                     "claim_id": kind,
                     "statement": f"{kind}: justified step",
                     "check_type": kind,
-                    "importance": "required",
+                    "importance": "critical",
                 }
                 for kind in ("definition", "sufficiency", "boundary")
             ]
         return json.dumps(
-            {
-                "method": "direct",
-                "solution_text": (
-                    "Assertion only." if self.claimless else "Complete structured proof."
-                ),
-                "final_answer": "QED",
-                "answer_type": "text",
-                "claims": claims,
-            }
+            _proof_candidate(
+                "Assertion only." if self.claimless else "Complete structured proof.",
+                claims,
+            )
         )
 
 
@@ -132,12 +165,9 @@ class RoutedProofClient:
             ]
             return json.dumps({"findings": findings})
         return json.dumps(
-            {
-                "method": "direct",
-                "solution_text": "Complete routed proof.",
-                "final_answer": "QED",
-                "answer_type": "text",
-                "claims": [
+            _proof_candidate(
+                "Complete routed proof.",
+                [
                     {
                         "claim_id": kind,
                         "statement": f"{kind}: justified step",
@@ -145,7 +175,7 @@ class RoutedProofClient:
                     }
                     for kind in ("definition", "sufficiency", "boundary")
                 ],
-            }
+            )
         )
 
 
@@ -205,12 +235,7 @@ class RepairPressureProofClient:
                 for kind in ("definition", "sufficiency", "boundary")
             ]
         return json.dumps(
-            {
-                "method": "direct",
-                "solution_text": "Complete alternative proof.",
-                "final_answer": "QED",
-                "claims": claims,
-            }
+            _proof_candidate("Complete alternative proof.", claims)
         )
 
 
@@ -245,12 +270,9 @@ class SyntaxOnlyProofClient:
     def chat(self, *, messages, temperature, max_tokens):
         del messages, temperature, max_tokens
         return json.dumps(
-            {
-                "method": "direct",
-                "solution_text": "Unsupported assertions only.",
-                "final_answer": "QED",
-                "answer_type": "text",
-                "claims": [
+            _proof_candidate(
+                "Unsupported assertions only.",
+                [
                     {
                         "claim_id": kind,
                         "statement": f"{kind} is handled",
@@ -259,7 +281,7 @@ class SyntaxOnlyProofClient:
                     }
                     for kind in ("definition", "sufficiency", "uniqueness", "boundary")
                 ],
-            }
+            )
         )
 
 

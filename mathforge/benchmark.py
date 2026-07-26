@@ -464,6 +464,15 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
         "model_call_timeout_count": sum(
             item.model_call_timeout_count for item in metrics
         ),
+        "transport_attempt_count": sum(
+            item.transport_attempts for item in metrics
+        ),
+        "model_call_failure_count": sum(
+            item.model_call_failure_count for item in metrics
+        ),
+        "model_response_rejection_count": sum(
+            item.model_response_rejection_count for item in metrics
+        ),
         "per_case_wall_clock_timeout_count": sum(
             item.per_case_wall_clock_timeout_count for item in metrics
         ),
@@ -741,6 +750,24 @@ def _metrics_from_payload(
             legacy.get(
                 "model_call_timeout_count",
                 cost_source.get("model_call_timeout_count", 0),
+            )
+        ),
+        transport_attempts=_nonnegative_int(
+            legacy.get(
+                "transport_attempts",
+                cost_source.get("transport_attempts", 0),
+            )
+        ),
+        model_call_failure_count=_nonnegative_int(
+            legacy.get(
+                "model_call_failure_count",
+                cost_source.get("model_call_failure_count", 0),
+            )
+        ),
+        model_response_rejection_count=_nonnegative_int(
+            legacy.get(
+                "model_response_rejection_count",
+                cost_source.get("model_response_rejection_count", 0),
             )
         ),
         per_case_wall_clock_timeout_count=_nonnegative_int(

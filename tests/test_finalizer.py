@@ -9,7 +9,7 @@ from mathforge.agents.finalizer import LLMFinalizer
 from mathforge.config import HarnessConfig
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
-from mathforge.harness.schemas import CandidateSolution
+from mathforge.harness.schemas import CandidateSolution, Claim, MethodStep
 from mathforge.output.deterministic_formatter import DeterministicFormatter
 from mathforge.parsing.problem_parser import ProblemParser
 from mathforge.parsing.solution_parser import SolutionParser
@@ -31,8 +31,29 @@ class FinalizerClient:
         return json.dumps(
             {
                 "method": "presentation",
+                "method_steps": [
+                    {
+                        "step_id": "s1",
+                        "kind": "conclusion",
+                        "claim_ids": ["c1"],
+                        "theorem": "",
+                    }
+                ],
                 "solution_text": self.solution_text,
+                "public_solution_steps": [self.solution_text],
                 "final_answer": self.answer,
+                "assumptions": [],
+                "theorems": [],
+                "claims": [
+                    {
+                        "claim_id": "c1",
+                        "statement": "The verified result is 42.",
+                        "depends_on": [],
+                        "check_type": "reasoning",
+                        "importance": "critical",
+                    }
+                ],
+                "unresolved_obligations": [],
                 **self.extra,
             }
         )
@@ -41,7 +62,23 @@ class FinalizerClient:
 def _run(answer: str, solution_text: str = "Proof", extra: dict | None = None):
     problem = ProblemParser().parse("证明结论")
     candidate = CandidateSolution(
-        "c", "PrimarySolver", "direct", "42", "text", solution_text="Proof"
+        "c",
+        "PrimarySolver",
+        "direct",
+        "42",
+        "text",
+        claims=[
+            Claim(
+                "c1",
+                "The verified result is 42.",
+                check_type="reasoning",
+                importance="critical",
+                claim_kind="reasoning",
+            )
+        ],
+        public_solution_steps=["Proof"],
+        solution_text="Proof",
+        method_steps=[MethodStep("s1", "conclusion", ["c1"])],
     )
     provider = OfficialClientProvider(
         FinalizerClient(answer, solution_text, extra),

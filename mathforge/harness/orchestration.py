@@ -14,7 +14,11 @@ from mathforge.agents.router_planner import method_families_for
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
-from mathforge.harness.errors import BudgetExceeded
+from mathforge.harness.errors import (
+    BudgetExceeded,
+    ModelResponseError,
+    ModelTransportError,
+)
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
 from mathforge.harness.fingerprints import semantic_fingerprint
 from mathforge.verification.methods import candidate_method_signature
@@ -150,8 +154,12 @@ class CandidateOrchestrator:
                     index, candidate_id = futures[future]
                     try:
                         candidate = future.result()
-                    except BudgetExceeded:
-                        reason = "deadline_cutoff"
+                    except BudgetExceeded as error:
+                        reason = (
+                            "model_response_deadline_exceeded"
+                            if "response exceeded" in str(error)
+                            else "deadline_cutoff"
+                        )
                         failures.append(BranchFailure(candidate_id, reason))
                         if event_callback is not None:
                             event_callback(
@@ -252,8 +260,10 @@ def candidate_failure_trace_payload(
 
 
 def _branch_failure_reason(error: Exception) -> str:
+    if isinstance(error, (ModelTransportError, ModelResponseError)):
+        return error.code
     if isinstance(error, RuntimeError):
-        return "model_call_failed"
+        return "unknown_provider_failure"
     if isinstance(error, (TypeError, ValueError)):
         return "model_response_invalid"
     return "solver_branch_failed"

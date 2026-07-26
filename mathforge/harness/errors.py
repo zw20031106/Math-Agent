@@ -17,6 +17,23 @@ class ContractViolation(MathForgeError):
     """A component returned data outside its public contract."""
 
 
+class ModelTransportError(MathForgeError):
+    """A model transport failed with a safe, non-sensitive classification."""
+
+    def __init__(self, code: str, *, attempts: int = 1) -> None:
+        self.code = str(code)
+        self.attempts = max(1, int(attempts))
+        super().__init__(f"model transport failed: {self.code}")
+
+
+class ModelResponseError(ContractViolation):
+    """A returned model response is incomplete or violates the role contract."""
+
+    def __init__(self, code: str) -> None:
+        self.code = str(code)
+        super().__init__(f"model response rejected: {self.code}")
+
+
 class FailureCode(str, Enum):
     PARSE = "parse"
     CONTEXT = "context"

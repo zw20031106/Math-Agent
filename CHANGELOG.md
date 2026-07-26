@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Phase 1 model-call minimum closed loop
+
+- Added L0/L1/L2 preflight for exact model/client readiness, strict short JSON,
+  and a compact mathematical Candidate that must pass the production parser,
+  deterministic formatter, Trace validator, and flat public contract before a
+  batch can start.
+- Replaced the former 600-second local request assumption with a
+  server-clock-aware 125-second transport ceiling and shorter role deadlines.
+- Added role-specific output caps for Router, Primary, Alternative, Verifier,
+  Repair, Lemma, and Finalizer while preserving the 256K context invariant.
+- Added safe transport and response classifications, rejected truncated or
+  schema-invalid Candidate JSON in Solver, Repair, and Finalizer paths, and
+  kept raw exceptions out of Trace and preflight reports.
+- Made the frozen official client's internal attempt count one in the custom
+  runner, allowed one outer retry only for explicit fast retryable failures,
+  and added per-call attempt/failure/validation telemetry to RunMetrics 1.3.
+- Added a consecutive provider-failure circuit breaker that stops scheduling
+  later batches and records the open circuit in the run manifest.
+
 ### Phase 0 evidence freeze
 
 - Confirmed that no benchmark process was still running before changing

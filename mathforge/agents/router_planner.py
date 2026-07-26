@@ -7,7 +7,7 @@ from typing import Callable
 
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
-from mathforge.harness.errors import BudgetExceeded
+from mathforge.harness.errors import BudgetExceeded, ModelTransportError
 from mathforge.harness.schemas import ProblemIR, RoutePlan
 
 
@@ -797,5 +797,12 @@ class RouterPlanner:
             )
             planned.validate()
             return planned
-        except (BudgetExceeded, ValueError, TypeError, json.JSONDecodeError, RuntimeError):
+        except (
+            BudgetExceeded,
+            ModelTransportError,
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+            RuntimeError,
+        ):
             return rule_plan

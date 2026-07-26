@@ -190,7 +190,6 @@ class SolutionParser:
         if in_string or stack:
             return "truncated_json"
         return "malformed_json"
-
     @staticmethod
     def _normalize_aliases(
         payload: dict[str, Any],
@@ -589,3 +588,22 @@ class SolutionParser:
             if matches:
                 return str(matches[-1]).strip()
         return text.strip()
+
+
+def candidate_response_validation(
+    candidate: CandidateSolution,
+) -> tuple[str, bool]:
+    status = str(candidate.parse_status)
+    if status == "truncated_json":
+        return "candidate_json_incomplete", True
+    if status == "malformed_json":
+        return "candidate_json_invalid", True
+    if status == "incomplete_json" or "incomplete_candidate" in status:
+        return "candidate_schema_invalid", True
+    if candidate.contract_deviations:
+        return "candidate_schema_invalid", True
+    if status in {"raw_text", "regex_answer"}:
+        return "candidate_non_json", False
+    if status == "strict_json":
+        return "strict_candidate_json", False
+    return "candidate_json_compatibility_path", False

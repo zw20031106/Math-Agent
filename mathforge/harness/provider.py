@@ -7,6 +7,17 @@ from typing import Any, TYPE_CHECKING
 from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.harness.context_budget import ModelContextBudget
 from mathforge.harness.errors import BudgetExceeded
+from mathforge.harness.errors import ModelTransportError
+from mathforge.harness.model_policy import (
+    effective_call_timeout,
+    effective_output_tokens,
+    stage_output_cap,
+)
+from mathforge.harness.transport import (
+    ObservedModelResponse,
+    classify_transport_failure,
+    transport_attempts,
+)
 
 if TYPE_CHECKING:
     from mathforge.harness.budget import CallBudget
@@ -28,6 +39,7 @@ class ModelCallGate:
         *,
         deadline=None,
         background_tail_callback=None,
+        stage: str = "unallocated",
         **kwargs,
     ):
         if deadline is None:
@@ -64,7 +76,9 @@ class ModelCallGate:
             name="mathforge-model-call",
             daemon=True,
         ).start()
-        if not done.wait(deadline.remaining_for_model_call()):
+        if not done.wait(
+            effective_call_timeout(stage, deadline.remaining_for_model_call())
+        ):
             with state_lock:
                 state["timed_out"] = True
                 already_completed = state["completed"]
@@ -106,12 +120,18 @@ class OfficialClientProvider:
         budget: "CallBudget | None" = None,
         stage: str = "unallocated",
     ) -> str:
+        effective_max_tokens = effective_output_tokens(stage, max_tokens)
         allocation = self._context_budget.allocate(
             messages,
-            configured_max_output_tokens=max_tokens,
+            configured_max_output_tokens=effective_max_tokens,
         )
+        allocation_payload = {
+            **allocation.to_dict(),
+            "configured_output_tokens": max_tokens,
+            "stage_output_cap_tokens": stage_output_cap(stage),
+        }
         call_index = (
-            budget.record_model_call_started(stage, allocation.to_dict())
+            budget.record_model_call_started(stage, allocation_payload)
             if budget is not None
             else None
         )
@@ -121,6 +141,7 @@ class OfficialClientProvider:
             response = self._gate.call(
                 self._chat,
                 deadline=active_deadline,
+                stage=stage,
                 background_tail_callback=(
                     budget.record_background_tail
                     if budget is not None
@@ -136,27 +157,47 @@ class OfficialClientProvider:
                     budget.record_model_call_timeout(
                         call_index,
                         perf_counter() - started,
+                        failure_code="model_response_deadline_exceeded",
                     )
                 else:
                     budget.record_model_call_failed(
                         call_index,
                         perf_counter() - started,
+                        failure_code="model_concurrency_wait_exceeded",
                     )
             raise
-        except BaseException:
+        except Exception as error:
+            failure_code = classify_transport_failure(error)
+            attempts = transport_attempts(error)
             if budget is not None and call_index is not None:
                 budget.record_model_call_failed(
                     call_index,
                     perf_counter() - started,
+                    failure_code=failure_code,
+                    transport_attempts=attempts,
                 )
-            raise
+            raise ModelTransportError(
+                failure_code,
+                attempts=attempts,
+            ) from error
         if not isinstance(response, str):
             if budget is not None and call_index is not None:
                 budget.record_model_call_failed(
                     call_index,
                     perf_counter() - started,
+                    failure_code="response_shape_invalid",
                 )
-            raise TypeError("client.chat must return a string")
+            raise ModelTransportError("response_shape_invalid")
+        attempts = transport_attempts(response)
+        if not response.strip():
+            if budget is not None and call_index is not None:
+                budget.record_model_call_failed(
+                    call_index,
+                    perf_counter() - started,
+                    failure_code="empty_response",
+                    transport_attempts=attempts,
+                )
+            raise ModelTransportError("empty_response", attempts=attempts)
         output = self._context_budget.count_text(response)
         if budget is not None and call_index is not None:
             budget.record_model_call_completed(
@@ -165,10 +206,15 @@ class OfficialClientProvider:
                 output_counting_mode=output.counting_mode,
                 output_chars=len(response),
                 elapsed_seconds=perf_counter() - started,
+                transport_attempts=attempts,
             )
             budget.record_tokens(output.tokens)
         if output.tokens > allocation.max_output_tokens:
             raise ContextBudgetExceeded(
                 "model response exceeds its dynamically allocated output budget"
             )
-        return response
+        return ObservedModelResponse(
+            response,
+            transport_attempts=attempts,
+            model_call_index=call_index,
+        )

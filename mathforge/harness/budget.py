@@ -70,6 +70,9 @@ class CallBudget:
         self.output_chars = 0
         self.model_call_elapsed_seconds = 0.0
         self.model_call_timeout_count = 0
+        self.transport_attempts = 0
+        self.model_call_failure_count = 0
+        self.model_response_rejection_count = 0
         self.background_tail_started = 0
         self.background_tail_active = 0
         self.background_tail_completed = 0
@@ -137,6 +140,17 @@ class CallBudget:
                 ),
                 "deadline_phase": self.deadline.phase(),
                 "status": "started",
+                "configured_output_tokens": max(
+                    0,
+                    int(allocation.get("configured_output_tokens", requested)),
+                ),
+                "stage_output_cap_tokens": max(
+                    0,
+                    int(allocation.get("stage_output_cap_tokens", requested)),
+                ),
+                "transport_attempts": 0,
+                "failure_code": "",
+                "response_validation": "not_applicable",
                 "observed_output_tokens": 0,
                 "output_counting_mode": "",
                 "output_chars": 0,
@@ -153,17 +167,21 @@ class CallBudget:
         output_counting_mode: str,
         output_chars: int,
         elapsed_seconds: float,
+        transport_attempts: int = 1,
     ) -> None:
         with self._lock:
             observed = max(0, int(observed_output_tokens))
             characters = max(0, int(output_chars))
             elapsed = max(0.0, float(elapsed_seconds))
+            attempts = max(1, int(transport_attempts))
             self.observed_output_tokens += observed
             self.output_chars += characters
             self.model_call_elapsed_seconds += elapsed
+            self.transport_attempts += attempts
             self.model_call_records[index].update(
                 {
                     "status": "completed",
+                    "transport_attempts": attempts,
                     "observed_output_tokens": observed,
                     "output_counting_mode": str(output_counting_mode),
                     "output_chars": characters,
@@ -171,28 +189,66 @@ class CallBudget:
                 }
             )
 
-    def record_model_call_timeout(self, index: int, elapsed_seconds: float) -> None:
+    def record_model_call_timeout(
+        self,
+        index: int,
+        elapsed_seconds: float,
+        *,
+        failure_code: str = "model_response_deadline_exceeded",
+        transport_attempts: int = 1,
+    ) -> None:
         with self._lock:
             elapsed = max(0.0, float(elapsed_seconds))
+            attempts = max(1, int(transport_attempts))
             self.model_call_timeout_count += 1
+            self.model_call_failure_count += 1
+            self.transport_attempts += attempts
             self.model_call_elapsed_seconds += elapsed
             self.model_call_records[index].update(
                 {
                     "status": "timeout",
+                    "failure_code": str(failure_code),
+                    "transport_attempts": attempts,
                     "elapsed_seconds": round(elapsed, 6),
                 }
             )
 
-    def record_model_call_failed(self, index: int, elapsed_seconds: float) -> None:
+    def record_model_call_failed(
+        self,
+        index: int,
+        elapsed_seconds: float,
+        *,
+        failure_code: str = "unknown_provider_failure",
+        transport_attempts: int = 1,
+    ) -> None:
         with self._lock:
             elapsed = max(0.0, float(elapsed_seconds))
+            attempts = max(1, int(transport_attempts))
+            self.model_call_failure_count += 1
+            self.transport_attempts += attempts
             self.model_call_elapsed_seconds += elapsed
             self.model_call_records[index].update(
                 {
                     "status": "failed",
+                    "failure_code": str(failure_code),
+                    "transport_attempts": attempts,
                     "elapsed_seconds": round(elapsed, 6),
                 }
             )
+
+    def record_model_response_validation(
+        self,
+        index: int | None,
+        code: str,
+        *,
+        rejected: bool,
+    ) -> None:
+        if index is None:
+            return
+        with self._lock:
+            self.model_call_records[index]["response_validation"] = str(code)
+            if rejected:
+                self.model_response_rejection_count += 1
 
     def record_background_tail(self, event: str) -> None:
         with self._lock:
@@ -305,6 +361,11 @@ class CallBudget:
                     6,
                 ),
                 "model_call_timeout_count": self.model_call_timeout_count,
+                "transport_attempts": self.transport_attempts,
+                "model_call_failure_count": self.model_call_failure_count,
+                "model_response_rejection_count": (
+                    self.model_response_rejection_count
+                ),
                 "background_tail_started": self.background_tail_started,
                 "background_tail_active": self.background_tail_active,
                 "background_tail_completed": self.background_tail_completed,

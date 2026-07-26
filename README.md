@@ -55,21 +55,23 @@ python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs
 ```
 
 Files are named `<id>.json` and contain exactly `id`, `status`,
-`final_response`, and `trace`, without a `result` wrapper. A real model-response
-preflight must succeed before any case starts. Each terminal success, failure,
-or timeout is flushed through a temporary file and atomically replaced before
-`CASE_COMPLETED` is printed. Internal metrics and output hashes live only in
-`case-outputs/run_manifest.json`.
+`final_response`, and `trace`, without a `result` wrapper. An L0/L1/L2
+preflight must succeed before any case starts: exact model and client
+readiness, a short exact JSON response, then a compact mathematical Candidate
+that passes the production parser, deterministic formatter, Trace, and public
+output contract. A non-empty but malformed response cannot pass. Each level
+and its safe failure code are stored in `run_manifest.json`. Each terminal
+success, failure, or timeout is atomically persisted before `CASE_COMPLETED`
+is printed.
 
-The per-case runner serializes official-client calls and permits one retry when
-a provider failure returns within 180 seconds. Each underlying HTTP request
-gets up to 600 seconds under the competition configuration; a failed first
-attempt, backoff, and full second request still fit inside the Harness
-model-call window. This covers observed 397B failures around 127–159 seconds
-without returning to the sample client's premature 120-second cutoff or
-creating concurrent bursts against an unstable endpoint. The competition
-model-call gate is therefore fixed at one concurrent request; candidate
-branches still exist, but enter the provider in deadline-aware sequence.
+The runner gives the frozen official client a 125-second HTTP window, matching
+the documented approximately 120-second provider response boundary plus a
+small transport allowance. It permits one retry only for an explicitly
+classified, quickly returned rate-limit, 5xx, or connection failure; empty,
+invalid, incomplete, and timed-out responses are not replayed. The runner
+constructs the official client with one internal attempt, so all outer
+transport attempts remain observable. The competition model-call gate remains
+fixed at one concurrent request.
 
 To continue an interrupted run, repeat the command with `--resume`. The runner
 validates the input/config hashes, rejects duplicate or unknown case IDs,
@@ -82,8 +84,9 @@ It keeps complete candidate public steps, final answers, claims, evidence,
 repair/lemma records, arbitration, and terminal cause without a character
 limit. Repeated phase transitions, context-view bookkeeping, and duplicate
 completion telemetry are omitted. Provider failures are exposed only through
-safe reason codes such as `model_call_failed`; credentials and raw exceptions
-remain private.
+safe reason codes such as `auth_or_permission_failure`, `provider_5xx`,
+`network_read_timeout`, `candidate_json_incomplete`, and
+`candidate_schema_invalid`; credentials and raw exceptions remain private.
 
 `INTERN_MODEL` is mandatory and must be the exact version ID shown above.
 The legacy `intern-s2-preview` field currently targets a 35B model; aliases,
@@ -92,11 +95,14 @@ chat surface returns assistant content but no response model or thinking-mode
 metadata, so provenance records the requested model and marks those
 response-side fields as unobservable instead of inferring them.
 
-Every role call uses one context-budget service. The competition profile caps
-each completion at 65,536 tokens, and the provider passes the positive value
-`min(65536, 262144 - prompt_tokens - 8192)` to the client. This retains the
-256K total-context invariant while avoiding unstable near-window completion
-requests. The preferred counter is the pinned tokenizer snapshot for
+Every role call uses one context-budget service and a server-clock-aware role
+policy. Configured limits are upper bounds; effective caps are Router/Finalizer
+4,096, Verifier 8,192, Repair 12,288, Lemma 16,384, Alternative 24,576, and
+Primary 32,768 tokens. Router and Finalizer wait at most 60 seconds, Verifier
+90, Repair/Lemma 110, and Primary/Alternative 125, always further bounded by
+the remaining case deadline. This retains the
+`prompt + output + 8,192 <= 262,144` context invariant while prioritizing a
+complete response inside the provider clock. The preferred counter is the pinned tokenizer snapshot for
 `internlm/Intern-S2-Preview-397B@35eba5f142353d180472cdad2d70b09d0a383113`;
 set `MATHFORGE_INTERN_S2_TOKENIZER_DIR` to a local snapshot containing the
 hash-verified tokenizer config, tokenizer JSON, and chat template. If it is

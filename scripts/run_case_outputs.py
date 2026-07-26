@@ -19,31 +19,79 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from llm_client import InternChatClient  # noqa: E402
+from mathforge.agents.router_planner import RouterRuleEngine  # noqa: E402
+from mathforge.agents.solver import (  # noqa: E402
+    PrimarySolver,
+    SolverRequest,
+)
 from mathforge.benchmark import (  # noqa: E402
     BenchmarkRecord,
     load_jsonl,
     preflight_benchmark_cases,
     run_benchmark,
+    summarize,
+)
+from mathforge.harness.orchestration import candidate_trace_payload  # noqa: E402
+from mathforge.harness.errors import (  # noqa: E402
+    ModelResponseError,
+    ModelTransportError,
 )
 from mathforge.harness.fingerprints import request_fingerprint  # noqa: E402
 from mathforge.harness.metrics import RunMetrics  # noqa: E402
+from mathforge.harness.model_policy import (  # noqa: E402
+    PROVIDER_CALL_TIMEOUT_SECONDS,
+)
 from mathforge.harness.trace import TraceBuilder  # noqa: E402
-from mathforge.model_identity import require_exact_intern_model  # noqa: E402
+from mathforge.harness.transport import (  # noqa: E402
+    ObservedModelResponse,
+    RETRYABLE_TRANSPORT_FAILURE_CODES,
+    classify_transport_failure,
+    transport_attempts,
+)
+from mathforge.model_identity import (  # noqa: E402
+    EXACT_INTERN_MODEL,
+    MODEL_ENVIRONMENT_VARIABLE,
+    require_exact_intern_model,
+)
 from mathforge.output.public_result import build_public_result  # noqa: E402
+from mathforge.output.deterministic_formatter import (  # noqa: E402
+    DeterministicFormatter,
+)
+from mathforge.parsing.problem_parser import ProblemParser  # noqa: E402
+from mathforge.parsing.solution_parser import SolutionParser  # noqa: E402
 from mathforge.runtime import MathForgeHarness  # noqa: E402
 from scripts.run_benchmark import load_benchmark_config  # noqa: E402
 
 
 PER_CASE_WALL_CLOCK_SECONDS = 900.0
 RESULT_SERIALIZATION_RESERVE_SECONDS = 30.0
-RUN_MANIFEST_SCHEMA_VERSION = "1.0"
+RUN_MANIFEST_SCHEMA_VERSION = "1.1"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
-MODEL_PREFLIGHT_MAX_TOKENS = 65_536
-MODEL_HTTP_TIMEOUT_MARGIN_SECONDS = 5.0
+MODEL_PREFLIGHT_SCHEMA_VERSION = "1.0"
+MODEL_PREFLIGHT_L1_MAX_TOKENS = 256
+MODEL_PREFLIGHT_MAX_TOKENS = 8192
 MODEL_FAST_FAILURE_ATTEMPTS = 2
-MODEL_FAST_FAILURE_SECONDS = 180.0
+MODEL_FAST_FAILURE_SECONDS = 10.0
 MODEL_FAST_FAILURE_BACKOFF_SECONDS = 1.0
-MODEL_FAST_RETRY_RESERVE_SECONDS = 235.0
+DEFAULT_MAX_CONSECUTIVE_PROVIDER_FAILURES = 3
+
+_PROVIDER_CIRCUIT_REASONS = frozenset(
+    {
+        "auth_or_permission_failure",
+        "rate_limited",
+        "provider_5xx",
+        "network_connect_failure",
+        "network_read_timeout",
+        "response_shape_invalid",
+        "empty_response",
+        "model_response_deadline_exceeded",
+        "model_concurrency_wait_exceeded",
+        "unknown_provider_failure",
+        "candidate_json_incomplete",
+        "candidate_json_invalid",
+        "candidate_schema_invalid",
+    }
+)
 
 
 class SerializedFastRetryClient:
@@ -70,25 +118,68 @@ class SerializedFastRetryClient:
         self._backoff_seconds = backoff_seconds
         self._lock = Lock()
 
-    def chat(self, *, messages, temperature, max_tokens) -> str:
+    def chat(self, *, messages, temperature, max_tokens) -> Any:
         with self._lock:
             for attempt in range(self._max_attempts):
                 started = perf_counter()
                 try:
-                    return self._chat(
+                    response = self._chat(
                         messages=messages,
                         temperature=temperature,
                         max_tokens=max_tokens,
                     )
-                except Exception:
+                    if not isinstance(response, str):
+                        return response
+                    return ObservedModelResponse(
+                        response,
+                        transport_attempts=attempt + 1,
+                    )
+                except Exception as error:
                     elapsed = perf_counter() - started
+                    failure_code = classify_transport_failure(error)
                     if (
                         attempt + 1 >= self._max_attempts
                         or elapsed > self._fast_failure_seconds
+                        or failure_code not in RETRYABLE_TRANSPORT_FAILURE_CODES
                     ):
-                        raise
+                        raise ModelTransportError(
+                            failure_code,
+                            attempts=attempt + 1,
+                        ) from error
                     sleep(self._backoff_seconds * (2**attempt))
         raise RuntimeError("unreachable model retry state")
+
+
+class ConsecutiveProviderFailureCircuitBreaker:
+    def __init__(
+        self,
+        max_consecutive_failures: int = DEFAULT_MAX_CONSECUTIVE_PROVIDER_FAILURES,
+    ) -> None:
+        if max_consecutive_failures < 1:
+            raise ValueError("max_consecutive_failures must be positive")
+        self.max_consecutive_failures = int(max_consecutive_failures)
+        self.consecutive_failures = 0
+        self.opened = False
+        self.last_failure_reasons: list[str] = []
+
+    def observe(self, record: BenchmarkRecord) -> bool:
+        reasons = _provider_failure_reasons(record)
+        if reasons:
+            self.consecutive_failures += 1
+            self.last_failure_reasons = reasons
+        else:
+            self.consecutive_failures = 0
+            self.last_failure_reasons = []
+        self.opened = self.consecutive_failures >= self.max_consecutive_failures
+        return self.opened
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "max_consecutive_failures": self.max_consecutive_failures,
+            "consecutive_failures": self.consecutive_failures,
+            "opened": self.opened,
+            "last_failure_reasons": list(self.last_failure_reasons),
+        }
 
 
 class PerCaseWallClockRunner:
@@ -345,6 +436,12 @@ class CaseRunManifest:
             "started_at": now,
             "updated_at": now,
             "model_identity": {},
+            "preflight": {
+                "schema_version": MODEL_PREFLIGHT_SCHEMA_VERSION,
+                "status": "not_started",
+                "levels": [],
+            },
+            "circuit_breaker": {},
             "cases": {},
             "summary": {},
         }
@@ -398,6 +495,12 @@ class CaseRunManifest:
             self.payload["model_identity"] = dict(identity)
             self._persist_locked()
 
+    def record_preflight(self, report: dict[str, Any]) -> None:
+        with self._lock:
+            self.payload["preflight"] = dict(report)
+            self.payload["updated_at"] = _utc_now()
+            self._persist_locked()
+
     def record(self, record: BenchmarkRecord, output_path: Path) -> None:
         with self._lock:
             outcome = record.run_metrics.outcome
@@ -422,8 +525,10 @@ class CaseRunManifest:
             combined = {
                 **dict(summary),
                 "total_case_count": self.payload["case_count"],
-                "executed_case_count": (
-                    self.payload["case_count"] - len(self.resumed_case_ids)
+                "executed_case_count": max(
+                    0,
+                    len(self.payload.get("cases", {}))
+                    - len(self.resumed_case_ids),
                 ),
                 "resumed_case_count": len(self.resumed_case_ids),
                 "terminal_status_counts": lifecycle[
@@ -431,12 +536,13 @@ class CaseRunManifest:
                 ],
             }
             self.payload["summary"] = combined
-            self.payload["status"] = (
-                "completed"
-                if lifecycle["completed_case_count"]
-                == self.payload["case_count"]
-                else "incomplete"
-            )
+            if self.payload.get("status") != "failed":
+                self.payload["status"] = (
+                    "completed"
+                    if lifecycle["completed_case_count"]
+                    == self.payload["case_count"]
+                    else "incomplete"
+                )
             self.payload["updated_at"] = _utc_now()
             self._persist_locked()
             return combined
@@ -445,6 +551,17 @@ class CaseRunManifest:
         with self._lock:
             self.payload["status"] = "failed"
             self.payload["failure_type"] = str(failure_type)
+            self.payload["updated_at"] = _utc_now()
+            self._persist_locked()
+
+    def mark_provider_circuit_open(
+        self,
+        circuit_breaker: dict[str, Any],
+    ) -> None:
+        with self._lock:
+            self.payload["status"] = "failed"
+            self.payload["failure_type"] = "provider_circuit_open"
+            self.payload["circuit_breaker"] = dict(circuit_breaker)
             self.payload["updated_at"] = _utc_now()
             self._persist_locked()
 
@@ -479,6 +596,11 @@ def main() -> int:
         default=ROOT / "config" / "competition.json",
     )
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument(
+        "--max-consecutive-provider-failures",
+        type=int,
+        default=DEFAULT_MAX_CONSECUTIVE_PROVIDER_FAILURES,
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--resume",
@@ -486,6 +608,10 @@ def main() -> int:
         help="validate completed case files against the run manifest and skip them",
     )
     args = parser.parse_args()
+    if args.concurrency < 1:
+        parser.error("--concurrency must be positive")
+    if args.max_consecutive_provider_failures < 1:
+        parser.error("--max-consecutive-provider-failures must be positive")
 
     cases = load_jsonl(args.input)
     preflight_benchmark_cases(cases)
@@ -504,17 +630,40 @@ def main() -> int:
         return 0
 
     try:
+        requested_model = os.environ.get(MODEL_ENVIRONMENT_VARIABLE, "")
+        if requested_model != EXACT_INTERN_MODEL:
+            preflight_report = run_model_preflight(
+                None,
+                requested_model=requested_model,
+            )
+            manifest.record_preflight(preflight_report)
+            raise RuntimeError("model preflight failed at L0")
         model_identity = require_exact_intern_model()
         manifest.record_model_identity(model_identity.to_dict())
         config = load_benchmark_config(args.config)
-        client = SerializedFastRetryClient(
-            InternChatClient(
+        try:
+            base_client = InternChatClient(
                 timeout=model_http_timeout_seconds(config),
                 retry=1,
             )
+        except Exception:
+            preflight_report = run_model_preflight(
+                None,
+                requested_model=model_identity.requested_model,
+            )
+            manifest.record_preflight(preflight_report)
+            raise RuntimeError("model preflight failed at L0") from None
+        client = SerializedFastRetryClient(base_client)
+        preflight_report = run_model_preflight(
+            client,
+            requested_model=model_identity.requested_model,
         )
-        verify_model_availability(client)
-        print("MODEL_PREFLIGHT_OK", flush=True)
+        manifest.record_preflight(preflight_report)
+        if preflight_report["status"] != "passed":
+            raise RuntimeError(
+                f"model preflight failed at {preflight_report['failed_level']}"
+            )
+        print("MODEL_PREFLIGHT_L0_L1_L2_OK", flush=True)
         harness = MathForgeHarness(
             client,
             config,
@@ -534,13 +683,30 @@ def main() -> int:
                 flush=True,
             )
 
-        _, benchmark_summary = run_benchmark(
-            remaining_cases,
-            wall_clock_runner.solve,
-            concurrency=args.concurrency,
-            seed=args.seed,
-            on_record_completed=persist,
+        breaker = ConsecutiveProviderFailureCircuitBreaker(
+            args.max_consecutive_provider_failures
         )
+        completed_records: list[BenchmarkRecord] = []
+        for offset in range(0, len(remaining_cases), args.concurrency):
+            batch = remaining_cases[offset : offset + args.concurrency]
+            case_records, _ = run_benchmark(
+                batch,
+                wall_clock_runner.solve,
+                concurrency=args.concurrency,
+                seed=args.seed,
+                on_record_completed=persist,
+            )
+            completed_records.extend(case_records)
+            if any(breaker.observe(record) for record in case_records):
+                manifest.mark_provider_circuit_open(breaker.to_dict())
+                print(
+                    "PROVIDER_CIRCUIT_OPEN "
+                    f"consecutive_failures={breaker.consecutive_failures}",
+                    flush=True,
+                )
+                break
+        benchmark_summary = summarize(completed_records)
+        benchmark_summary["circuit_breaker"] = breaker.to_dict()
         summary = manifest.finalize(benchmark_summary)
     except BaseException as error:
         manifest.mark_failed(type(error).__name__)
@@ -559,35 +725,286 @@ def write_case_output(record: BenchmarkRecord, output_dir: Path) -> Path:
     return destination
 
 
-def verify_model_availability(client: Any) -> None:
-    response = client.chat(
-        messages=[
+def run_model_preflight(
+    client: Any,
+    *,
+    requested_model: str = EXACT_INTERN_MODEL,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "schema_version": MODEL_PREFLIGHT_SCHEMA_VERSION,
+        "status": "running",
+        "failed_level": "",
+        "levels": [],
+    }
+    l0_error = ""
+    if requested_model != EXACT_INTERN_MODEL:
+        l0_error = "model_identity_invalid"
+    elif not callable(getattr(client, "chat", None)):
+        l0_error = "model_client_unavailable"
+    if l0_error:
+        report["levels"].append(
             {
-                "role": "system",
-                "content": "You are a model availability probe.",
-            },
-            {
-                "role": "user",
-                "content": "Reply with exactly OK and no explanation.",
-            },
-        ],
-        temperature=0.0,
-        max_tokens=MODEL_PREFLIGHT_MAX_TOKENS,
+                "level": "L0",
+                "status": "failed",
+                "error_code": l0_error,
+                "elapsed_seconds": 0.0,
+                "max_tokens": 0,
+                "transport_attempts": 0,
+            }
+        )
+        report["status"] = "failed"
+        report["failed_level"] = "L0"
+        return report
+    report["levels"].append(
+        {
+            "level": "L0",
+            "status": "passed",
+            "error_code": "",
+            "elapsed_seconds": 0.0,
+            "max_tokens": 0,
+            "transport_attempts": 0,
+        }
     )
-    if not isinstance(response, str) or not response.strip():
-        raise RuntimeError("model availability preflight returned no content")
+
+    l1_started = perf_counter()
+    try:
+        l1_response = client.chat(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Return only the exact JSON object requested by the user.",
+                },
+                {
+                    "role": "user",
+                    "content": 'Return exactly {"status":"ok"}.',
+                },
+            ],
+            temperature=0.0,
+            max_tokens=MODEL_PREFLIGHT_L1_MAX_TOKENS,
+        )
+        if not isinstance(l1_response, str):
+            raise ModelTransportError("response_shape_invalid")
+        if not l1_response.strip():
+            raise ModelTransportError(
+                "empty_response",
+                attempts=transport_attempts(l1_response),
+            )
+        l1_payload = json.loads(l1_response)
+        if l1_payload != {"status": "ok"}:
+            raise ModelTransportError(
+                "response_shape_invalid",
+                attempts=transport_attempts(l1_response),
+            )
+    except Exception as error:
+        _record_preflight_failure(
+            report,
+            "L1",
+            error,
+            l1_started,
+            MODEL_PREFLIGHT_L1_MAX_TOKENS,
+        )
+        return report
+    report["levels"].append(
+        _passed_preflight_level(
+            "L1",
+            l1_started,
+            MODEL_PREFLIGHT_L1_MAX_TOKENS,
+            transport_attempts(l1_response),
+        )
+    )
+
+    l2_started = perf_counter()
+    try:
+        l2_problem = ProblemParser().parse("Compute 1+1.")
+        l2_route = RouterRuleEngine().plan(l2_problem)
+        l2_method_family = l2_route.method_families[0]
+        l2_messages = PrimarySolver().build_messages(
+            SolverRequest(
+                candidate_id="preflight-l2",
+                problem=l2_problem,
+                route=l2_route,
+                skill_context="",
+                method_family=l2_method_family,
+            )
+        )
+        l2_response = client.chat(
+            messages=l2_messages,
+            temperature=0.0,
+            max_tokens=MODEL_PREFLIGHT_MAX_TOKENS,
+        )
+        if not isinstance(l2_response, str):
+            raise ModelTransportError("response_shape_invalid")
+        if not l2_response.strip():
+            raise ModelTransportError(
+                "empty_response",
+                attempts=transport_attempts(l2_response),
+            )
+        candidate = SolutionParser().parse(
+            l2_response,
+            candidate_id="preflight-l2",
+            role="PrimarySolver",
+            answer_type=l2_problem.answer_type,
+        )
+        if (
+            candidate.parse_status != "strict_json"
+            or candidate.contract_deviations
+            or candidate.final_answer.strip() != "2"
+            or candidate.method.strip().lower()
+            != l2_method_family.strip().lower()
+            or not candidate.claims
+            or not candidate.method_steps
+        ):
+            raise ModelResponseError("candidate_schema_invalid")
+        _validate_l2_pipeline(candidate)
+    except Exception as error:
+        _record_preflight_failure(
+            report,
+            "L2",
+            error,
+            l2_started,
+            MODEL_PREFLIGHT_MAX_TOKENS,
+        )
+        return report
+    report["levels"].append(
+        _passed_preflight_level(
+            "L2",
+            l2_started,
+            MODEL_PREFLIGHT_MAX_TOKENS,
+            transport_attempts(l2_response),
+        )
+    )
+    report["status"] = "passed"
+    return report
+
+
+def verify_model_availability(client: Any) -> dict[str, Any]:
+    report = run_model_preflight(client)
+    if report["status"] != "passed":
+        raise RuntimeError(f"model preflight failed at {report['failed_level']}")
+    return report
 
 
 def model_http_timeout_seconds(config: Any) -> int:
     available = (
         float(config.hard_deadline_seconds)
         - float(config.deterministic_finalize_reserve_seconds)
-        - MODEL_HTTP_TIMEOUT_MARGIN_SECONDS
-        - MODEL_FAST_RETRY_RESERVE_SECONDS
     )
     if available < 1:
         raise ValueError("model HTTP timeout window is not positive")
-    return int(available)
+    return max(1, int(min(available, PROVIDER_CALL_TIMEOUT_SECONDS)))
+
+
+def _validate_l2_pipeline(candidate: Any) -> None:
+    problem = ProblemParser().parse("Compute 1+1.")
+    final_response = DeterministicFormatter().format(candidate, problem)
+    if not final_response.strip():
+        raise ModelResponseError("candidate_formatter_invalid")
+
+    events: list[dict[str, Any]] = []
+    trace = TraceBuilder(events, max_chars=0, max_events=0)
+    candidate_id = str(candidate.candidate_id)
+    trace.add("session_started", session_id="preflight-l2")
+    trace.add("problem_parsed")
+    trace.add("route_planned")
+    trace.add("skills_selected", skills=[])
+    trace.add("call_allocation_planned")
+    trace.add(
+        "candidate_generation_started",
+        candidate_id=candidate_id,
+        role=candidate.role,
+    )
+    trace.add("candidate_generated", **candidate_trace_payload(candidate))
+    trace.add(
+        "candidate_evidence_completed",
+        candidate_id=candidate_id,
+        status="passed",
+        claim_results=[],
+    )
+    trace.add("hard_evidence_gate")
+    trace.add(
+        "candidate_arbitrated",
+        selected=candidate_id,
+        viable_candidates=[candidate_id],
+    )
+    trace.add(
+        "final_answer_selected",
+        candidate_id=candidate_id,
+        public_solution={"final_response": final_response},
+    )
+    trace.add("budget_summary")
+    trace.add(
+        "run_completed",
+        outcome="primary",
+        final_phase="completed",
+        error_code="",
+    )
+    internal_trace = trace.build(final_response=final_response)
+    public = build_public_result(
+        "preflight-l2",
+        {
+            "final_response": final_response,
+            "trace": internal_trace,
+            "run_metrics": {"outcome": "primary"},
+        },
+    )
+    if (
+        set(public) != {"id", "status", "final_response", "trace"}
+        or public["status"] != "success"
+    ):
+        raise ModelResponseError("candidate_public_contract_invalid")
+
+
+def _passed_preflight_level(
+    level: str,
+    started: float,
+    max_tokens: int,
+    attempts: int,
+) -> dict[str, Any]:
+    return {
+        "level": level,
+        "status": "passed",
+        "error_code": "",
+        "elapsed_seconds": round(max(0.0, perf_counter() - started), 6),
+        "max_tokens": max_tokens,
+        "transport_attempts": max(1, int(attempts)),
+    }
+
+
+def _record_preflight_failure(
+    report: dict[str, Any],
+    level: str,
+    error: Exception,
+    started: float,
+    max_tokens: int,
+) -> None:
+    code = getattr(error, "code", None) or classify_transport_failure(error)
+    report["levels"].append(
+        {
+            "level": level,
+            "status": "failed",
+            "error_code": str(code),
+            "elapsed_seconds": round(max(0.0, perf_counter() - started), 6),
+            "max_tokens": max_tokens,
+            "transport_attempts": transport_attempts(error),
+        }
+    )
+    report["status"] = "failed"
+    report["failed_level"] = level
+
+
+def _provider_failure_reasons(record: BenchmarkRecord) -> list[str]:
+    if record.run_metrics.outcome == "primary":
+        return []
+    reasons = {
+        str(event.get("reason", ""))
+        for event in record.result.get("trace", [])
+        if isinstance(event, dict)
+        and event.get("event") == "candidate_generation_failed"
+        and str(event.get("reason", "")) in _PROVIDER_CIRCUIT_REASONS
+    }
+    if not reasons and record.run_metrics.model_call_failure_count:
+        reasons.add("unknown_provider_failure")
+    return sorted(reasons)
 
 
 def validate_case_output(path: Path, identifier: str) -> dict[str, Any]:

@@ -426,8 +426,19 @@ class _LemmaIsolationClient:
         return json.dumps(
             {
                 "method": method,
+                "method_steps": [
+                    {
+                        "step_id": "s1",
+                        "kind": "conclusion",
+                        "claim_ids": ["boundary"],
+                        "theorem": "",
+                    }
+                ],
                 "solution_text": historical_marker,
+                "public_solution_steps": [historical_marker],
                 "final_answer": "QED",
+                "assumptions": [],
+                "theorems": [],
                 "claims": [
                     {
                         "claim_id": f"identity{index}",
@@ -438,6 +449,7 @@ class _LemmaIsolationClient:
                             if index > 1
                             else []
                         ),
+                        "importance": "supporting",
                     }
                     for index, statement in enumerate(
                         ("x = x", "x+0 = x", "2*x = 2*x", "x*1 = x"),
@@ -448,19 +460,26 @@ class _LemmaIsolationClient:
                     {
                         "claim_id": "definition",
                         "statement": "definition is supplied",
+                        "depends_on": [],
                         "check_type": "definition",
+                        "importance": "critical",
                     },
                     {
                         "claim_id": "sufficiency",
                         "statement": "sufficiency is supplied",
+                        "depends_on": [],
                         "check_type": "sufficiency",
+                        "importance": "critical",
                     },
                     {
                         "claim_id": "boundary",
                         "statement": "boundary is supplied",
+                        "depends_on": [],
                         "check_type": "boundary",
+                        "importance": "critical",
                     },
                 ],
+                "unresolved_obligations": [],
             }
         )
 

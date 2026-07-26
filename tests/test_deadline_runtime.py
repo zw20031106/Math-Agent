@@ -168,7 +168,10 @@ def test_hard_deadline_returns_fallback_within_tolerance():
     fanout = next(
         event for event in result["trace"] if event["event"] == "candidate_fanout_completed"
     )
-    assert fanout["failures"][0]["reason"] == "deadline_cutoff"
+    assert fanout["failures"][0]["reason"] in {
+        "deadline_cutoff",
+        "model_response_deadline_exceeded",
+    }
     tail = next(
         event
         for event in result["trace"]

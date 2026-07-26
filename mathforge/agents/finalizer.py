@@ -5,10 +5,14 @@ from dataclasses import dataclass
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
+from mathforge.harness.errors import ModelResponseError
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, ProblemIR
 from mathforge.output.deterministic_formatter import DeterministicFormatter
-from mathforge.parsing.solution_parser import SolutionParser
+from mathforge.parsing.solution_parser import (
+    SolutionParser,
+    candidate_response_validation,
+)
 from mathforge.verification.equivalence import normalized_answer
 
 
@@ -86,6 +90,14 @@ class LLMFinalizer:
                 role="LLMFinalizer",
                 answer_type=candidate.answer_type,
             )
+            validation_code, rejected = candidate_response_validation(finalized)
+            budget.record_model_response_validation(
+                getattr(response, "model_call_index", None),
+                validation_code,
+                rejected=rejected,
+            )
+            if rejected:
+                raise ModelResponseError(validation_code)
             if normalized_answer(finalized.final_answer) != normalized_answer(candidate.final_answer):
                 return FinalizationResult(deterministic_text, False, "exact_answer_changed")
             if not self._verified_content_unchanged(candidate, finalized):

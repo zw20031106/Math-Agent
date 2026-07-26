@@ -7,8 +7,11 @@ from types import SimpleNamespace
 import pytest
 
 from mathforge.benchmark import BenchmarkCase, run_benchmark
+from mathforge.harness.errors import ModelTransportError
 from scripts.run_case_outputs import (
     CaseRunManifest,
+    ConsecutiveProviderFailureCircuitBreaker,
+    MODEL_PREFLIGHT_L1_MAX_TOKENS,
     MODEL_PREFLIGHT_MAX_TOKENS,
     PerCaseWallClockRunner,
     RUN_MANIFEST_FILENAME,
@@ -81,7 +84,7 @@ def test_manifest_resume_validates_schema_and_bound_output_hash(tmp_path):
     assert set(public) == {"id", "status", "final_response", "trace"}
     assert public["status"] == "success"
     assert internal["status"] == "completed"
-    assert internal["cases"]["1"]["run_metrics"]["schema_version"] == "1.2"
+    assert internal["cases"]["1"]["run_metrics"]["schema_version"] == "1.3"
     assert internal["cases"]["1"]["output_sha256"] == sha256(
         output_path.read_bytes()
     ).hexdigest()
@@ -173,7 +176,38 @@ def test_failed_case_is_a_terminal_atomic_four_field_output(tmp_path):
     assert not list(output_dir.glob(".*.tmp"))
 
 
-def test_model_availability_preflight_requires_non_empty_content():
+def _preflight_candidate() -> str:
+    return json.dumps(
+        {
+            "method": "direct-deduction",
+            "method_steps": [
+                {
+                    "step_id": "s1",
+                    "kind": "conclusion",
+                    "claim_ids": ["c1"],
+                    "theorem": "",
+                }
+            ],
+            "solution_text": "Adding one and one gives two.",
+            "public_solution_steps": ["Add 1 and 1 to obtain 2."],
+            "final_answer": "2",
+            "assumptions": [],
+            "theorems": [],
+            "claims": [
+                {
+                    "claim_id": "c1",
+                    "statement": "1+1=2.",
+                    "depends_on": [],
+                    "check_type": "reasoning",
+                    "importance": "critical",
+                }
+            ],
+            "unresolved_obligations": [],
+        }
+    )
+
+
+def test_model_availability_preflight_requires_all_three_levels():
     class EmptyClient:
         def chat(self, **_):
             return ""
@@ -187,11 +221,16 @@ def test_model_availability_preflight_requires_non_empty_content():
 
         def chat(self, **kwargs):
             self.calls.append(kwargs)
-            return "OK"
+            if len(self.calls) == 1:
+                return '{"status":"ok"}'
+            return _preflight_candidate()
 
     client = AvailableClient()
-    verify_model_availability(client)
-    assert client.calls[0]["max_tokens"] == MODEL_PREFLIGHT_MAX_TOKENS == 65_536
+    report = verify_model_availability(client)
+    assert report["status"] == "passed"
+    assert [level["level"] for level in report["levels"]] == ["L0", "L1", "L2"]
+    assert client.calls[0]["max_tokens"] == MODEL_PREFLIGHT_L1_MAX_TOKENS == 256
+    assert client.calls[1]["max_tokens"] == MODEL_PREFLIGHT_MAX_TOKENS == 8192
 
 
 def test_model_http_timeout_uses_the_harness_call_window():
@@ -200,15 +239,17 @@ def test_model_http_timeout_uses_the_harness_call_window():
         deterministic_finalize_reserve_seconds=30.0,
     )
 
-    assert model_http_timeout_seconds(config) == 600
+    assert model_http_timeout_seconds(config) == 125
 
 
-def test_model_client_retries_observed_medium_failure_and_returns_content(monkeypatch):
+def test_model_client_retries_one_fast_retryable_failure_and_records_attempts(
+    monkeypatch,
+):
     monkeypatch.setattr(
         "scripts.run_case_outputs.sleep",
         lambda _: None,
     )
-    ticks = iter([0.0, 159.0, 160.0])
+    ticks = iter([0.0, 1.0, 2.0])
     monkeypatch.setattr(
         "scripts.run_case_outputs.perf_counter",
         lambda: next(ticks),
@@ -221,20 +262,20 @@ def test_model_client_retries_observed_medium_failure_and_returns_content(monkey
         def chat(self, **_):
             self.calls += 1
             if self.calls < 2:
-                raise RuntimeError("temporary provider rejection")
+                raise RuntimeError("503 server error")
             return "candidate content"
 
     base = FlakyClient()
     client = SerializedFastRetryClient(base)
 
-    assert client.chat(messages=[], temperature=0.0, max_tokens=1) == (
-        "candidate content"
-    )
+    response = client.chat(messages=[], temperature=0.0, max_tokens=1)
+    assert response == "candidate content"
+    assert response.transport_attempts == 2
     assert base.calls == 2
 
 
-def test_model_client_does_not_retry_a_failure_beyond_the_reserved_window(monkeypatch):
-    ticks = iter([0.0, 181.0])
+def test_model_client_does_not_retry_a_failure_beyond_the_fast_window(monkeypatch):
+    ticks = iter([0.0, 11.0])
     monkeypatch.setattr(
         "scripts.run_case_outputs.perf_counter",
         lambda: next(ticks),
@@ -246,11 +287,109 @@ def test_model_client_does_not_retry_a_failure_beyond_the_reserved_window(monkey
 
         def chat(self, **_):
             self.calls += 1
-            raise RuntimeError("long provider failure")
+            raise RuntimeError("503 server error")
 
     base = FailingClient()
     client = SerializedFastRetryClient(base)
 
-    with pytest.raises(RuntimeError, match="long provider failure"):
+    with pytest.raises(ModelTransportError) as captured:
         client.chat(messages=[], temperature=0.0, max_tokens=1)
+    assert captured.value.code == "provider_5xx"
+    assert captured.value.attempts == 1
     assert base.calls == 1
+
+
+def test_model_client_does_not_retry_unknown_failures(monkeypatch):
+    ticks = iter([0.0, 0.01])
+    monkeypatch.setattr(
+        "scripts.run_case_outputs.perf_counter",
+        lambda: next(ticks),
+    )
+
+    class FailingClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, **_):
+            self.calls += 1
+            raise RuntimeError("private opaque failure")
+
+    base = FailingClient()
+    with pytest.raises(ModelTransportError) as captured:
+        SerializedFastRetryClient(base).chat(
+            messages=[],
+            temperature=0.0,
+            max_tokens=1,
+        )
+    assert captured.value.code == "unknown_provider_failure"
+    assert base.calls == 1
+
+
+def _failure_record(reason: str):
+    records, _ = run_benchmark(
+        [BenchmarkCase(f"failure-{reason}", "1+1")],
+        lambda *_: {
+            "final_response": "Unable to complete.",
+            "trace": [
+                {
+                    "event": "candidate_generation_failed",
+                    "candidate_id": "primary-1",
+                    "reason": reason,
+                },
+                {"event": "run_completed", "outcome": "fallback"},
+            ],
+        },
+    )
+    return records[0]
+
+
+def test_provider_circuit_opens_after_threshold_and_success_resets_it():
+    breaker = ConsecutiveProviderFailureCircuitBreaker(3)
+    assert not breaker.observe(_failure_record("provider_5xx"))
+    assert not breaker.observe(_failure_record("network_read_timeout"))
+    assert breaker.observe(_failure_record("empty_response"))
+    assert breaker.to_dict()["opened"] is True
+
+    assert not breaker.observe(_success_record(BenchmarkCase("ok", "1+1")))
+    assert breaker.to_dict()["consecutive_failures"] == 0
+
+
+def test_manifest_persists_preflight_and_provider_circuit_state(tmp_path):
+    input_path, config_path, output_dir = _paths(tmp_path)
+    _, manifest = CaseRunManifest.prepare(
+        cases=[BenchmarkCase("1", "1+1")],
+        input_path=input_path,
+        config_path=config_path,
+        output_dir=output_dir,
+        seed=0,
+        concurrency=1,
+        resume=False,
+    )
+    preflight = {
+        "schema_version": "1.0",
+        "status": "passed",
+        "failed_level": "",
+        "levels": [
+            {"level": "L0", "status": "passed"},
+            {"level": "L1", "status": "passed"},
+            {"level": "L2", "status": "passed"},
+        ],
+    }
+    circuit = {
+        "max_consecutive_failures": 3,
+        "consecutive_failures": 3,
+        "opened": True,
+        "last_failure_reasons": ["provider_5xx"],
+    }
+
+    manifest.record_preflight(preflight)
+    manifest.mark_provider_circuit_open(circuit)
+    manifest.finalize({})
+    payload = json.loads(
+        (output_dir / RUN_MANIFEST_FILENAME).read_text(encoding="utf-8")
+    )
+
+    assert payload["preflight"] == preflight
+    assert payload["status"] == "failed"
+    assert payload["failure_type"] == "provider_circuit_open"
+    assert payload["circuit_breaker"] == circuit

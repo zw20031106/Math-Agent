@@ -36,8 +36,9 @@ Harness、Benchmark artifact 和逐题运行清单中。
   终态原因。
 - 删除重复的阶段切换、上下文视图构建和重复完成事件；压缩静态 provenance、
   skills 和 budget 遥测。
-- 模型调用失败只记录安全原因码（例如 `model_call_failed`），不公开 API
-  密钥、绝对路径、原始异常或私有推理草稿。
+- 模型调用失败只记录安全原因码（例如 `provider_5xx`、
+  `network_read_timeout`、`candidate_json_incomplete`），不公开 API 密钥、
+  绝对路径、原始异常或私有推理草稿。
 
 当模型没有返回任何候选内容时，Trace 不会伪造推理链；`status` 为
 `failed`，并明确记录失败发生在模型调用阶段。
@@ -49,22 +50,27 @@ python scripts/run_case_outputs.py \
   --input cases.jsonl \
   --output-dir case-outputs \
   --config config/competition.json \
-  --concurrency 4
+  --concurrency 1
 ```
 
-运行器先完成输入与清单预检，再通过注入的官方 `client.chat(...)` 发起一次
-真实响应预检。只有预检得到非空内容后，批量题目才会启动。正式模型调用
-串行执行，对 180 秒内返回的服务端失败允许一次有界重试；竞赛配置为失败
-处理预留 235 秒，并允许单次请求持续 600 秒。这样既能覆盖实测在 126–159
-秒返回的 397B 服务失败，也不会用样例客户端默认的 120 秒截断正常长推理，
-或让重试越过单题截止时间。
+运行器先完成输入与清单预检，再依次执行 L0/L1/L2：精确模型身份和 Client
+可用性、短且严格的 JSON、缩短版真实数学 Candidate。L2 必须经生产 Parser、
+Formatter、Trace 和公共输出契约完整验证。只有三级全部通过后，批量题目才会
+启动；“返回了非空文本”不再构成通过。每级状态、耗时、输出上限和 Transport
+尝试数写入 Manifest。
+
+正式请求的本地 HTTP 窗口为 125 秒，对齐官方约 120 秒服务端边界并只保留
+少量传输裕量。只有在 10 秒内明确返回的限流、5xx 或连接错误才允许重试
+一次；空响应、读超时、不完整 JSON 和 Schema 违约不重复发送同一大 Prompt。
+官方 Client 的内部尝试数固定为 1，外层每次尝试均进入结构化 Metrics。
 竞赛配置的模型调用 Gate 并发数为 1；多候选仍会生成，但按截止时间感知的
 顺序进入模型服务，避免并发请求造成服务拒绝。
 运行时必须使用官方精确版本字段
 `INTERN_MODEL=intern-s2-preview-397b`；Legacy `intern-s2-preview`
-当前指向 35B，不能作为 397B 验收结果。批量预检和 Competition 主求解
-Completion 上限均为 65,536 Token；总上下文仍为 262,144 Token，另保留
-8,192 Token 安全余量。
+当前指向 35B，不能作为 397B 验收结果。角色输出上限分别为
+Router/Finalizer 4,096、Verifier 8,192、Repair 12,288、Lemma 16,384、
+Alternative 24,576、Primary 32,768 Token；总上下文仍为 262,144 Token，
+另保留 8,192 Token 安全余量。
 
 每道题结束后立即：
 

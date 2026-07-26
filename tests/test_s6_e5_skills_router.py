@@ -90,7 +90,7 @@ class SkillCaptureClient:
                         "claim_id": "c1",
                         "statement": "The requested value is 1.",
                         "depends_on": [],
-                        "check_type": "answer_shape",
+                        "check_type": "answer_type_check",
                         "importance": "critical",
                     }
                 ],

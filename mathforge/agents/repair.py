@@ -5,9 +5,13 @@ import json
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
+from mathforge.harness.errors import ModelResponseError
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProblemIR
-from mathforge.parsing.solution_parser import SolutionParser
+from mathforge.parsing.solution_parser import (
+    SolutionParser,
+    candidate_response_validation,
+)
 
 
 class RepairAgent:
@@ -83,9 +87,18 @@ class RepairAgent:
         if budget.deadline.must_finalize():
             raise RuntimeError("repair response arrived after finalize cutoff")
         budget.ensure_stage("solution_parser")
-        return self._parser.parse(
+        repaired = self._parser.parse(
             response,
             candidate_id=f"{candidate.candidate_id}-v{candidate.version + 1}",
             role="RepairAgent",
             answer_type=candidate.answer_type,
         )
+        validation_code, rejected = candidate_response_validation(repaired)
+        budget.record_model_response_validation(
+            getattr(response, "model_call_index", None),
+            validation_code,
+            rejected=rejected,
+        )
+        if rejected:
+            raise ModelResponseError(validation_code)
+        return repaired

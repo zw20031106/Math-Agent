@@ -38,19 +38,34 @@ class ClaimsClient:
     def chat(self, *, messages, temperature, max_tokens):
         del messages, temperature, max_tokens
         self.calls += 1
+        claims = [
+            {
+                "claim_id": f"c{index}",
+                "statement": "x = x",
+                "depends_on": [],
+                "check_type": self.check_type,
+                "importance": "supporting",
+            }
+            for index in range(self.count)
+        ]
         return json.dumps(
             {
                 "method": "direct",
-                "solution_text": "bounded candidate",
-                "final_answer": "1",
-                "claims": [
+                "method_steps": [
                     {
-                        "claim_id": f"c{index}",
-                        "statement": "x = x",
-                        "check_type": self.check_type,
+                        "step_id": "s1",
+                        "kind": "conclusion",
+                        "claim_ids": ["c0"],
+                        "theorem": "",
                     }
-                    for index in range(self.count)
                 ],
+                "solution_text": "bounded candidate",
+                "public_solution_steps": ["Establish x = x."],
+                "final_answer": "1",
+                "assumptions": [],
+                "theorems": [],
+                "claims": claims,
+                "unresolved_obligations": [],
             }
         )
 

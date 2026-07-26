@@ -5,10 +5,13 @@ from dataclasses import dataclass
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
-from mathforge.harness.errors import BudgetExceeded
+from mathforge.harness.errors import BudgetExceeded, ModelResponseError
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
-from mathforge.parsing.solution_parser import SolutionParser
+from mathforge.parsing.solution_parser import (
+    SolutionParser,
+    candidate_response_validation,
+)
 
 
 _OUTPUT_INSTRUCTION = (
@@ -132,6 +135,14 @@ class SolverExecutor:
             role=solver.role,
             answer_type=request.problem.answer_type,
         )
+        validation_code, rejected = candidate_response_validation(candidate)
+        budget.record_model_response_validation(
+            getattr(response, "model_call_index", None),
+            validation_code,
+            rejected=rejected,
+        )
+        if rejected:
+            raise ModelResponseError(validation_code)
         candidate.planned_method_family = request.method_family
         if candidate.method.strip().lower() != request.method_family.strip().lower():
             candidate.parse_status = f"{candidate.parse_status}:method_contract_deviation"

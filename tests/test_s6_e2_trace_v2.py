@@ -122,7 +122,7 @@ def test_each_candidate_start_has_one_safe_terminal_event():
         for event in terminals
         if event["event"] == "candidate_generation_failed"
     )
-    assert failure["reason"] == "model_call_failed"
+    assert failure["reason"] == "unknown_provider_failure"
     assert "private branch failure details" not in json.dumps(trace)
 
 
