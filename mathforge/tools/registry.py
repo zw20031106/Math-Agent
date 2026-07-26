@@ -204,7 +204,6 @@ _OPTIONAL_ARGUMENTS: dict[str, set[str]] = {
     "small_case_enumeration": {"expected"},
 }
 
-
 class ToolRegistry:
     def __init__(self) -> None:
         self._definitions = {definition.name: definition for definition in _DEFINITIONS}
@@ -250,6 +249,16 @@ class ToolRegistry:
             return self._definitions[name]
         except KeyError as error:
             raise KeyError(f"unknown tool: {name}") from error
+
+    def claim_prompt_examples(
+        self,
+        names: list[str] | tuple[str, ...],
+        *,
+        limit: int = 3,
+    ) -> list[dict[str, Any]]:
+        from mathforge.tool_prompt_examples import claim_prompt_examples
+
+        return claim_prompt_examples(names, limit=limit)
 
     def mcp_schemas(self) -> list[dict[str, Any]]:
         schemas: list[dict[str, Any]] = []

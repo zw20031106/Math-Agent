@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 import re
 
+from mathforge.agents.prompt_compiler import PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
@@ -57,6 +58,7 @@ class VerifierSkepticAgent:
     ) -> None:
         self._provider = provider
         self._contracts = contracts or PromptContractLoader()
+        self._compiler = PromptCompiler(self._contracts)
 
     def review(
         self,
@@ -99,23 +101,27 @@ class VerifierSkepticAgent:
                     else ""
                 )
             )
-            messages = self._contracts.messages(
+            compilation = self._compiler.compile_role(
                 "verifier_skeptic",
-                user,
-                (
+                user_content=user,
+                runtime_instructions=(
                     "Challenge the supplied claims and required proof obligations. "
                     "Return JSON only. A pass must name both a real claim_id and one or more "
                     "obligation_ids supported by that claim. Unknown is not pass. "
                     "Do not emit native tool calls or private reasoning."
                 ),
             )
+            messages = compilation.messages
             budget.record_prompt_chars(
                 sum(len(message["content"]) for message in messages)
             )
             response = self._provider.chat(
                 messages=messages,
                 temperature=0.0,
-                max_tokens=max_tokens,
+                max_tokens=PromptCompiler.bounded_output_tokens(
+                    max_tokens,
+                    compilation.max_output_tokens,
+                ),
                 budget=budget,
                 stage="verifier",
             )

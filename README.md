@@ -26,6 +26,17 @@ StdIO MCP adapter is also disabled.
 The injected official client is the only model interface. No API keys, alternate
 model clients, native function calling, or network retrieval are used.
 
+A Host-side Prompt Compiler selects a concise `minimal`, `standard`, `tool`,
+or `proof` contract from the parsed problem and deterministic route. Durable
+Candidate fields (`method`, `final_answer`, public steps, and Claims) are
+requested first, followed by the remaining complete Candidate fields.
+Tool-intensive prompts include bounded, executable input-shape examples while
+still forbidding model-emitted tool calls or arguments. The representative
+simple prompt, including production Skill context, is about 4.0K conservative
+fallback tokens instead of the audited roughly 9.5K. Natural-language-only,
+truncated, malformed, empty, compatibility-wrapped, or Schema-invalid model
+responses are classified separately and rejected as Candidates.
+
 ## Public output
 
 `ReasoningAgent.solve(problem, metadata)` returns exactly one flat public
@@ -112,7 +123,9 @@ response-side fields as unobservable instead of inferring them.
 Every role call uses one context-budget service and a server-clock-aware role
 policy. Configured limits are upper bounds; effective caps are Router/Finalizer
 4,096, Verifier 8,192, Repair 12,288, Lemma 16,384, Alternative 24,576, and
-Primary 32,768 tokens. Router and Finalizer wait at most 60 seconds, Verifier
+Primary 32,768 tokens. Solver profiles further reduce simple Primary and
+Alternative calls to 8,192 tokens and standard/tool calls to their compiled
+role limits. Router and Finalizer wait at most 60 seconds, Verifier
 90, Repair/Lemma 110, and Primary/Alternative 125, always further bounded by
 the remaining case deadline. This retains the
 `prompt + output + 8,192 <= 262,144` context invariant while prioritizing a

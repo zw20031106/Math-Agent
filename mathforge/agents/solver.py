@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mathforge.agents.prompt_compiler import PromptCompilation, PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
@@ -11,16 +12,6 @@ from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
 from mathforge.parsing.solution_parser import (
     SolutionParser,
     candidate_response_validation,
-)
-
-
-_OUTPUT_INSTRUCTION = (
-    "Return exactly one complete CandidateSolution model-fields JSON object. "
-    "Include method, method_steps, solution_text, public_solution_steps, "
-    "final_answer, assumptions, theorems, claims, and unresolved_obligations. "
-    "Do not include Markdown fences, Host-owned fields, tool calls, or private "
-    "scratchpad fields. Each method step must use a controlled kind and reference "
-    "real Claim IDs."
 )
 
 
@@ -40,25 +31,31 @@ class PrimarySolver:
 
     def __init__(self, contracts: PromptContractLoader | None = None) -> None:
         self._contracts = contracts or PromptContractLoader()
+        self._compiler = PromptCompiler(self._contracts)
 
     def build_messages(self, request: SolverRequest) -> list[dict[str, str]]:
+        return self.compile_prompt(request).messages
+
+    def compile_prompt(self, request: SolverRequest) -> PromptCompilation:
         context = (
             f"\nAuthorized context view:\n{request.context_view.to_prompt_json()}"
             if request.context_view is not None
             else ""
         )
         user = (
-            f"Problem:\n{request.problem.normalized_problem}\n\nProvide a complete solution.\n\n"
+            f"Problem:\n{request.problem.normalized_problem}\n\n"
             f"Required core method family: {request.method_family}.\n"
             f"Forbidden method families: {', '.join(request.forbidden_method_families) or 'none'}.\n"
             f"{request.skill_context}{context}"
         )
-        return self._contracts.messages(
+        return self._compiler.compile_solver(
             "primary_solver",
-            user,
-            (
+            problem=request.problem,
+            route=request.route,
+            user_content=user,
+            runtime_instructions=(
                 "Produce a rigorous independently verifiable solution. "
-                f"{_OUTPUT_INSTRUCTION} Copy method exactly from the assigned method family."
+                "Copy method exactly from the assigned method family."
             ),
         )
 
@@ -68,8 +65,12 @@ class AlternativeSolver:
 
     def __init__(self, contracts: PromptContractLoader | None = None) -> None:
         self._contracts = contracts or PromptContractLoader()
+        self._compiler = PromptCompiler(self._contracts)
 
     def build_messages(self, request: SolverRequest) -> list[dict[str, str]]:
+        return self.compile_prompt(request).messages
+
+    def compile_prompt(self, request: SolverRequest) -> PromptCompilation:
         forbidden = ", ".join(request.forbidden_method_families) or "none"
         context = (
             f"\nAuthorized context view:\n{request.context_view.to_prompt_json()}"
@@ -77,16 +78,18 @@ class AlternativeSolver:
             else ""
         )
         user = (
-            f"Problem:\n{request.problem.normalized_problem}\n\nProvide a complete solution.\n\n"
+            f"Problem:\n{request.problem.normalized_problem}\n\n"
             f"Required core method family: {request.method_family}.\n"
             f"Forbidden method families: {forbidden}.\n{request.skill_context}{context}"
         )
-        return self._contracts.messages(
+        return self._compiler.compile_solver(
             "alternative_solver",
-            user,
-            (
+            problem=request.problem,
+            route=request.route,
+            user_content=user,
+            runtime_instructions=(
                 "Solve independently using only the assigned core method family. "
-                f"{_OUTPUT_INSTRUCTION} Copy method exactly from the assigned method family."
+                "Copy method exactly from the assigned method family."
             ),
         )
 
@@ -113,14 +116,18 @@ class SolverExecutor:
         else:
             stage = "alternative"
         budget.consume(stage=stage, optional=optional)
-        messages = solver.build_messages(request)
+        compilation = solver.compile_prompt(request)
+        messages = compilation.messages
         budget.record_prompt_chars(
             sum(len(message["content"]) for message in messages)
         )
         response = self._provider.chat(
             messages=messages,
             temperature=temperature,
-            max_tokens=max_tokens,
+            max_tokens=PromptCompiler.bounded_output_tokens(
+                max_tokens,
+                compilation.max_output_tokens,
+            ),
             budget=budget,
             stage=stage,
         )

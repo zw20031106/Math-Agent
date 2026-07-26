@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Callable
 
+from mathforge.agents.prompt_compiler import PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.errors import BudgetExceeded, ModelTransportError
@@ -695,6 +696,7 @@ class RouterPlanner:
     ) -> None:
         self._rules = rule_engine or RouterRuleEngine()
         self._contracts = contracts or PromptContractLoader()
+        self._compiler = PromptCompiler(self._contracts)
 
     def routing_reasons(
         self,
@@ -741,11 +743,12 @@ class RouterPlanner:
                 '"risk_level":"low|medium|high","method_families":["...","...","..."]}.'
                 f"{context}"
             )
-            messages = self._contracts.messages(
+            compilation = self._compiler.compile_role(
                 "router_planner",
-                user,
-                "Classify the math domain and return JSON only.",
+                user_content=user,
+                runtime_instructions="Classify the math domain and return JSON only.",
             )
+            messages = compilation.messages
             if record_prompt_chars is not None:
                 record_prompt_chars(
                     sum(len(message["content"]) for message in messages)
@@ -753,7 +756,10 @@ class RouterPlanner:
             response = llm_chat(
                 messages=messages,
                 temperature=0.0,
-                max_tokens=max_tokens,
+                max_tokens=PromptCompiler.bounded_output_tokens(
+                    max_tokens,
+                    compilation.max_output_tokens,
+                ),
             )
             match = re.search(r"\{.*\}", response, re.DOTALL)
             payload = json.loads(match.group(0)) if match else {}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mathforge.agents.prompt_compiler import PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
@@ -35,6 +36,7 @@ class LLMFinalizer:
         self._parser = parser
         self._formatter = formatter
         self._contracts = contracts or PromptContractLoader()
+        self._compiler = PromptCompiler(self._contracts)
 
     def finalize(
         self,
@@ -63,21 +65,25 @@ class LLMFinalizer:
                     else ""
                 )
             )
-            messages = self._contracts.messages(
+            compilation = self._compiler.compile_role(
                 "finalizer",
-                user,
-                (
+                user_content=user,
+                runtime_instructions=(
                     "Improve exposition only. Do not introduce new conclusions or "
                     "assumptions. Preserve the exact final answer. Return CandidateSolution JSON."
                 ),
             )
+            messages = compilation.messages
             budget.record_prompt_chars(
                 sum(len(message["content"]) for message in messages)
             )
             response = self._provider.chat(
                 messages=messages,
                 temperature=0.0,
-                max_tokens=max_tokens,
+                max_tokens=PromptCompiler.bounded_output_tokens(
+                    max_tokens,
+                    compilation.max_output_tokens,
+                ),
                 budget=budget,
                 stage="finalizer",
             )

@@ -7,6 +7,7 @@ from typing import Iterable
 
 from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.harness.fingerprints import content_tree_fingerprint
+from mathforge.harness.fingerprints import semantic_fingerprint
 
 
 FIXED_ROLES = (
@@ -259,7 +260,17 @@ class PromptContractLoader:
 
     @property
     def fingerprint(self) -> str:
-        return content_tree_fingerprint(self._root)
+        compiler_path = Path(__file__).with_name("prompt_compiler.py")
+        examples_path = Path(__file__).resolve().parents[1] / (
+            "tool_prompt_examples.py"
+        )
+        return semantic_fingerprint(
+            {
+                "contracts": content_tree_fingerprint(self._root),
+                "compiler": _normalized_file_hash(compiler_path),
+                "tool_claim_examples": _normalized_file_hash(examples_path),
+            }
+        )
 
     @property
     def manifest(self) -> list[dict[str, str]]:
@@ -274,6 +285,25 @@ class PromptContractLoader:
                     "sha256": _normalized_file_hash(path),
                 }
             )
+        compiler_path = Path(__file__).with_name("prompt_compiler.py")
+        examples_path = Path(__file__).resolve().parents[1] / (
+            "tool_prompt_examples.py"
+        )
+        items.append(
+            {
+                "name": "host_prompt_compiler",
+                "role": "Host",
+                "version": "3",
+                "sha256": semantic_fingerprint(
+                    {
+                        "compiler": _normalized_file_hash(compiler_path),
+                        "tool_claim_examples": _normalized_file_hash(
+                            examples_path
+                        ),
+                    }
+                ),
+            }
+        )
         return items
 
     def load(self, role_directory: str) -> PromptContract:

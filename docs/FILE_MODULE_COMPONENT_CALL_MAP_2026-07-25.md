@@ -100,6 +100,7 @@
 | `mathforge/model_identity.py` | 精确模型 ID、环境变量校验、不可观测响应元数据声明 | `user_agent.py`、runner、Provenance、artifact |
 | `mathforge/provenance.py` | 聚合代码/配置/Prompt/Skill/RAG/Tool/Tokenizer/模型审核指纹 | Runtime session_started、Benchmark artifact |
 | `mathforge/benchmark.py` | JSONL 加载、预检、并发运行、逐题记录、污染检测、统计、Bootstrap/Wilson/配对分析 | `run_benchmark.py`、`run_case_outputs.py`、测试 |
+| `mathforge/tool_prompt_examples.py` | 九个本地工具的精确 Claim、Host 重建参数和反例提示数据 | PromptCompiler、ToolRegistry、Phase 3 测试 |
 
 ## 6. `mathforge.agents`
 
@@ -107,6 +108,7 @@
 |---|---|---|
 | `mathforge/agents/__init__.py` | 导出 Router 相关公共类 | 包级导入 |
 | `mathforge/agents/registry.py` | 解析 Prompt/Skill frontmatter，加载版本、角色、章节、指纹；渲染 system/user messages | Router、Solver、Verifier、Repair、Finalizer、Provenance |
+| `mathforge/agents/prompt_compiler.py` | 按题型/角色编译 minimal/standard/tool/proof Prompt，统一核心 Candidate 协议和动态输出预算 | Router、Solver、Verifier、Repair、Finalizer、Provenance |
 | `mathforge/agents/router_planner.py` | 硬编码领域信号、风险分析、方法族、Skill/Tool 选择；低置信度时可发 Router LLM 请求 | Runtime 调用；Prompt Contract、ProblemIR |
 | `mathforge/agents/solver.py` | `PrimarySolver`/`AlternativeSolver` 构造消息；`SolverExecutor` 消耗预算、调用 Provider、解析 Candidate | CandidateOrchestrator、Runtime |
 | `mathforge/agents/verifier.py` | VerifierSkeptic 批量审查 Claims/义务；解析 pass/fail/unknown；含 LemmaVerifier | Runtime、Lemma Loop、EvidenceLedger |
@@ -172,7 +174,7 @@
 | `mathforge/parsing/latex.py` | 基础 LaTeX 花括号平衡检查 | ProblemParser、Formatting Tool |
 | `mathforge/parsing/normalization.py` | Unicode/数学符号/空白/换行规范化 | ProblemParser |
 | `mathforge/parsing/problem_parser.py` | 从自然语言识别 problem type、answer type、目标短语、假设、领域和风险标志 | Runtime、Benchmark、Router |
-| `mathforge/parsing/solution_parser.py` | 严格/围栏/外层/修复 JSON、别名、缺字段和 raw text fallback 解析为 CandidateSolution | SolverExecutor、RepairAgent、Finalizer |
+| `mathforge/parsing/solution_parser.py` | 解析 Candidate，并区分完整、Schema 违约、截断、畸形、自然语言和空响应；拒绝 JSON wrapper 泄漏 | SolverExecutor、RepairAgent、Finalizer |
 
 ## 11. `mathforge.output`
 
@@ -363,6 +365,7 @@
 | `tests/test_s6_e4_prompt_contracts.py` | 七角色 Contract、注入 Probe、禁止私有推理 | E4 组件 |
 | `tests/test_s6_e5_skills_router.py` | 35 Skill 结构、Router 金标、角色组成 | E5 组件 |
 | `tests/test_s6_e7_case_lifecycle.py` | Manifest、Resume、逐题原子写盘、watchdog | E7 runner |
+| `tests/test_phase3_prompt_parser_integrity.py` | Prompt Profile/长度/预算、四类题三次完整 Candidate、响应完整性和工具 Claim 示例 | Phase 3 验收 |
 | `tests/test_schema_contracts.py` | Problem/Candidate/Route/Claim Schema 严格校验 | `harness.schemas` |
 | `tests/test_scoring.py` | 各答案类型 Scorer 和 LaTeX 规范化 | `evaluation.scoring` |
 | `tests/test_serialization.py` | Schema/Benchmark/Trace JSON round-trip | 多个 `to_dict/from_dict` |

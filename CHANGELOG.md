@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Phase 3 prompt, parser, and output integrity
+
+- Added a Host-side Prompt Compiler that selects `minimal`, `standard`,
+  `tool`, or `proof` Solver profiles from `ProblemIR` and `RoutePlan`, and
+  compiles concise Router, Verifier, Repair, and Finalizer contracts without
+  repeating the static long-form examples at runtime.
+- Put durable Candidate fields first, added profile-specific output budgets,
+  and reduced the representative simple production prompt from the audited
+  roughly 9.5K fallback tokens to about 4.0K including production Skill
+  context.
+- Added precise, executable Claim/input examples for all nine local tools;
+  tool prompts expose only examples and continue to forbid model-emitted tool
+  arguments or native tool calls.
+- Made Candidate response integrity explicit for complete, Schema-violating,
+  truncated, malformed, natural-language-only, and empty responses. All but a
+  complete strict Candidate now fail the Solver/Repair/Finalizer response gate.
+- Rejected JSON wrappers embedded in `solution_text` before deterministic
+  formatting, preventing Candidate protocol objects from leaking into
+  `final_response`.
+- Added the Prompt Compiler and tool Claim examples to prompt/content
+  fingerprints and engineering review scopes.
+
 ### Phase 2 runner and frozen-entry parity
 
 - Made the custom competition runner strictly single-case (`concurrency=1`) so

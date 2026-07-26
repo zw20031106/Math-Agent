@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from mathforge.agents.prompt_compiler import PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
@@ -24,6 +25,7 @@ class RepairAgent:
         self._provider = provider
         self._parser = parser
         self._contracts = contracts or PromptContractLoader()
+        self._compiler = PromptCompiler(self._contracts)
 
     def repair(
         self,
@@ -63,10 +65,10 @@ class RepairAgent:
                 else ""
             )
         )
-        messages = self._contracts.messages(
+        compilation = self._compiler.compile_role(
             "repair",
-            user,
-            (
+            user_content=user,
+            runtime_instructions=(
                 "Repair only the supplied failed claim impact closure. "
                 "Return exactly one CandidateSolution model-fields JSON object with "
                 "replacement claims, corrected public steps, the corrected or unchanged "
@@ -74,13 +76,17 @@ class RepairAgent:
                 "content or emit native tool calls."
             ),
         )
+        messages = compilation.messages
         budget.record_prompt_chars(
             sum(len(message["content"]) for message in messages)
         )
         response = self._provider.chat(
             messages=messages,
             temperature=0.1,
-            max_tokens=max_tokens,
+            max_tokens=PromptCompiler.bounded_output_tokens(
+                max_tokens,
+                compilation.max_output_tokens,
+            ),
             budget=budget,
             stage="repair",
         )

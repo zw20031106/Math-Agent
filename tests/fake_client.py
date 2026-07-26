@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -31,9 +32,48 @@ class FakeClient:
             if self.fail:
                 raise RuntimeError("simulated provider failure")
             user_content = messages[-1]["content"]
-            match = re.search(r"Problem:\n(.*?)\n\nProvide", user_content, re.DOTALL)
+            match = re.search(
+                r"Problem:\n(.*?)(?:\n\nRequired core method family:|\n\nProvide)",
+                user_content,
+                re.DOTALL,
+            )
             problem = match.group(1) if match else user_content
-            return f"Solved independently: {problem}"
+            method_match = re.search(
+                r"Required core method family: ([a-z-]+)\.",
+                user_content,
+            )
+            method = method_match.group(1) if method_match else "direct-deduction"
+            return json.dumps(
+                {
+                    "method": method,
+                    "final_answer": problem,
+                    "public_solution_steps": [
+                        f"Solved independently: {problem}"
+                    ],
+                    "claims": [
+                        {
+                            "claim_id": "c1",
+                            "statement": f"The requested result is {problem}.",
+                            "depends_on": [],
+                            "check_type": "reasoning",
+                            "importance": "critical",
+                        }
+                    ],
+                    "method_steps": [
+                        {
+                            "step_id": "s1",
+                            "kind": "conclusion",
+                            "claim_ids": ["c1"],
+                            "theorem": "",
+                        }
+                    ],
+                    "solution_text": f"Solved independently: {problem}",
+                    "assumptions": [],
+                    "theorems": [],
+                    "unresolved_obligations": [],
+                },
+                ensure_ascii=False,
+            )
         finally:
             with self._lock:
                 self.active_calls -= 1

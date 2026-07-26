@@ -464,6 +464,8 @@ class SolutionParser:
             raw_text,
             deviations,
         ).strip()
+        if SolutionParser._is_json_object_text(solution_text):
+            deviations.append("solution_text:json_wrapper")
         if not final_answer:
             final_answer = SolutionParser._extract_answer(solution_text)
         public_solution_steps = SolutionParser._model_string_list(
@@ -589,21 +591,52 @@ class SolutionParser:
                 return str(matches[-1]).strip()
         return text.strip()
 
+    @staticmethod
+    def _is_json_object_text(text: str) -> bool:
+        try:
+            return isinstance(json.loads(text.strip()), dict)
+        except (json.JSONDecodeError, TypeError):
+            return False
+
+
+def candidate_response_integrity(candidate: CandidateSolution) -> str:
+    status = str(candidate.parse_status)
+    if (
+        status == "raw_text"
+        and not candidate.final_answer.strip()
+        and not candidate.solution_text.strip()
+    ):
+        return "empty"
+    if status == "truncated_json":
+        return "truncated"
+    if status == "malformed_json":
+        return "malformed"
+    if status in {"raw_text", "regex_answer"}:
+        return "natural_language"
+    if (
+        status == "incomplete_json"
+        or "incomplete_candidate" in status
+        or candidate.contract_deviations
+        or status != "strict_json"
+    ):
+        return "schema_violation"
+    return "complete"
+
 
 def candidate_response_validation(
     candidate: CandidateSolution,
 ) -> tuple[str, bool]:
-    status = str(candidate.parse_status)
-    if status == "truncated_json":
+    integrity = candidate_response_integrity(candidate)
+    if integrity == "empty":
+        return "empty_response", True
+    if integrity == "truncated":
         return "candidate_json_incomplete", True
-    if status == "malformed_json":
+    if integrity == "malformed":
         return "candidate_json_invalid", True
-    if status == "incomplete_json" or "incomplete_candidate" in status:
+    if integrity == "natural_language":
+        return "candidate_non_json", True
+    if integrity == "schema_violation":
         return "candidate_schema_invalid", True
-    if candidate.contract_deviations:
-        return "candidate_schema_invalid", True
-    if status in {"raw_text", "regex_answer"}:
-        return "candidate_non_json", False
-    if status == "strict_json":
+    if integrity == "complete":
         return "strict_candidate_json", False
-    return "candidate_json_compatibility_path", False
+    raise ValueError("unknown candidate response integrity")

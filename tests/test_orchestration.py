@@ -33,7 +33,7 @@ def test_fanout_is_parallel_stable_and_hides_primary_text():
         "skill",
         CallBudget(2),
         temperature=0.2,
-        max_tokens=100,
+        max_tokens=4096,
     )
     assert [candidate.candidate_id for candidate in result.candidates] == [
         "primary-1",
@@ -69,7 +69,7 @@ def test_branch_failure_does_not_discard_primary():
         "",
         CallBudget(2),
         temperature=0.2,
-        max_tokens=100,
+        max_tokens=4096,
     )
     assert [candidate.candidate_id for candidate in result.candidates] == ["primary-1"]
     assert result.failures[0].candidate_id == "alternative-1"

@@ -39,6 +39,16 @@
       "sha256": "e03d1d373e1c65324ee9b3cda2265b78b7557600ab59fc779ef8cda901cf5b53"
     },
     {
+      "id": "prompt-compiler",
+      "kind": "file",
+      "path": "mathforge/agents/prompt_compiler.py",
+      "expected_count": 1,
+      "version": "prompt-compiler-3",
+      "engineering_reviewer": "codex-phase3-prompt-audit",
+      "review_date": "2026-07-26",
+      "sha256": "cec20a12503c2014e4d3cb806da7891138a8dc551e5d9791cdc47ca315c45ffe"
+    },
+    {
       "id": "proof-obligations",
       "kind": "file",
       "path": "mathforge/verification/proof_obligations.py",
@@ -52,14 +62,15 @@
       "id": "tool-capabilities",
       "kind": "file_set",
       "paths": [
+        "mathforge/tool_prompt_examples.py",
         "mathforge/tools/registry.py",
         "mathforge/verification/capabilities.py"
       ],
-      "expected_count": 2,
-      "version": "tool-contract-2",
-      "engineering_reviewer": "codex-s5-audit",
-      "review_date": "2026-07-23",
-      "sha256": "ebc99f15a2247a6ded85159eb55ddec6c32228c3a311580d2f36b51b06537cd8"
+      "expected_count": 3,
+      "version": "tool-contract-3",
+      "engineering_reviewer": "codex-phase3-prompt-audit",
+      "review_date": "2026-07-26",
+      "sha256": "8f52fbc8b451492212ba61351dc94011b8e5cd7cdc111ff8af0316461d4074e1"
     },
     {
       "id": "router-calibration",

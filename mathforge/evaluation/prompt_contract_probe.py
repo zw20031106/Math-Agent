@@ -243,10 +243,11 @@ def run_live_prompt_contract_probe(
             if case.role == "AlternativeSolver"
             else PrimarySolver()
         )
+        compilation = solver.compile_prompt(request)
         response = client.chat(
-            messages=solver.build_messages(request),
+            messages=compilation.messages,
             temperature=0.0,
-            max_tokens=max_tokens,
+            max_tokens=min(max_tokens, compilation.max_output_tokens),
         )
         responses[case.case_id] = str(response)
         if on_response is not None:
