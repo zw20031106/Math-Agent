@@ -43,6 +43,7 @@ from mathforge.harness.model_policy import (  # noqa: E402
     PROVIDER_CALL_TIMEOUT_SECONDS,
 )
 from mathforge.harness.trace import TraceBuilder  # noqa: E402
+from mathforge.harness.trace_journal import TraceJournalFactory  # noqa: E402
 from mathforge.harness.transport import (  # noqa: E402
     ObservedModelResponse,
     RETRYABLE_TRANSPORT_FAILURE_CODES,
@@ -826,6 +827,9 @@ def main(argv: list[str] | None = None) -> int:
             client,
             config,
             model_identity=model_identity,
+            trace_sink_factory=TraceJournalFactory(
+                args.output_dir / ".trace-journal"
+            ),
         )
         wall_clock_runner = PerCaseWallClockRunner(harness.solve)
 

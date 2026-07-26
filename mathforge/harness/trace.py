@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from hashlib import sha256
 import json
 import math
 import re
+from threading import RLock
 from time import monotonic
 from typing import Any, Callable, Iterable
 
@@ -13,6 +15,9 @@ from mathforge.harness.events import (
     PROTECTED_TRACE_EVENTS,
     TRACE_SCHEMA_VERSION,
 )
+from mathforge.harness.proof_graph import PROOF_GRAPH_SCHEMA_VERSION
+from mathforge.harness.trace_summary import CASE_SUMMARY_SCHEMA_VERSION
+from mathforge.harness.transport import SAFE_TRANSPORT_FAILURE_CODES
 
 
 _SENSITIVE_KEYS = re.compile(
@@ -27,6 +32,18 @@ _ABSOLUTE_PATH = re.compile(r"(?:[A-Za-z]:\\|/(?:home|Users|root|tmp)/)[^\s]+")
 _API_TOKEN_VALUE = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}")
 _AUTHORIZATION_VALUE = re.compile(r"\b(?:authorization\s*:?\s*)?bearer\s+\S+", re.I)
 _TRACEBACK_VALUE = re.compile(r"\btraceback\s*\(most recent call last\)", re.I)
+_PRIVATE_REASONING_KEYS = re.compile(
+    r"^(?:"
+    r"candidate_text|raw_(?:response|completion|prompt)|"
+    r"chain[_-]?of[_-]?thought|scratchpad|hidden[_-]?reasoning|"
+    r"private[_-]?reasoning|internal[_-]?prompt"
+    r")$",
+    re.I,
+)
+_HARD_MAX_PUBLIC_EVENTS = 4096
+_DEFAULT_INTERNAL_MAX_EVENTS = 4096
+_LARGE_TEXT_CHARS = 32768
+_LARGE_COLLECTION_ITEMS = 8192
 _REQUIRED_PRIMARY_EVENTS = frozenset(
     {
         "session_started",
@@ -56,6 +73,8 @@ class TraceBuilder:
         max_events: int = 64,
         clock: Callable[[], float] = monotonic,
         redacted_values: Iterable[str] = (),
+        event_sink: Callable[[dict[str, Any]], None] | None = None,
+        internal_max_events: int = _DEFAULT_INTERNAL_MAX_EVENTS,
     ) -> None:
         self._events = events
         self._internal_events: list[dict[str, Any]] = []
@@ -64,34 +83,61 @@ class TraceBuilder:
         self._clock = clock
         self._started_at = clock()
         self._last_elapsed_ms = 0
+        self._lock = RLock()
+        self._event_sink = event_sink
+        self._internal_max_events = max(1, int(internal_max_events))
+        self._internal_event_count = 0
+        self._internal_events_dropped = 0
+        self._journal_failures = 0
         self._redacted_values = tuple(
             value for value in redacted_values if isinstance(value, str) and value
         )
 
     def add(self, event: str, **details: Any) -> None:
-        self._internal_events.append({"event": event, **deepcopy(details)})
-        if event not in JUDGE_EVENTS:
-            return
-        supplied_stage = details.pop("stage", None)
-        sanitized = {
-            key: self._sanitize(value)
-            for key, value in details.items()
-            if not _SENSITIVE_KEYS.search(key)
-        }
-        if supplied_stage is not None:
-            sanitized["checkpoint"] = self._sanitize(supplied_stage)
-        item = {
-            "schema_version": TRACE_SCHEMA_VERSION,
-            "seq": len(self._events) + 1,
-            "elapsed_ms": self._elapsed_ms(),
-            "event": event,
-            "stage": EVENT_STAGES[event],
-            **sanitized,
-        }
-        self._append_bounded(item)
+        with self._lock:
+            internal_details = {
+                key: self._sanitize(value)
+                for key, value in details.items()
+                if not _SENSITIVE_KEYS.search(key)
+                and not _PRIVATE_REASONING_KEYS.search(key)
+            }
+            self._internal_events.append(
+                {"event": str(event), **internal_details}
+            )
+            self._internal_event_count += 1
+            if len(self._internal_events) > self._internal_max_events:
+                dropped = len(self._internal_events) - self._internal_max_events
+                del self._internal_events[:dropped]
+                self._internal_events_dropped += dropped
+            if event not in JUDGE_EVENTS:
+                return
+            supplied_stage = details.pop("stage", None)
+            sanitized = {
+                key: self._sanitize(value)
+                for key, value in details.items()
+                if not _SENSITIVE_KEYS.search(key)
+                and not _PRIVATE_REASONING_KEYS.search(key)
+            }
+            if supplied_stage is not None:
+                sanitized["checkpoint"] = self._sanitize(supplied_stage)
+            item = {
+                "schema_version": TRACE_SCHEMA_VERSION,
+                "seq": len(self._events) + 1,
+                "elapsed_ms": self._elapsed_ms(),
+                "event": event,
+                "stage": EVENT_STAGES[event],
+                **sanitized,
+            }
+            if self._event_sink is not None:
+                try:
+                    self._event_sink(deepcopy(item))
+                except Exception:
+                    self._journal_failures += 1
+            self._append_bounded(item)
 
     def build(self, *, final_response: str | None = None) -> list[dict[str, Any]]:
-        result = deepcopy(self._events)
+        with self._lock:
+            result = deepcopy(self._events)
         if (
             any(
                 event.get("schema_version") == TRACE_SCHEMA_VERSION
@@ -104,7 +150,19 @@ class TraceBuilder:
 
     @property
     def internal_events(self) -> list[dict[str, Any]]:
-        return deepcopy(self._internal_events)
+        with self._lock:
+            return deepcopy(self._internal_events)
+
+    @property
+    def stream_stats(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                "public_events_resident": len(self._events),
+                "internal_events_seen": self._internal_event_count,
+                "internal_events_resident": len(self._internal_events),
+                "internal_events_dropped": self._internal_events_dropped,
+                "journal_failures": self._journal_failures,
+            }
 
     def _elapsed_ms(self) -> int:
         elapsed = max(0, int((self._clock() - self._started_at) * 1000))
@@ -119,17 +177,30 @@ class TraceBuilder:
                 for existing in self._events
                 if existing.get("event") != event
             ]
+        if (
+            event not in PROTECTED_TRACE_EVENTS
+            and self._events
+            and self._same_event_payload(self._events[-1], item)
+        ):
+            self._events[-1]["repeat_count"] = (
+                int(self._events[-1].get("repeat_count", 1)) + 1
+            )
+            self._events[-1]["elapsed_ms"] = item["elapsed_ms"]
+            return
         self._events.append(item)
         while self._max_events > 0 and len(self._events) > self._max_events:
             if not self._evict_unprotected():
                 break
+        while len(self._events) > _HARD_MAX_PUBLIC_EVENTS:
+            if not self._evict_unprotected():
+                self._events.pop(1 if len(self._events) > 1 else 0)
         while self._max_chars > 0 and self._serialized_size() > self._max_chars:
             if not self._evict_unprotected():
                 break
         self._renumber()
 
     def _evict_unprotected(self) -> bool:
-        for index in range(len(self._events) - 1, -1, -1):
+        for index in range(len(self._events)):
             if self._events[index].get("event") not in PROTECTED_TRACE_EVENTS:
                 self._events.pop(index)
                 return True
@@ -149,7 +220,19 @@ class TraceBuilder:
             )
         )
 
-    def _sanitize(self, value: Any) -> Any:
+    @staticmethod
+    def _same_event_payload(
+        left: dict[str, Any],
+        right: dict[str, Any],
+    ) -> bool:
+        ignored = {"seq", "elapsed_ms", "repeat_count"}
+        return {
+            key: value for key, value in left.items() if key not in ignored
+        } == {
+            key: value for key, value in right.items() if key not in ignored
+        }
+
+    def _sanitize(self, value: Any, *, allow_large_text: bool = False) -> Any:
         if value is None or isinstance(value, (bool, int)):
             return value
         if isinstance(value, float):
@@ -164,14 +247,41 @@ class TraceBuilder:
             sanitized = _ABSOLUTE_PATH.sub("[local-path]", sanitized)
             for redacted in self._redacted_values:
                 sanitized = sanitized.replace(redacted, "[redacted-nonce]")
+            if not allow_large_text and len(sanitized) > _LARGE_TEXT_CHARS:
+                return {
+                    "kind": "text_summary",
+                    "chars": len(sanitized),
+                    "sha256": sha256(
+                        sanitized.encode("utf-8")
+                    ).hexdigest(),
+                    "preview": sanitized[:512],
+                }
             return sanitized
         if isinstance(value, (list, tuple)):
-            return [self._sanitize(item) for item in value]
+            sanitized_items = [self._sanitize(item) for item in value]
+            if len(sanitized_items) > _LARGE_COLLECTION_ITEMS:
+                serialized = json.dumps(
+                    sanitized_items,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                )
+                return {
+                    "kind": "collection_summary",
+                    "items": sanitized_items[:64],
+                    "item_count": len(sanitized_items),
+                    "sha256": sha256(serialized.encode("utf-8")).hexdigest(),
+                }
+            return sanitized_items
         if isinstance(value, dict):
             return {
-                str(key): self._sanitize(item)
+                str(key): self._sanitize(
+                    item,
+                    allow_large_text=str(key) == "final_response",
+                )
                 for key, item in value.items()
                 if not _SENSITIVE_KEYS.search(str(key))
+                and not _PRIVATE_REASONING_KEYS.search(str(key))
             }
         return f"[{type(value).__name__}]"
 
@@ -217,6 +327,8 @@ def validate_trace_v2(
         else:
             if restored != event:
                 errors.append(f"event {index} does not JSON round-trip")
+        if _contains_sensitive_content(event):
+            errors.append(f"event {index} contains unsafe content")
     if elapsed_values != sorted(elapsed_values):
         errors.append("event elapsed_ms values are not monotonic")
     if trace[-1].get("event") != "run_completed":
@@ -374,6 +486,18 @@ def validate_trace_v2(
     elif outcome == "primary":
         errors.append("primary trace lacks final_answer_selected")
 
+    _validate_transport_events(by_name, errors)
+    _validate_proof_graph_events(
+        by_name,
+        errors,
+        selected_candidate_id=selected_id,
+    )
+    _validate_case_summary_events(
+        by_name,
+        errors,
+        selected_candidate_id=selected_id,
+    )
+
     session_events = by_name.get("session_started", [])
     session_id = (
         str(session_events[0].get("session_id", ""))
@@ -388,7 +512,7 @@ def validate_trace_v2(
             "source_candidate_id",
             "proposed_candidate_id",
             "selected_candidate_id",
-        } and value is not None and str(value) not in known_candidates:
+        } and value is not None and str(value) and str(value) not in known_candidates:
             errors.append(f"trace contains a foreign candidate reference: {value!r}")
 
     if errors:
@@ -422,3 +546,121 @@ def _walk_key_values(value: Any):
     elif isinstance(value, list):
         for item in value:
             yield from _walk_key_values(item)
+
+
+def _contains_sensitive_content(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = str(key)
+            if (
+                _SENSITIVE_KEYS.search(normalized_key)
+                or _PRIVATE_REASONING_KEYS.search(normalized_key)
+            ):
+                return True
+            if _contains_sensitive_content(item):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_contains_sensitive_content(item) for item in value)
+    if isinstance(value, str):
+        return bool(
+            _API_TOKEN_VALUE.search(value)
+            or _AUTHORIZATION_VALUE.search(value)
+            or _ABSOLUTE_PATH.search(value)
+            or _TRACEBACK_VALUE.search(value)
+        )
+    return False
+
+
+def _validate_transport_events(
+    by_name: dict[str, list[dict[str, Any]]],
+    errors: list[str],
+) -> None:
+    for event in by_name.get("model_transport_completed", []):
+        calls = event.get("calls")
+        if not isinstance(calls, list):
+            errors.append("transport calls must be a list")
+            continue
+        indexes: list[int] = []
+        for call in calls:
+            if not isinstance(call, dict):
+                errors.append("transport call must be an object")
+                continue
+            call_index = call.get("call_index")
+            if type(call_index) is not int or call_index < 1:
+                errors.append("transport call index is invalid")
+            else:
+                indexes.append(call_index)
+            failure_code = str(call.get("failure_code", ""))
+            if (
+                failure_code
+                and failure_code not in SAFE_TRANSPORT_FAILURE_CODES
+            ):
+                errors.append("transport failure code is unsafe")
+        if indexes != list(range(1, len(indexes) + 1)):
+            errors.append("transport call indexes are not contiguous")
+
+
+def _validate_proof_graph_events(
+    by_name: dict[str, list[dict[str, Any]]],
+    errors: list[str],
+    *,
+    selected_candidate_id: str,
+) -> None:
+    for event in by_name.get("proof_graph_completed", []):
+        graph = event.get("graph")
+        if not isinstance(graph, dict):
+            errors.append("proof graph must be an object")
+            continue
+        if graph.get("schema_version") != PROOF_GRAPH_SCHEMA_VERSION:
+            errors.append("proof graph schema version is invalid")
+        nodes = graph.get("nodes")
+        edges = graph.get("edges")
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            errors.append("proof graph nodes and edges must be lists")
+            continue
+        node_ids = [
+            str(node.get("id", ""))
+            for node in nodes
+            if isinstance(node, dict)
+        ]
+        if (
+            len(node_ids) != len(nodes)
+            or any(not node_id for node_id in node_ids)
+            or len(node_ids) != len(set(node_ids))
+        ):
+            errors.append("proof graph node IDs are invalid")
+        known_nodes = set(node_ids)
+        for edge in edges:
+            if (
+                not isinstance(edge, dict)
+                or str(edge.get("from", "")) not in known_nodes
+                or str(edge.get("to", "")) not in known_nodes
+                or not str(edge.get("relation", ""))
+            ):
+                errors.append("proof graph edge reference is invalid")
+        graph_selected = str(graph.get("selected_candidate_id", ""))
+        if graph_selected != selected_candidate_id:
+            errors.append("proof graph selected candidate is inconsistent")
+
+
+def _validate_case_summary_events(
+    by_name: dict[str, list[dict[str, Any]]],
+    errors: list[str],
+    *,
+    selected_candidate_id: str,
+) -> None:
+    for event in by_name.get("case_trace_summary", []):
+        summary = event.get("summary")
+        if not isinstance(summary, dict):
+            errors.append("case trace summary must be an object")
+            continue
+        if summary.get("schema_version") != CASE_SUMMARY_SCHEMA_VERSION:
+            errors.append("case trace summary schema version is invalid")
+        if (
+            str(summary.get("selected_candidate_id", ""))
+            != selected_candidate_id
+        ):
+            errors.append("case trace summary selected candidate is inconsistent")
+        if not isinstance(summary.get("decision_path"), list):
+            errors.append("case trace summary decision path is invalid")

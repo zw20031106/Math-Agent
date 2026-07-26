@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Phase 5 trace and observability
+
+- Added explicit per-call Transport Events with canonical fixed-role names,
+  status, attempts, response-validation outcome, elapsed time, output size,
+  and safe provider failure categories. Raw provider exceptions never enter
+  the public event.
+- Added a deterministic Claim—Evidence Proof Graph linking Candidate,
+  Claim dependencies, active or rolled-back Evidence, Proof Obligations,
+  candidate versions, final states, and the selected Candidate.
+- Added a per-case structured trace summary covering roles called, Candidate
+  completeness and answers, evidence outcomes, Repair decisions, rejection
+  reasons, selection reasons, provider outcomes, and the decision path.
+- Added an optional sanitized JSONL event sink and enabled one isolated,
+  fsynced incremental trace journal per case in the custom case-output
+  runner.
+- Separated thread-safe public and internal Trace streams, bounded resident
+  event memory even when configured character/event limits are zero, merged
+  repeated public lifecycle events, and summarized oversized payloads with
+  a preview and digest.
+- Extended Trace V2 validation with Transport, Proof Graph, case-summary,
+  cross-reference, JSON round-trip, and sensitive-content invariants.
+
 ### Phase 4 evidence, tool, and proof closure
 
 - Added a Host-owned Claim-to-tool request builder and a shared input-Schema

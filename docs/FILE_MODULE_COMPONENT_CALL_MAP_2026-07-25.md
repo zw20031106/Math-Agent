@@ -1,7 +1,7 @@
 # Math-Agent 逐文件作用、模块职责与调用关系
 
-日期：2026-07-25
-覆盖范围：`git ls-files` 返回的全部 257 个受控文件
+日期：2026-07-26
+覆盖范围：本阶段提交后的全部 283 个受控文件
 阅读方式：本表描述“文件负责什么”和“主要被谁调用/调用谁”；空的包初始化文件
 也单独列出，避免把目录边界误认为不存在。
 
@@ -85,6 +85,7 @@
 | `docs/S6_F_IMPLEMENTATION_STATUS_2026-07-25.md` | E5 Skill 2.0 与 Router | `skills/`、`router_planner.py` |
 | `docs/S6_G_IMPLEMENTATION_STATUS_2026-07-25.md` | E6 Evidence、Repair、Lemma、工具闭环 | verification/harness |
 | `docs/S6_H_IMPLEMENTATION_STATUS_2026-07-25.md` | E7 逐题生命周期、Manifest、原子输出 | `scripts/run_case_outputs.py` |
+| `docs/PHASE_5_TRACE_AND_OBSERVABILITY_STATUS_2026-07-26.md` | Phase 5 Transport Event、Proof Graph、增量 Trace、双流和单题摘要验收记录 | `trace.py`、`proof_graph.py`、`trace_journal.py`、`trace_summary.py` |
 | `docs/SKILL_2_MATHEMATICAL_REVIEW_2026-07-25.md` | Skill/Prompt/数学内容工程审查记录 | `content_review_manifest.json` |
 | `docs/content_review_manifest.json` | 内容树、哈希、工程审核人和人工审核状态 | `governance.reviews`、Provenance |
 | `docs/PROJECT_FULL_ARCHITECTURE_AUDIT_AND_REMEDIATION_PLAN_2026-07-25.md` | 本次全局架构、模型调用、问题和实施计划 | 本文件的配套总审查 |
@@ -150,11 +151,15 @@
 | `mathforge/harness/metrics.py` | `RunMetrics` Schema 1.4，收集调用、Token、Tool 参数/Schema、Evidence、Repair 成功/回滚、RAG、污染和终态指标 | Runtime、Benchmark、Trace |
 | `mathforge/harness/orchestration.py` | 候选 Fanout，固定方法族，线程池分支失败隔离，候选 Trace payload | Runtime、SolverExecutor |
 | `mathforge/harness/provider.py` | 唯一模型访问边界；`ModelCallGate` 限并发，`OfficialClientProvider` 做 Context 分配和计量 | Runtime、所有 LLM 角色 |
+| `mathforge/harness/transport.py` | 将 Provider 异常归类为安全 Transport failure code，并记录外层尝试次数 | Provider、Runner、Trace Summary |
 | `mathforge/harness/repair.py` | `ClaimRepairService`：失败 Claim 影响闭包、版本化候选、局部再验证、回滚 | Runtime、RepairAgent、Evidence |
 | `mathforge/harness/schemas.py` | ProblemIR、RoutePlan、Candidate、Claim、Evidence、ProofObligation、Lemma、Session 等核心 Schema | 几乎所有组件 |
 | `mathforge/harness/session.py` | 每题创建 UUID Session、CallBudget、SessionMemory、LemmaMemory、RawContextStore | Runtime |
 | `mathforge/harness/state.py` | RuntimePhase 枚举和合法状态转换 | MathSession、Runtime、测试 |
-| `mathforge/harness/trace.py` | TraceBuilder 事件追加/脱敏/序列号/完整性校验 | Runtime、Public Result、Runner |
+| `mathforge/harness/proof_graph.py` | 构建 Candidate—Claim—Evidence—Proof Obligation 公共证明图及依赖边 | Runtime、Trace V2 校验 |
+| `mathforge/harness/trace.py` | 线程安全的 Public/Internal Trace 流、脱敏、重复归并、驻留上限、增量 Sink 和 Trace V2 完整性校验 | Runtime、Public Result、Runner |
+| `mathforge/harness/trace_journal.py` | 每题独立、逐事件 flush/fsync 的已脱敏 JSONL Journal | 自定义逐题 Runner、TraceBuilder Event Sink |
+| `mathforge/harness/trace_summary.py` | 生成安全 Transport Event 和角色/Candidate/Evidence/Repair/选择单题摘要 | Runtime、Trace V2 校验 |
 
 ## 9. `mathforge.memory`
 
@@ -307,7 +312,7 @@
 | 文件 | 作用 | 主要关系 |
 |---|---|---|
 | `scripts/__init__.py` | 脚本包初始化 | `python -m scripts...` |
-| `scripts/run_case_outputs.py` | 推荐逐题 runner：预检、900 秒 watchdog、单题 JSON 原子写入、Manifest、Resume、重试包装 | 直接调用 `InternChatClient`、`MathForgeHarness`、`run_benchmark` |
+| `scripts/run_case_outputs.py` | 推荐逐题 runner：预检、900 秒 watchdog、单题 JSON 原子写入、增量 Trace Journal、Manifest、Resume、重试包装 | 直接调用 `InternChatClient`、`MathForgeHarness`、`run_benchmark` |
 | `scripts/run_benchmark.py` | 配置合并、Prompt/Skill/Tool/RAG/Provenance 组装，运行 Benchmark artifact | `MathForgeHarness`、`benchmark.py` |
 | `scripts/build_rag.py` | 读取知识卡并原子重建 SQLite FTS5 | `retrieval.builder` |
 | `scripts/evaluate_router.py` | 在 Router 金标上统计 Top-1/Top-2 和错误 | `evaluation.routing` |
@@ -345,6 +350,7 @@
 | `tests/test_mcp.py` | StdIO MCP Server/Adapter 与 Direct fallback | `tools.mcp_*` |
 | `tests/test_memory.py` | SessionMemory 和 Blackboard ACL | `memory.*` |
 | `tests/test_orchestration.py` | Fanout、方法族、分支失败隔离 | `harness.orchestration` |
+| `tests/test_phase5_trace_observability.py` | Transport Event、Proof Graph、单题摘要、增量 Journal、双流隔离、资源上限和安全篡改拒绝 | `trace/proof_graph/trace_summary/trace_journal/runtime` |
 | `tests/test_parsing.py` | Problem/Solution Parser 基础和降级 | `parsing.*` |
 | `tests/test_proof_completion.py` | Proof Obligation Completion Gate | `verification.completion` |
 | `tests/test_proof_obligations.py` | Obligation 生成和 Claim 类型映射 | `verification.proof_obligations` |

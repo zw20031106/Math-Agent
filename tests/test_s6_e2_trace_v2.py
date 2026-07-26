@@ -160,7 +160,7 @@ def test_trace_integrity_rejects_cross_reference_breakage(mutation):
         validate_trace_v2(trace, final_response=result["final_response"])
 
 
-def test_unlimited_trace_preserves_public_content_and_recursively_redacts():
+def test_unlimited_trace_summarizes_large_payloads_and_recursively_redacts():
     events: list[dict] = []
     trace = TraceBuilder(
         events,
@@ -200,7 +200,10 @@ def test_unlimited_trace_preserves_public_content_and_recursively_redacts():
     retrieval = next(
         event for event in built if event["event"] == "retrieval_completed"
     )
-    assert retrieval["text"] == long_text
+    assert retrieval["text"]["kind"] == "text_summary"
+    assert retrieval["text"]["chars"] == len(long_text)
+    assert retrieval["text"]["preview"] == long_text[:512]
+    assert len(retrieval["text"]["sha256"]) == 64
     assert retrieval["values"] == list(range(100))
     assert "removed" not in serialized
     assert "private\\answer" not in serialized

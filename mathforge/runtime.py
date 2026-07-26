@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 from dataclasses import replace
 from time import perf_counter
 
@@ -15,6 +15,7 @@ from mathforge.harness.fallback import FallbackSolver
 from mathforge.harness.fingerprints import request_fingerprint
 from mathforge.harness.context_budget import ModelContextBudget
 from mathforge.harness.metrics import collect_run_metrics
+from mathforge.harness.proof_graph import build_claim_evidence_graph
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.harness.orchestration import (
     BranchFailure,
@@ -27,6 +28,10 @@ from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
 from mathforge.harness.session import create_session
 from mathforge.harness.state import RuntimePhase
 from mathforge.harness.trace import TraceBuilder
+from mathforge.harness.trace_summary import (
+    build_case_trace_summary,
+    build_transport_summary,
+)
 from mathforge.output.answer_validator import AnswerValidator
 from mathforge.output.deterministic_formatter import DeterministicFormatter
 from mathforge.parsing.problem_parser import ProblemParser
@@ -112,9 +117,17 @@ class MathForgeHarness:
         *,
         debug_sink: DebugSink | None = None,
         model_identity: ModelIdentity | None = None,
+        trace_sink_factory: (
+            Callable[
+                [str, dict[str, Any]],
+                Callable[[dict[str, Any]], None] | None,
+            ]
+            | None
+        ) = None,
     ) -> None:
         self._config = config or load_competition_config()
         self._debug_sink = debug_sink
+        self._trace_sink_factory = trace_sink_factory
         self._context_budget = ModelContextBudget(
             context_window_tokens=self._config.model_context_window_tokens,
             safety_margin_tokens=self._config.context_safety_margin_tokens,
@@ -232,6 +245,15 @@ class MathForgeHarness:
         )
         fingerprint_nonce = str(safe_metadata.get("benchmark_nonce", session.session_id))
         run_fingerprint = request_fingerprint(normalized_problem, fingerprint_nonce)
+        trace_sink = None
+        if self._trace_sink_factory is not None:
+            try:
+                trace_sink = self._trace_sink_factory(
+                    session.session_id,
+                    safe_metadata,
+                )
+            except Exception:
+                trace_sink = None
         trace = TraceBuilder(
             session.trace_events,
             max_chars=self._config.trace_max_chars,
@@ -241,6 +263,7 @@ class MathForgeHarness:
                 if "benchmark_nonce" in safe_metadata
                 else []
             ),
+            event_sink=trace_sink,
         )
         trace.add(
             "session_started",
@@ -252,6 +275,8 @@ class MathForgeHarness:
         error_code = ""
         failure: Exception | None = None
         failed_phase = RuntimePhase.CREATED
+        selected_candidate_id = ""
+        candidate_states: list[dict[str, Any]] = []
 
         try:
             session.budget.ensure_stage("problem_parser")
@@ -1357,15 +1382,17 @@ class MathForgeHarness:
                 equivalence_disagreement_pairs=arbitration.disagreement_pairs,
                 used_llm_arbiter=arbitration.used_llm_arbiter,
             )
+            selected_candidate_id = candidate.candidate_id
+            candidate_states = self._candidate_final_states(
+                session,
+                viable,
+                selected_candidate_id,
+                fanout.failures,
+                expanded_precheck_rejections,
+            )
             trace.add(
                 "candidate_final_states",
-                candidates=self._candidate_final_states(
-                    session,
-                    viable,
-                    candidate.candidate_id,
-                    fanout.failures,
-                    expanded_precheck_rejections,
-                ),
+                candidates=candidate_states,
             )
             self._transition(
                 session,
@@ -1510,6 +1537,28 @@ class MathForgeHarness:
             )
 
         self._close_trace_invariants(trace)
+        proof_graph = build_claim_evidence_graph(
+            session.candidates,
+            session.evidence,
+            session.proof_obligations,
+            candidate_states=candidate_states,
+            selected_candidate_id=selected_candidate_id,
+        )
+        trace.add("proof_graph_completed", graph=proof_graph)
+        transport = build_transport_summary(session.budget.model_call_records)
+        trace.add("model_transport_completed", **transport)
+        case_summary = build_case_trace_summary(
+            candidates=session.candidates,
+            evidence=session.evidence,
+            candidate_states=candidate_states,
+            internal_events=trace.internal_events,
+            model_call_records=session.budget.model_call_records,
+            selected_candidate_id=selected_candidate_id,
+            proof_graph_summary=proof_graph["summary"],
+            outcome=outcome,
+        )
+        case_summary["trace_streams"] = trace.stream_stats
+        trace.add("case_trace_summary", summary=case_summary)
         final_count = self._context_budget.ensure_text_within_window(
             final_response
         )
