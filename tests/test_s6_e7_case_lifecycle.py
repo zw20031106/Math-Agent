@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 import json
+import signal
 from types import SimpleNamespace
 
 import pytest
@@ -15,7 +16,11 @@ from scripts.run_case_outputs import (
     MODEL_PREFLIGHT_MAX_TOKENS,
     PerCaseWallClockRunner,
     RUN_MANIFEST_FILENAME,
+    RunStopController,
     SerializedFastRetryClient,
+    _planned_stop_reason,
+    build_argument_parser,
+    main as runner_main,
     model_http_timeout_seconds,
     validate_case_output,
     verify_model_availability,
@@ -96,7 +101,7 @@ def test_manifest_resume_validates_schema_and_bound_output_hash(tmp_path):
         config_path=config_path,
         output_dir=output_dir,
         seed=7,
-        concurrency=4,
+        concurrency=1,
         resume=True,
     )
     assert remaining == []
@@ -390,6 +395,261 @@ def test_manifest_persists_preflight_and_provider_circuit_state(tmp_path):
     )
 
     assert payload["preflight"] == preflight
-    assert payload["status"] == "failed"
-    assert payload["failure_type"] == "provider_circuit_open"
+    assert payload["status"] == "degraded"
+    assert payload["stop_reason"] == "provider_circuit_open"
     assert payload["circuit_breaker"] == circuit
+
+
+def test_resume_skips_only_success_and_reruns_failed_and_timeout(tmp_path):
+    input_path = tmp_path / "cases.jsonl"
+    config_path = tmp_path / "competition.json"
+    output_dir = tmp_path / "outputs"
+    cases = [
+        BenchmarkCase("success", "1+1", expected_answer="2"),
+        BenchmarkCase("failed", "1+1", expected_answer="2"),
+        BenchmarkCase("timeout", "1+1", expected_answer="2"),
+    ]
+    input_path.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "idx": case.idx,
+                    "problem": case.problem,
+                    "expected_answer": case.expected_answer,
+                }
+            )
+            for case in cases
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config_path.write_text('{"profile":"test"}\n', encoding="utf-8")
+    _, manifest = CaseRunManifest.prepare(
+        cases=cases,
+        input_path=input_path,
+        config_path=config_path,
+        output_dir=output_dir,
+        seed=0,
+        concurrency=1,
+        resume=False,
+    )
+    records = [
+        _success_record(cases[0]),
+        run_benchmark(
+            [cases[1]],
+            lambda *_: {
+                "final_response": "Unable to complete.",
+                "trace": [
+                    {
+                        "event": "candidate_generation_failed",
+                        "reason": "provider_5xx",
+                    },
+                    {"event": "run_completed", "outcome": "fallback"},
+                ],
+            },
+        )[0][0],
+        run_benchmark(
+            [cases[2]],
+            lambda *_: {
+                "final_response": "Timed out safely.",
+                "trace": [{"event": "run_completed", "outcome": "timeout"}],
+            },
+        )[0][0],
+    ]
+    for record in records:
+        output_path = write_case_output(record, output_dir)
+        manifest.record(record, output_path)
+    manifest.finalize({})
+
+    remaining, resumed = CaseRunManifest.prepare(
+        cases=cases,
+        input_path=input_path,
+        config_path=config_path,
+        output_dir=output_dir,
+        seed=0,
+        concurrency=1,
+        resume=True,
+    )
+
+    assert [case.idx for case in remaining] == ["failed", "timeout"]
+    assert resumed.resumed_case_ids == ["success"]
+    assert resumed.rerun_case_ids == ["failed", "timeout"]
+    assert set(resumed.payload["cases"]) == {"success"}
+    assert (output_dir / "failed.json").exists()
+    assert (output_dir / "timeout.json").exists()
+
+
+def test_manifest_lifecycle_never_leaves_interruption_as_running(tmp_path):
+    input_path, config_path, output_dir = _paths(tmp_path)
+    _, manifest = CaseRunManifest.prepare(
+        cases=[BenchmarkCase("1", "1+1")],
+        input_path=input_path,
+        config_path=config_path,
+        output_dir=output_dir,
+        seed=0,
+        concurrency=1,
+        resume=False,
+    )
+    assert manifest.payload["status"] == "created"
+
+    manifest.record_preflight({"status": "passed", "levels": []})
+    assert manifest.payload["status"] == "preflight_passed"
+    manifest.mark_running()
+    assert manifest.payload["status"] == "running"
+    manifest.mark_aborted("sigint")
+    summary = manifest.finalize({})
+
+    payload = json.loads(manifest.path.read_text(encoding="utf-8"))
+    assert payload["status"] == "aborted"
+    assert payload["stop_reason"] == "sigint"
+    assert payload["ended_at"]
+    assert summary["pending_case_count"] == 1
+
+
+def test_runner_defaults_to_one_and_rejects_queued_case_concurrency():
+    parser = build_argument_parser()
+    args = parser.parse_args(["--input", "cases.jsonl", "--output-dir", "out"])
+    assert args.concurrency == 1
+    assert args.rerun_status == frozenset({"failed", "timeout"})
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "--input",
+                "cases.jsonl",
+                "--output-dir",
+                "out",
+                "--concurrency",
+                "2",
+            ]
+        )
+
+
+def test_signal_controller_converts_sigint_to_a_safe_stop_request():
+    controller = RunStopController()
+    previous = signal.getsignal(signal.SIGINT)
+    controller.install()
+    try:
+        installed = signal.getsignal(signal.SIGINT)
+        assert callable(installed)
+        installed(signal.SIGINT, None)
+        assert controller.requested
+        assert controller.reason == "sigint"
+        assert controller.exit_code == 130
+    finally:
+        controller.restore()
+    assert signal.getsignal(signal.SIGINT) == previous
+
+
+@pytest.mark.parametrize(
+    ("case_id", "executed", "stop_after", "max_cases", "expected"),
+    [
+        ("2", 2, "2", None, "stop_after_case"),
+        ("2", 2, None, 2, "max_cases_reached"),
+        ("2", 1, "3", 2, ""),
+    ],
+)
+def test_controlled_stop_is_evaluated_only_after_a_persisted_case(
+    case_id,
+    executed,
+    stop_after,
+    max_cases,
+    expected,
+):
+    assert (
+        _planned_stop_reason(
+            case_id=case_id,
+            executed_case_count=executed,
+            stop_after_case=stop_after,
+            max_cases=max_cases,
+        )
+        == expected
+    )
+
+
+def test_max_cases_stops_after_atomic_case_write_and_marks_degraded(
+    tmp_path,
+    monkeypatch,
+):
+    input_path = tmp_path / "cases.jsonl"
+    config_path = tmp_path / "competition.json"
+    output_dir = tmp_path / "outputs"
+    input_path.write_text(
+        '{"idx":"1","problem":"1+1","expected_answer":"2"}\n'
+        '{"idx":"2","problem":"1+1","expected_answer":"2"}\n',
+        encoding="utf-8",
+    )
+    config_path.write_text('{"profile":"test"}\n', encoding="utf-8")
+    identity = SimpleNamespace(
+        requested_model="intern-s2-preview-397b",
+        to_dict=lambda: {"requested_model": "intern-s2-preview-397b"},
+    )
+    config = SimpleNamespace(
+        hard_deadline_seconds=870.0,
+        deterministic_finalize_reserve_seconds=30.0,
+    )
+
+    class FakeHarness:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def solve(self, *_args, **_kwargs):
+            return {
+                "final_response": "Final answer: 2",
+                "trace": [{"event": "run_completed", "outcome": "primary"}],
+            }
+
+    monkeypatch.setenv("INTERN_MODEL", "intern-s2-preview-397b")
+    monkeypatch.setattr(
+        "scripts.run_case_outputs.require_exact_intern_model",
+        lambda: identity,
+    )
+    monkeypatch.setattr(
+        "scripts.run_case_outputs.load_benchmark_config",
+        lambda _path: config,
+    )
+    monkeypatch.setattr(
+        "scripts.run_case_outputs.InternChatClient",
+        lambda **_kwargs: SimpleNamespace(chat=lambda **_call: "unused"),
+    )
+    monkeypatch.setattr(
+        "scripts.run_case_outputs.run_model_preflight",
+        lambda *_args, **_kwargs: {
+            "schema_version": "1.0",
+            "status": "passed",
+            "failed_level": "",
+            "levels": [],
+        },
+    )
+    monkeypatch.setattr(
+        "scripts.run_case_outputs.MathForgeHarness",
+        FakeHarness,
+    )
+
+    assert (
+        runner_main(
+            [
+                "--input",
+                str(input_path),
+                "--output-dir",
+                str(output_dir),
+                "--config",
+                str(config_path),
+                "--max-cases",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    assert (output_dir / "1.json").exists()
+    assert not (output_dir / "2.json").exists()
+    assert set(
+        json.loads((output_dir / "1.json").read_text(encoding="utf-8"))
+    ) == {"id", "status", "final_response", "trace"}
+    manifest = json.loads(
+        (output_dir / RUN_MANIFEST_FILENAME).read_text(encoding="utf-8")
+    )
+    assert manifest["status"] == "degraded"
+    assert manifest["stop_reason"] == "max_cases_reached"
+    assert manifest["summary"]["pending_case_count"] == 1

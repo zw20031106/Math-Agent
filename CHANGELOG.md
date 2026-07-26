@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Phase 2 runner and frozen-entry parity
+
+- Made the custom competition runner strictly single-case (`concurrency=1`) so
+  a case's 900-second wall clock starts only when that case is actually
+  dispatched; queued cases can no longer consume their deadline.
+- Added explicit Manifest lifecycle states for `created`,
+  `preflight_passed`, `running`, `completed`, `degraded`, `aborted`, and
+  `failed`, including safe SIGINT/SIGTERM handling that finishes the active
+  case write and stops accepting new cases.
+- Added controlled stops with `--max-cases` and `--stop-after-case`, and
+  changed provider-circuit termination from a fatal run failure to a
+  resumable degraded run.
+- Changed `--resume` to skip only successful case files by default and rerun
+  `failed`/`timeout` files, with an explicit `--rerun-status` override.
+- Added frozen official-entry parity tests and documented the remaining
+  immutable `main.py` wrapper differences (`idx`, forced success, extra error
+  payload, and default concurrency eight) that cannot be corrected without
+  written permission to change the official baseline.
+
 ### Phase 1 model-call minimum closed loop
 
 - Added L0/L1/L2 preflight for exact model/client readiness, strict short JSON,

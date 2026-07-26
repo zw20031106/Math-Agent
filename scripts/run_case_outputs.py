@@ -6,6 +6,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import signal
 import sys
 import tempfile
 from threading import Event, Lock, Thread
@@ -65,7 +66,8 @@ from scripts.run_benchmark import load_benchmark_config  # noqa: E402
 
 PER_CASE_WALL_CLOCK_SECONDS = 900.0
 RESULT_SERIALIZATION_RESERVE_SECONDS = 30.0
-RUN_MANIFEST_SCHEMA_VERSION = "1.1"
+RUN_MANIFEST_SCHEMA_VERSION = "1.2"
+COMPATIBLE_RUN_MANIFEST_SCHEMA_VERSIONS = frozenset({"1.1", "1.2"})
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 MODEL_PREFLIGHT_SCHEMA_VERSION = "1.0"
 MODEL_PREFLIGHT_L1_MAX_TOKENS = 256
@@ -74,6 +76,8 @@ MODEL_FAST_FAILURE_ATTEMPTS = 2
 MODEL_FAST_FAILURE_SECONDS = 10.0
 MODEL_FAST_FAILURE_BACKOFF_SECONDS = 1.0
 DEFAULT_MAX_CONSECUTIVE_PROVIDER_FAILURES = 3
+DEFAULT_RERUN_STATUSES = frozenset({"failed", "timeout"})
+PUBLIC_CASE_STATUSES = frozenset({"success", "failed", "timeout"})
 
 _PROVIDER_CIRCUIT_REASONS = frozenset(
     {
@@ -180,6 +184,47 @@ class ConsecutiveProviderFailureCircuitBreaker:
             "opened": self.opened,
             "last_failure_reasons": list(self.last_failure_reasons),
         }
+
+
+class RunStopController:
+    """Record an external stop request without interrupting the active case write."""
+
+    def __init__(self) -> None:
+        self._requested = Event()
+        self._lock = Lock()
+        self.reason = ""
+        self.exit_code = 0
+        self._previous_handlers: dict[int, Any] = {}
+
+    @property
+    def requested(self) -> bool:
+        return self._requested.is_set()
+
+    def request(self, reason: str, exit_code: int) -> None:
+        with self._lock:
+            if self._requested.is_set():
+                return
+            self.reason = str(reason)
+            self.exit_code = int(exit_code)
+            self._requested.set()
+
+    def install(self) -> None:
+        for name, exit_code in (("SIGINT", 130), ("SIGTERM", 143)):
+            signum = getattr(signal, name, None)
+            if signum is None:
+                continue
+            self._previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(
+                signum,
+                lambda _signum, _frame, reason=name.lower(), code=exit_code: (
+                    self.request(reason, code)
+                ),
+            )
+
+    def restore(self) -> None:
+        for signum, handler in self._previous_handlers.items():
+            signal.signal(signum, handler)
+        self._previous_handlers.clear()
 
 
 class PerCaseWallClockRunner:
@@ -369,6 +414,7 @@ class CaseRunManifest:
         self.path = path
         self.payload = payload
         self.resumed_case_ids: list[str] = []
+        self.rerun_case_ids: list[str] = []
         self._lock = Lock()
 
     @classmethod
@@ -382,9 +428,16 @@ class CaseRunManifest:
         seed: int,
         concurrency: int,
         resume: bool,
+        rerun_statuses: frozenset[str] = DEFAULT_RERUN_STATUSES,
     ) -> tuple[list, CaseRunManifest]:
-        if concurrency < 1:
-            raise ValueError("concurrency must be positive")
+        if concurrency != 1:
+            raise ValueError("case runner concurrency must be exactly 1")
+        invalid_rerun_statuses = set(rerun_statuses) - PUBLIC_CASE_STATUSES
+        if invalid_rerun_statuses:
+            raise ValueError(
+                "invalid rerun statuses: "
+                + ", ".join(sorted(invalid_rerun_statuses))
+            )
         for case in cases:
             _validate_identifier(case.idx)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -426,7 +479,7 @@ class CaseRunManifest:
         now = _utc_now()
         payload = existing_payload or {
             "schema_version": RUN_MANIFEST_SCHEMA_VERSION,
-            "status": "running",
+            "status": "created",
             "input_sha256": input_hash,
             "config_sha256": config_hash,
             "case_count": len(cases),
@@ -444,10 +497,17 @@ class CaseRunManifest:
             "circuit_breaker": {},
             "cases": {},
             "summary": {},
+            "attempt_count": 0,
         }
-        payload["status"] = "running"
+        payload["schema_version"] = RUN_MANIFEST_SCHEMA_VERSION
+        payload["status"] = "created"
         payload["updated_at"] = now
         payload["concurrency"] = int(concurrency)
+        payload["attempt_count"] = int(payload.get("attempt_count", 0)) + 1
+        payload.pop("failure_type", None)
+        payload.pop("stop_reason", None)
+        payload.pop("ended_at", None)
+        payload["summary"] = {}
         store = cls(manifest_path, payload)
         remaining = []
         entries = payload.setdefault("cases", {})
@@ -483,7 +543,23 @@ class CaseRunManifest:
                     "resume_source": "validated_orphan_output",
                     "completed_at": now,
                 }
-            store.resumed_case_ids.append(case.idx)
+            entry = entries[case.idx]
+            if entry.get("status") != public_payload["status"]:
+                raise ValueError(
+                    f"case output status conflicts with manifest: {case_path.name}"
+                )
+            if public_payload["status"] in rerun_statuses:
+                entries.pop(case.idx)
+                store.rerun_case_ids.append(case.idx)
+                remaining.append(case)
+            else:
+                store.resumed_case_ids.append(case.idx)
+        if remaining:
+            payload["preflight"] = {
+                "schema_version": MODEL_PREFLIGHT_SCHEMA_VERSION,
+                "status": "not_started",
+                "levels": [],
+            }
         store._persist()
         return remaining, store
 
@@ -498,6 +574,16 @@ class CaseRunManifest:
     def record_preflight(self, report: dict[str, Any]) -> None:
         with self._lock:
             self.payload["preflight"] = dict(report)
+            if report.get("status") == "passed":
+                self.payload["status"] = "preflight_passed"
+            self.payload["updated_at"] = _utc_now()
+            self._persist_locked()
+
+    def mark_running(self) -> None:
+        with self._lock:
+            if self.payload.get("preflight", {}).get("status") != "passed":
+                raise RuntimeError("cannot start cases before model preflight passes")
+            self.payload["status"] = "running"
             self.payload["updated_at"] = _utc_now()
             self._persist_locked()
 
@@ -513,7 +599,11 @@ class CaseRunManifest:
                 "run_metrics": record.run_metrics.to_dict(),
                 "score": record.score.to_dict(),
                 "request_fingerprint": record.request_fingerprint,
-                "resume_source": "executed",
+                "resume_source": (
+                    "rerun"
+                    if record.case.idx in self.rerun_case_ids
+                    else "executed"
+                ),
                 "completed_at": _utc_now(),
             }
             self.payload["updated_at"] = _utc_now()
@@ -531,18 +621,27 @@ class CaseRunManifest:
                     - len(self.resumed_case_ids),
                 ),
                 "resumed_case_count": len(self.resumed_case_ids),
+                "rerun_case_count": len(self.rerun_case_ids),
+                "pending_case_count": lifecycle["pending_case_count"],
                 "terminal_status_counts": lifecycle[
                     "terminal_status_counts"
                 ],
             }
             self.payload["summary"] = combined
-            if self.payload.get("status") != "failed":
+            if self.payload.get("status") not in {
+                "failed",
+                "degraded",
+                "aborted",
+            }:
                 self.payload["status"] = (
                     "completed"
                     if lifecycle["completed_case_count"]
                     == self.payload["case_count"]
-                    else "incomplete"
+                    else "degraded"
                 )
+                if self.payload["status"] == "degraded":
+                    self.payload["stop_reason"] = "partial_run"
+            self.payload["ended_at"] = _utc_now()
             self.payload["updated_at"] = _utc_now()
             self._persist_locked()
             return combined
@@ -551,6 +650,21 @@ class CaseRunManifest:
         with self._lock:
             self.payload["status"] = "failed"
             self.payload["failure_type"] = str(failure_type)
+            self.payload["ended_at"] = _utc_now()
+            self.payload["updated_at"] = _utc_now()
+            self._persist_locked()
+
+    def mark_degraded(self, reason: str) -> None:
+        with self._lock:
+            self.payload["status"] = "degraded"
+            self.payload["stop_reason"] = str(reason)
+            self.payload["updated_at"] = _utc_now()
+            self._persist_locked()
+
+    def mark_aborted(self, reason: str) -> None:
+        with self._lock:
+            self.payload["status"] = "aborted"
+            self.payload["stop_reason"] = str(reason)
             self.payload["updated_at"] = _utc_now()
             self._persist_locked()
 
@@ -559,8 +673,8 @@ class CaseRunManifest:
         circuit_breaker: dict[str, Any],
     ) -> None:
         with self._lock:
-            self.payload["status"] = "failed"
-            self.payload["failure_type"] = "provider_circuit_open"
+            self.payload["status"] = "degraded"
+            self.payload["stop_reason"] = "provider_circuit_open"
             self.payload["circuit_breaker"] = dict(circuit_breaker)
             self.payload["updated_at"] = _utc_now()
             self._persist_locked()
@@ -573,6 +687,10 @@ class CaseRunManifest:
             counts[status] = counts.get(status, 0) + 1
         return {
             "completed_case_count": len(entries),
+            "pending_case_count": max(
+                0,
+                int(self.payload["case_count"]) - len(entries),
+            ),
             "terminal_status_counts": dict(sorted(counts.items())),
         }
 
@@ -584,7 +702,7 @@ class CaseRunManifest:
         _atomic_write_json(self.path, self.payload)
 
 
-def main() -> int:
+def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run MathForge and atomically write one flat JSON file per case."
     )
@@ -595,26 +713,55 @@ def main() -> int:
         type=Path,
         default=ROOT / "config" / "competition.json",
     )
-    parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument(
+        "--concurrency",
+        type=_single_case_concurrency,
+        default=1,
+        help="must be 1 so queued cases do not consume their wall-clock budget",
+    )
     parser.add_argument(
         "--max-consecutive-provider-failures",
         type=int,
         default=DEFAULT_MAX_CONSECUTIVE_PROVIDER_FAILURES,
     )
+    parser.add_argument(
+        "--max-cases",
+        type=int,
+        help="stop cleanly after this many cases have executed in this attempt",
+    )
+    parser.add_argument(
+        "--stop-after-case",
+        help="stop cleanly after the named case has been persisted",
+    )
+    parser.add_argument(
+        "--rerun-status",
+        type=_parse_rerun_statuses,
+        default=DEFAULT_RERUN_STATUSES,
+        help="comma-separated existing statuses to rerun (default: failed,timeout)",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="validate completed case files against the run manifest and skip them",
+        help="validate existing files, skip success, and rerun failed/timeout",
     )
-    args = parser.parse_args()
-    if args.concurrency < 1:
-        parser.error("--concurrency must be positive")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_argument_parser()
+    args = parser.parse_args(argv)
     if args.max_consecutive_provider_failures < 1:
         parser.error("--max-consecutive-provider-failures must be positive")
+    if args.max_cases is not None and args.max_cases < 1:
+        parser.error("--max-cases must be positive")
 
     cases = load_jsonl(args.input)
     preflight_benchmark_cases(cases)
+    if args.stop_after_case is not None:
+        _validate_identifier(args.stop_after_case)
+        if args.stop_after_case not in {case.idx for case in cases}:
+            parser.error("--stop-after-case must name an input case")
     remaining_cases, manifest = CaseRunManifest.prepare(
         cases=cases,
         input_path=args.input,
@@ -623,12 +770,17 @@ def main() -> int:
         seed=args.seed,
         concurrency=args.concurrency,
         resume=args.resume,
+        rerun_statuses=args.rerun_status,
     )
     if not remaining_cases:
         summary = manifest.finalize({})
         print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
         return 0
 
+    stop_controller = RunStopController()
+    stop_controller.install()
+    summary: dict[str, Any] = {}
+    exit_code = 0
     try:
         requested_model = os.environ.get(MODEL_ENVIRONMENT_VARIABLE, "")
         if requested_model != EXACT_INTERN_MODEL:
@@ -659,11 +811,17 @@ def main() -> int:
             requested_model=model_identity.requested_model,
         )
         manifest.record_preflight(preflight_report)
+        if stop_controller.requested:
+            manifest.mark_aborted(stop_controller.reason)
+            summary = manifest.finalize({})
+            exit_code = stop_controller.exit_code
+            return _print_summary(summary, exit_code)
         if preflight_report["status"] != "passed":
             raise RuntimeError(
                 f"model preflight failed at {preflight_report['failed_level']}"
             )
         print("MODEL_PREFLIGHT_L0_L1_L2_OK", flush=True)
+        manifest.mark_running()
         harness = MathForgeHarness(
             client,
             config,
@@ -687,17 +845,24 @@ def main() -> int:
             args.max_consecutive_provider_failures
         )
         completed_records: list[BenchmarkRecord] = []
-        for offset in range(0, len(remaining_cases), args.concurrency):
-            batch = remaining_cases[offset : offset + args.concurrency]
+        for case in remaining_cases:
+            if stop_controller.requested:
+                manifest.mark_aborted(stop_controller.reason)
+                exit_code = stop_controller.exit_code
+                break
             case_records, _ = run_benchmark(
-                batch,
+                [case],
                 wall_clock_runner.solve,
-                concurrency=args.concurrency,
+                concurrency=1,
                 seed=args.seed,
                 on_record_completed=persist,
             )
             completed_records.extend(case_records)
-            if any(breaker.observe(record) for record in case_records):
+            record = case_records[0]
+            all_cases_complete = (
+                manifest.lifecycle_summary()["pending_case_count"] == 0
+            )
+            if breaker.observe(record) and not all_cases_complete:
                 manifest.mark_provider_circuit_open(breaker.to_dict())
                 print(
                     "PROVIDER_CIRCUIT_OPEN "
@@ -705,14 +870,80 @@ def main() -> int:
                     flush=True,
                 )
                 break
+            if stop_controller.requested and not all_cases_complete:
+                manifest.mark_aborted(stop_controller.reason)
+                exit_code = stop_controller.exit_code
+                break
+            planned_stop = _planned_stop_reason(
+                case_id=case.idx,
+                executed_case_count=len(completed_records),
+                stop_after_case=args.stop_after_case,
+                max_cases=args.max_cases,
+            )
+            if planned_stop and not all_cases_complete:
+                manifest.mark_degraded(planned_stop)
+                print(
+                    f"CONTROLLED_STOP reason={planned_stop} id={case.idx}",
+                    flush=True,
+                )
+                break
         benchmark_summary = summarize(completed_records)
         benchmark_summary["circuit_breaker"] = breaker.to_dict()
         summary = manifest.finalize(benchmark_summary)
     except BaseException as error:
-        manifest.mark_failed(type(error).__name__)
-        raise
+        if stop_controller.requested:
+            manifest.mark_aborted(stop_controller.reason)
+            summary = manifest.finalize({})
+            exit_code = stop_controller.exit_code
+        else:
+            manifest.mark_failed(type(error).__name__)
+            raise
+    finally:
+        stop_controller.restore()
+    return _print_summary(summary, exit_code)
+
+
+def _single_case_concurrency(value: str) -> int:
+    concurrency = int(value)
+    if concurrency != 1:
+        raise argparse.ArgumentTypeError(
+            "--concurrency must be exactly 1 for per-case deadline isolation"
+        )
+    return concurrency
+
+
+def _parse_rerun_statuses(value: str) -> frozenset[str]:
+    statuses = frozenset(
+        part.strip().lower()
+        for part in value.split(",")
+        if part.strip()
+    )
+    invalid = statuses - PUBLIC_CASE_STATUSES
+    if invalid:
+        raise argparse.ArgumentTypeError(
+            "--rerun-status contains unsupported values: "
+            + ", ".join(sorted(invalid))
+        )
+    return statuses
+
+
+def _planned_stop_reason(
+    *,
+    case_id: str,
+    executed_case_count: int,
+    stop_after_case: str | None,
+    max_cases: int | None,
+) -> str:
+    if stop_after_case is not None and case_id == stop_after_case:
+        return "stop_after_case"
+    if max_cases is not None and executed_case_count >= max_cases:
+        return "max_cases_reached"
+    return ""
+
+
+def _print_summary(summary: dict[str, Any], exit_code: int) -> int:
     print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
-    return 0
+    return int(exit_code)
 
 
 def write_case_output(record: BenchmarkRecord, output_dir: Path) -> Path:
@@ -1085,7 +1316,10 @@ def _validate_manifest_compatibility(
     case_ids: set[str],
     seed: int,
 ) -> None:
-    if payload.get("schema_version") != RUN_MANIFEST_SCHEMA_VERSION:
+    if (
+        payload.get("schema_version")
+        not in COMPATIBLE_RUN_MANIFEST_SCHEMA_VERSIONS
+    ):
         raise ValueError("run manifest schema version is incompatible")
     if payload.get("input_sha256") != input_hash:
         raise ValueError("resume input hash does not match manifest")

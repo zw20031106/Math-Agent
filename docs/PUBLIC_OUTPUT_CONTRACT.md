@@ -1,6 +1,6 @@
 # MathForge 公共输出契约
 
-版本：2.2
+版本：2.3
 
 ## 对外字段
 
@@ -94,11 +94,23 @@ watchdog 为 900 秒，其中 Harness 最迟在 870 秒交还控制权，预留 
 - 已有逐题 JSON 的精确四字段 Schema、ID、状态、非空回答和终态 Trace；
 - 逐题文件与运行清单绑定的 SHA-256。
 
-校验成功的题目直接跳过，只执行缺失题目。未知文件、损坏文件、哈希变化或
-不兼容清单会在题目模型调用前失败。
+默认只跳过校验成功且状态为 `success` 的题目；`failed` 和 `timeout`
+题目会重新执行并原子替换原结果。可以使用 `--rerun-status` 显式调整
+重跑集合。未知文件、损坏文件、哈希变化或不兼容清单会在题目模型调用前
+失败。
+
+Runner 默认且强制 `concurrency=1`，因此未启动题目的 900 秒期限不会在
+队列等待期间消耗。Manifest 依次进入 `created`、`preflight_passed`、
+`running`，并以 `completed`、`degraded`、`aborted` 或 `failed` 结束。
+SIGINT/SIGTERM 会等待当前题安全写盘、阻止启动下一题并记录 `aborted`。
+`--max-cases` 和 `--stop-after-case` 会在目标题写盘后以 `degraded`
+终止，后续可用 `--resume` 继续。
 
 ## 冻结入口边界
 
 官方 `main.py` 和 `llm_client.py` 不得修改。`main.py` 保留官方样例的
-`idx/status/final_response/trace` 包装；本项目的四字段独立文件使用
-`scripts/run_case_outputs.py`。
+`idx/status/final_response/trace` 包装，并仍会把正常返回强制标为
+`success`、在异常结果中增加 `error` 字段且默认并发为 8。本项目的精确
+四字段、状态、单题期限、Manifest 和 Resume 契约由
+`scripts/run_case_outputs.py` 提供。若要求两个入口完全一致，必须先取得
+修改冻结基线的书面许可。

@@ -51,7 +51,7 @@ finishes, use:
 
 ```bash
 export INTERN_MODEL=intern-s2-preview-397b
-python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --concurrency 1
+python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json
 ```
 
 Files are named `<id>.json` and contain exactly `id`, `status`,
@@ -73,11 +73,25 @@ constructs the official client with one internal attempt, so all outer
 transport attempts remain observable. The competition model-call gate remains
 fixed at one concurrent request.
 
-To continue an interrupted run, repeat the command with `--resume`. The runner
-validates the input/config hashes, rejects duplicate or unknown case IDs,
-validates every existing four-field JSON file and its manifest-bound hash,
-then executes only missing cases. The official `main.py` remains byte-frozen
-and retains the competition sample's `idx/status` wrapper.
+The custom runner is strictly single-case: its default concurrency is one and
+other values are rejected, so a queued case never consumes its 900-second
+deadline before dispatch. `run_manifest.json` moves through `created`,
+`preflight_passed`, and `running`, then ends as `completed`, `degraded`,
+`aborted`, or `failed`. SIGINT/SIGTERM lets the active case finish its atomic
+write, prevents another case from starting, and records `aborted`.
+
+To continue an interrupted or degraded run, repeat the command with
+`--resume`. The runner validates the input/config hashes, rejects duplicate or
+unknown case IDs, and validates every existing four-field JSON file and its
+manifest-bound hash. It skips only `success` by default and reruns
+`failed,timeout`; use `--rerun-status` to override that set. `--max-cases N`
+and `--stop-after-case ID` provide deterministic, resumable stopping points.
+
+The official `main.py` remains byte-frozen. Its wrapper still emits `idx`,
+forces normal agent returns to `success`, emits a fifth `error` field on
+exceptions, and defaults to eight local tasks. The exact four-field/status
+lifecycle contract therefore belongs to `scripts/run_case_outputs.py` unless
+written permission is granted to change the official baseline.
 
 Public Trace is an ordered audit narrative rather than a framework event dump.
 It keeps complete candidate public steps, final answers, claims, evidence,
