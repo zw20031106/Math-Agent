@@ -167,3 +167,10 @@ point.
 The competition profile intentionally remains `candidate-unvalidated`. Content
 hashes have engineering review, but human signatures and representative
 repeated A0–A10 evidence are still required before S6 can freeze the profile.
+
+Evaluation evidence uses an explicit-allow registry at
+`data/evaluation_evidence_registry.json`. Historical case directories and
+diagnostic provider failures are ineligible unless a completed, exact-model,
+current-commit artifact is explicitly activated. Validate the registry alone
+with `python scripts/verify_evidence_registry.py`; add `--results-root PATH` to
+also re-hash the locally registered evidence directories.

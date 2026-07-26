@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Phase 0 evidence freeze
+
+- Confirmed that no benchmark process was still running before changing
+  evaluation governance.
+- Added a deny-by-default evidence registry with an explicit active-baseline
+  gate. The old 88-case three-field run, the interrupted uppercase-model run,
+  and the current two-case provider-failure diagnostic are all recorded as
+  ineligible for an accuracy baseline.
+- Added deterministic directory fingerprints and an optional local tree check
+  without moving, deleting, or rewriting historical user results.
+- Integrated evidence-registry validation into submission validation. The
+  competition profile remains `candidate-unvalidated` and has no active
+  benchmark baseline.
+- Recorded that a longer local HTTP timeout does not override the official
+  provider's documented response-time boundary; existing long-timeout runs are
+  transport diagnostics rather than proof of model reliability.
+
 ### Public output and rerun hardening
 
 - Restored the enforced API request field to the official exact version ID

@@ -15,6 +15,10 @@ if str(ROOT) not in sys.path:
 
 from scripts.verify_baseline_files import verify  # noqa: E402
 from mathforge.config import load_competition_config  # noqa: E402
+from mathforge.evaluation.evidence_registry import (  # noqa: E402
+    load_evidence_registry,
+    validate_evidence_registry,
+)
 from mathforge.governance.reviews import validate_review_manifest  # noqa: E402
 from mathforge.model_identity import (  # noqa: E402
     EXACT_INTERN_MODEL,
@@ -39,6 +43,14 @@ class OfflineClient:
 
 def validate(max_file_mb: float = 5.0) -> list[str]:
     errors = verify()
+    try:
+        evidence_registry = load_evidence_registry(
+            ROOT / "data" / "evaluation_evidence_registry.json"
+        )
+    except (OSError, UnicodeDecodeError, ValueError):
+        errors.append("evidence registry is unreadable")
+    else:
+        errors.extend(validate_evidence_registry(evidence_registry))
     errors.extend(
         validate_review_manifest(
             ROOT / "docs" / "content_review_manifest.json",
