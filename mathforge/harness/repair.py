@@ -10,6 +10,10 @@ from mathforge.verification.repair_scope import (
     failed_claim_ids,
     repair_impact_closure,
 )
+from mathforge.verification.evidence import (
+    is_fatal_hard_failure,
+    is_semantic_hard_pass,
+)
 
 
 RepairCallable = Callable[
@@ -143,9 +147,7 @@ class ClaimRepairService:
             for record in new_evidence
             if record.candidate_id == proposed.candidate_id
             and record.claim_id in originally_failed
-            and record.transaction_status == "active"
-            and record.status == "pass"
-            and record.strength == "hard"
+            and is_semantic_hard_pass(record)
         }
         if set(originally_failed) - passed_failed_claims:
             self._mark_transaction(new_evidence, "rejected")
@@ -168,9 +170,7 @@ class ClaimRepairService:
             for record in evidence
             if record.candidate_id == candidate.candidate_id
             and record.claim_id in affected
-            and record.transaction_status == "active"
-            and record.status == "pass"
-            and record.strength == "hard"
+            and is_semantic_hard_pass(record)
         }
         required_reverification = set(changed) | previously_verified
         passed_affected = {
@@ -178,9 +178,7 @@ class ClaimRepairService:
             for record in new_evidence
             if record.candidate_id == proposed.candidate_id
             and record.claim_id in required_reverification
-            and record.transaction_status == "active"
-            and record.status == "pass"
-            and record.strength == "hard"
+            and is_semantic_hard_pass(record)
         }
         if required_reverification - passed_affected:
             self._mark_transaction(new_evidence, "rejected")
@@ -226,7 +224,7 @@ class ClaimRepairService:
                 new_evidence,
                 "evidence_quality_decreased",
             )
-        if any(record.status == "fail" and record.strength == "hard" for record in new_evidence):
+        if any(is_fatal_hard_failure(record) for record in new_evidence):
             self._mark_transaction(new_evidence, "rejected")
             return RepairResult(
                 candidate,
@@ -357,8 +355,8 @@ class ClaimRepairService:
             for record in records
             if record.transaction_status == "active"
         ]
-        hard_fails = sum(record.strength == "hard" and record.status == "fail" for record in records)
-        hard_passes = sum(record.strength == "hard" and record.status == "pass" for record in records)
+        hard_fails = sum(is_fatal_hard_failure(record) for record in records)
+        hard_passes = sum(is_semantic_hard_pass(record) for record in records)
         medium_passes = sum(
             record.strength == "medium" and record.status == "pass" for record in records
         )

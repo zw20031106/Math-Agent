@@ -12,6 +12,7 @@ from mathforge.harness.schemas import (
 )
 from mathforge.tools.executor import ToolExecutor
 from mathforge.verification.equivalence import analyze_equivalence
+from mathforge.verification.evidence import is_fatal_hard_failure
 from mathforge.verification.methods import (
     candidate_method_signature,
     method_contract_valid,
@@ -129,7 +130,7 @@ class ArbitrationPolicy:
             and record.transaction_status == "active"
         ]
         hard_fails = sum(
-            record.status == "fail" and record.strength == "hard" for record in own_evidence
+            is_fatal_hard_failure(record) for record in own_evidence
         )
         required = [obligation for obligation in obligations if obligation.required]
         coverage = (

@@ -16,6 +16,8 @@ class ClaimKind(str, Enum):
     INTERCHANGE = "interchange"
     EQUALITY = "equality"
     MATRIX_SHAPE = "matrix_shape"
+    PROBABILITY_NORMALIZATION = "probability_normalization"
+    FINITE_CASE = "finite_case"
     ANSWER_SHAPE = "answer_shape"
 
 
@@ -58,6 +60,8 @@ _CHECK_CLAIM_KINDS = {
     "reasoning": ClaimKind.REASONING.value,
     "symbolic_equivalence": ClaimKind.EQUALITY.value,
     "matrix_shape_check": ClaimKind.MATRIX_SHAPE.value,
+    "density_normalization": ClaimKind.PROBABILITY_NORMALIZATION.value,
+    "small_case_enumeration": ClaimKind.FINITE_CASE.value,
     "answer_type_check": ClaimKind.ANSWER_SHAPE.value,
 }
 
@@ -70,6 +74,21 @@ _SEMANTIC_CAPABILITIES = frozenset(
     }
 )
 
+_CAPABILITY_CLAIM_KINDS = {
+    VerificationCapability.EQUALITY_SYMBOLIC_UNDER_DOMAIN.value: frozenset(
+        {ClaimKind.EQUALITY.value}
+    ),
+    VerificationCapability.MATRIX_SHAPE.value: frozenset(
+        {ClaimKind.MATRIX_SHAPE.value}
+    ),
+    VerificationCapability.PROBABILITY_NORMALIZATION.value: frozenset(
+        {ClaimKind.PROBABILITY_NORMALIZATION.value}
+    ),
+    VerificationCapability.FINITE_CASE_EXACT.value: frozenset(
+        {ClaimKind.FINITE_CASE.value}
+    ),
+}
+
 
 def derive_claim_kind(check_suggestion: str) -> str:
     normalized = str(check_suggestion).strip().lower()
@@ -80,6 +99,29 @@ def derive_claim_kind(check_suggestion: str) -> str:
 
 def capability_verifies_claim(capability: str) -> bool:
     return str(capability) in _SEMANTIC_CAPABILITIES
+
+
+def capability_applies_to_claim(capability: str, claim_kind: str) -> bool:
+    return str(claim_kind) in _CAPABILITY_CLAIM_KINDS.get(
+        str(capability),
+        frozenset(),
+    )
+
+
+def fatal_capability_applies(
+    capability: str,
+    claim_kind: str,
+    *,
+    input_complete: bool,
+    context_complete: bool,
+    representation_only: bool = False,
+) -> bool:
+    return (
+        input_complete
+        and context_complete
+        and not representation_only
+        and capability_applies_to_claim(capability, claim_kind)
+    )
 
 
 def capability_satisfies_obligation(capability: str, obligation_kind: str) -> bool:

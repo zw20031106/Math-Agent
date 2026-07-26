@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-import re
 from time import perf_counter
 
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.schemas import CandidateSolution, ProblemIR
 from mathforge.tools.executor import ToolExecutor
+from mathforge.verification.answer_normalization import canonical_answer
 
 
 class EquivalenceStatus(str, Enum):
@@ -24,8 +24,8 @@ class EquivalenceAnalysis:
     disagreement_pairs: list[tuple[str, str]]
 
 
-def normalized_answer(answer: str) -> str:
-    return re.sub(r"\s+", "", answer).strip(".$").lower()
+def normalized_answer(answer: str, answer_type: str = "expression") -> str:
+    return canonical_answer(answer, answer_type)
 
 
 def equivalent_answers(
@@ -35,10 +35,12 @@ def equivalent_answers(
     tool_executor: ToolExecutor | None = None,
     budget: CallBudget | None = None,
 ) -> EquivalenceStatus:
-    if normalized_answer(left.final_answer) == normalized_answer(right.final_answer):
-        return EquivalenceStatus.EQUIVALENT
-
     answer_type = problem.answer_type if problem is not None else left.answer_type
+    if normalized_answer(
+        left.final_answer,
+        answer_type,
+    ) == normalized_answer(right.final_answer, answer_type):
+        return EquivalenceStatus.EQUIVALENT
     assumptions = list(problem.assumptions) if problem is not None else []
     domains = dict(problem.domains) if problem is not None else {}
     high_risk = answer_type in {"interval", "set"} or any(

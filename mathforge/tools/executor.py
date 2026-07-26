@@ -47,6 +47,17 @@ class ToolExecutor:
     def fingerprint(self) -> str:
         return self._registry.fingerprint
 
+    @property
+    def registered_tools(self) -> frozenset[str]:
+        return frozenset(self._registry.names())
+
+    def validate_arguments(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> list[str]:
+        return self._registry.validate_arguments(name, arguments)
+
     def is_isolated(self, name: str) -> bool:
         return self._use_mcp or self._registry.get(name).isolated
 

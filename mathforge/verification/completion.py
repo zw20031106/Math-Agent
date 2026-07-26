@@ -6,7 +6,10 @@ from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProofOb
 from mathforge.verification.capabilities import (
     VerificationCapability,
     capability_satisfies_obligation,
-    capability_verifies_claim,
+)
+from mathforge.verification.evidence import (
+    is_fatal_hard_failure,
+    is_semantic_hard_pass,
 )
 
 
@@ -42,9 +45,7 @@ class ProofCompletionGate:
                 record.claim_id
                 for record in own_evidence
                 if record.claim_id is not None
-                and record.status == "fail"
-                and record.strength == "hard"
-                and capability_verifies_claim(record.capability)
+                and is_fatal_hard_failure(record)
             }
         )
         failed_obligations = sorted(
@@ -110,3 +111,43 @@ class ProofCompletionGate:
             [],
             [],
         )
+
+
+def deterministic_degraded_candidates(
+    candidates: list[CandidateSolution],
+    evidence: list[EvidenceRecord],
+    obligations: dict[str, list[ProofObligation]],
+) -> list[CandidateSolution]:
+    """Keep evidence-backed candidates when the optional LLM verifier is unavailable."""
+    ranked: list[tuple[tuple[int, int, int], int, CandidateSolution]] = []
+    for order, candidate in enumerate(candidates):
+        own = [
+            record
+            for record in evidence
+            if record.candidate_id == candidate.candidate_id
+            and record.transaction_status == "active"
+        ]
+        if any(is_fatal_hard_failure(record) for record in own):
+            continue
+        own_obligations = obligations.get(candidate.candidate_id, [])
+        if any(item.required and item.status == "failed" for item in own_obligations):
+            continue
+        semantic_passes = sum(
+            is_semantic_hard_pass(record)
+            for record in own
+        )
+        if semantic_passes == 0:
+            continue
+        satisfied = sum(
+            item.required and item.status == "satisfied"
+            for item in own_obligations
+        )
+        unresolved = sum(
+            item.required and item.status != "satisfied"
+            for item in own_obligations
+        )
+        ranked.append(
+            ((-satisfied, -semantic_passes, unresolved), order, candidate)
+        )
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    return [item[2] for item in ranked]

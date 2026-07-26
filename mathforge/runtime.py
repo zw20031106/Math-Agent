@@ -32,7 +32,10 @@ from mathforge.output.deterministic_formatter import DeterministicFormatter
 from mathforge.parsing.problem_parser import ProblemParser
 from mathforge.parsing.solution_parser import SolutionParser
 from mathforge.tools.executor import ToolExecutor
-from mathforge.verification.evidence import EvidenceLedger
+from mathforge.verification.evidence import (
+    EvidenceLedger,
+    is_fatal_hard_failure,
+)
 from mathforge.verification.arbitration import ArbitrationPolicy
 from mathforge.verification.proof_obligations import ProofObligationEngine
 from mathforge.context.errors import ContextBudgetExceeded
@@ -47,7 +50,10 @@ from mathforge.agents.repair import RepairAgent
 from mathforge.harness.repair import ClaimRepairService
 from mathforge.agents.finalizer import LLMFinalizer
 from mathforge.agents.verifier import VerifierSkepticAgent
-from mathforge.verification.completion import ProofCompletionGate
+from mathforge.verification.completion import (
+    ProofCompletionGate,
+    deterministic_degraded_candidates,
+)
 
 
 _ROLE_CONTRACT_DIRECTORIES = {
@@ -642,6 +648,14 @@ class MathForgeHarness:
                         {
                             "candidate_id": item.candidate_id,
                             "status": result.status,
+                            "request_status": "ready",
+                            "schema_valid": not self._tool_executor.validate_arguments(
+                                "answer_type_check",
+                                {
+                                    "answer": item.final_answer,
+                                    "answer_type": session.problem_ir.answer_type,
+                                },
+                            ),
                             "outcome_reason": _tool_outcome_reason(
                                 result.status,
                                 result.summary,
@@ -662,6 +676,13 @@ class MathForgeHarness:
                                 "candidate_id": item.candidate_id,
                                 "claim_id": record.claim_id,
                                 "status": record.status,
+                                "request_status": record.invocation.get(
+                                    "request_status",
+                                    record.payload.get("request_status", ""),
+                                ),
+                                "schema_valid": bool(
+                                    record.invocation.get("schema_valid", False)
+                                ),
                                 "outcome_reason": _tool_outcome_reason(
                                     record.status,
                                     record.description,
@@ -711,9 +732,7 @@ class MathForgeHarness:
                         record.claim_id or "__answer_shape__"
                         for record in session.evidence
                         if record.candidate_id == item.candidate_id
-                        and record.transaction_status == "active"
-                        and record.strength == "hard"
-                        and record.status == "fail"
+                        and is_fatal_hard_failure(record)
                     }
                 )
                 for item in active_candidates
@@ -1014,16 +1033,11 @@ class MathForgeHarness:
                     )
                 )
                 if not rejection_codes and self._config.enable_tools:
-                    expanded_result, _ = self._run_answer_type_check(
+                    self._run_answer_type_check(
                         session,
                         expanded,
                         ledger,
                     )
-                    if (
-                        expanded_result.status == "fail"
-                        and expanded_result.strength == "hard"
-                    ):
-                        rejection_codes.append("answer_type_hard_fail")
                 if (
                     not rejection_codes
                     and self._config.enable_tools
@@ -1126,6 +1140,7 @@ class MathForgeHarness:
                 if obligation.required
             ]
             skeptic_reviewed: set[str] = set()
+            verifier_reason = "not_requested"
             if (
                 self._config.enable_verifier
                 and self._config.enable_evidence
@@ -1133,28 +1148,38 @@ class MathForgeHarness:
                 and required_obligations
                 and session.budget.deadline.exploration_allowed()
             ):
-                verifier_context = self._build_role_context(
-                    session,
-                    blackboard,
-                    trace,
-                    role="VerifierSkeptic",
-                    candidates=viable,
-                    evidence=session.evidence,
-                )
-                verifier_result = self._verifier_agent.review(
-                    session.problem_ir,
-                    viable,
-                    session.proof_obligations,
-                    session.budget,
-                    max_tokens=self._config.primary_max_tokens,
-                    context_view=verifier_context,
-                    evidence=session.evidence,
-                    skill_context=role_skill_contexts.get(
-                        "VerifierSkeptic",
-                        "",
-                    ),
-                )
-                for finding in verifier_result.findings:
+                try:
+                    verifier_context = self._build_role_context(
+                        session,
+                        blackboard,
+                        trace,
+                        role="VerifierSkeptic",
+                        candidates=viable,
+                        evidence=session.evidence,
+                    )
+                    verifier_result = self._verifier_agent.review(
+                        session.problem_ir,
+                        viable,
+                        session.proof_obligations,
+                        session.budget,
+                        max_tokens=self._config.primary_max_tokens,
+                        context_view=verifier_context,
+                        evidence=session.evidence,
+                        skill_context=role_skill_contexts.get(
+                            "VerifierSkeptic",
+                            "",
+                        ),
+                    )
+                except Exception:
+                    verifier_result = None
+                    verifier_reason = "verifier_unavailable"
+                if verifier_result is not None:
+                    verifier_reason = verifier_result.reason
+                for finding in (
+                    verifier_result.findings
+                    if verifier_result is not None
+                    else []
+                ):
                     ledger.record_verifier_finding(
                         candidate_id=finding.candidate_id,
                         claim_id=finding.claim_id,
@@ -1167,10 +1192,18 @@ class MathForgeHarness:
                     skeptic_reviewed.add(finding.candidate_id)
                 trace.add(
                     "verifier_completed",
-                    used_llm=verifier_result.used_llm,
-                    finding_count=len(verifier_result.findings),
+                    used_llm=(
+                        verifier_result.used_llm
+                        if verifier_result is not None
+                        else False
+                    ),
+                    finding_count=(
+                        len(verifier_result.findings)
+                        if verifier_result is not None
+                        else 0
+                    ),
                     reviewed_candidates=sorted(skeptic_reviewed),
-                    reason=verifier_result.reason,
+                    reason=verifier_reason,
                 )
             self._transition(
                 session,
@@ -1196,9 +1229,29 @@ class MathForgeHarness:
                     for decision in completion_decisions
                     if decision.status == "complete"
                 }
+                degraded_candidates = []
+                if (
+                    not completed_ids
+                    and verifier_reason
+                    in {"verifier_unavailable", "finalize_cutoff"}
+                ):
+                    degraded_candidates = deterministic_degraded_candidates(
+                        viable,
+                        session.evidence,
+                        session.proof_obligations,
+                    )
+                    completed_ids = {
+                        item.candidate_id for item in degraded_candidates
+                    }
                 trace.add(
                     "proof_completion_gate",
                     accepted=sorted(completed_ids),
+                    mode=(
+                        "deterministic_degraded"
+                        if degraded_candidates
+                        else "strict"
+                    ),
+                    verifier_reason=verifier_reason,
                     decisions=[
                         {
                             **decision.to_dict(),
@@ -1222,6 +1275,7 @@ class MathForgeHarness:
                         }
                         for decision in completion_decisions
                         if decision.status != "complete"
+                        and decision.candidate_id not in completed_ids
                     ],
                 )
                 viable = [item for item in viable if item.candidate_id in completed_ids]
@@ -1669,6 +1723,14 @@ class MathForgeHarness:
                     domains=session.problem_ir.domains,
                     duration_ms=duration_ms,
                     timeout_seconds=timeout,
+                    claim_kind="answer_shape",
+                    input_complete=True,
+                    context_complete=True,
+                    request_status="ready",
+                    schema_valid=not self._tool_executor.validate_arguments(
+                        "answer_type_check",
+                        arguments,
+                    ),
                 )
             )
         return result, records
@@ -1823,7 +1885,7 @@ class MathForgeHarness:
             claim_results=claim_results,
             answer_shape=answer_shape,
             hard_fail=any(
-                record.status == "fail" and record.strength == "hard"
+                is_fatal_hard_failure(record)
                 for record in active_records
             ),
             unknown_claim_ids=[
@@ -1925,9 +1987,7 @@ class MathForgeHarness:
                 record.evidence_id
                 for record in session.evidence
                 if record.candidate_id == candidate.candidate_id
-                and record.transaction_status == "active"
-                and record.strength == "hard"
-                and record.status == "fail"
+                and is_fatal_hard_failure(record)
             ]
             reasons = list(
                 expanded_precheck_rejections.get(candidate.candidate_id, [])
@@ -2003,9 +2063,7 @@ class MathForgeHarness:
             )
             if any(
                 record.candidate_id == candidate.candidate_id
-                and record.transaction_status == "active"
-                and record.status == "fail"
-                and record.strength == "hard"
+                and is_fatal_hard_failure(record)
                 for record in session.evidence
             ):
                 reasons.append("hard_evidence_failure")

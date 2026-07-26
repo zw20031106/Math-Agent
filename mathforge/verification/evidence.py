@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from hashlib import sha256
 import json
-import re
 from time import perf_counter
 from uuid import uuid4
 
@@ -15,8 +14,11 @@ from mathforge.harness.schemas import CandidateSolution
 from mathforge.verification.capabilities import (
     ClaimVerificationState,
     VerificationCapability,
-    capability_verifies_claim,
+    capability_applies_to_claim,
+    derive_claim_kind,
+    fatal_capability_applies,
 )
+from mathforge.verification.tool_requests import ClaimToolRequestBuilder
 
 
 class EvidenceLedger:
@@ -74,6 +76,11 @@ class EvidenceLedger:
         domains: dict[str, str] | None = None,
         duration_ms: float | None = None,
         timeout_seconds: float | None = None,
+        claim_kind: str = "unknown",
+        input_complete: bool = False,
+        context_complete: bool = False,
+        request_status: str = "untracked",
+        schema_valid: bool = False,
     ) -> EvidenceRecord:
         self._validate_reference(candidate_id, claim_id)
         self._reserve_record()
@@ -84,6 +91,11 @@ class EvidenceLedger:
             domains=domains,
             duration_ms=duration_ms,
             timeout_seconds=timeout_seconds,
+            claim_kind=claim_kind,
+            input_complete=input_complete,
+            context_complete=context_complete,
+            request_status=request_status,
+            schema_valid=schema_valid,
         )
         record = EvidenceRecord(
             evidence_id=f"ev-{uuid4().hex[:12]}",
@@ -142,6 +154,9 @@ class EvidenceLedger:
         claim_id: str,
         check_suggestion: str,
         reason: str = "unsupported check suggestion",
+        tool_name: str = "",
+        request_status: str = "unsupported",
+        validation_errors: list[str] | None = None,
     ) -> EvidenceRecord:
         self._validate_reference(candidate_id, claim_id)
         self._reserve_record()
@@ -156,8 +171,17 @@ class EvidenceLedger:
             payload={
                 "check_suggestion": str(check_suggestion),
                 "reason": str(reason),
+                "tool_name": str(tool_name),
+                "request_status": str(request_status),
+                "validation_errors": list(validation_errors or []),
             },
-            invocation={"resolver": "host_capability_matrix"},
+            invocation={
+                "resolver": "host_capability_matrix",
+                "tool_name": str(tool_name),
+                "request_status": str(request_status),
+                "schema_valid": False,
+                "fatal_eligible": False,
+            },
             capability=VerificationCapability.NONE.value,
         )
         self._records.append(record)
@@ -168,8 +192,7 @@ class EvidenceLedger:
             record.candidate_id == candidate_id
             and (claim_id is None or record.claim_id == claim_id)
             and record.transaction_status == "active"
-            and record.strength == "hard"
-            and record.status == "fail"
+            and is_fatal_hard_failure(record)
             for record in self._records
         )
 
@@ -179,6 +202,7 @@ class ClaimEvidenceVerifier:
 
     def __init__(self, tools: ToolExecutor) -> None:
         self._tools = tools
+        self._requests = ClaimToolRequestBuilder(tools)
 
     def verify(
         self,
@@ -192,7 +216,6 @@ class ClaimEvidenceVerifier:
         selected_tools: list[str] | None = None,
     ) -> list[EvidenceRecord]:
         allowed = set(only_claim_ids) if only_claim_ids is not None else None
-        route_tools = set(selected_tools) if selected_tools is not None else None
         effective_assumptions = list(
             dict.fromkeys([*(assumptions or []), *candidate.assumptions])
         )
@@ -200,55 +223,43 @@ class ClaimEvidenceVerifier:
         for claim in candidate.claims:
             if allowed is not None and claim.claim_id not in allowed:
                 continue
-            tool_name = self._tool_name(claim.check_type)
-            if tool_name is None:
+            if claim.claim_kind == "unknown":
+                claim.claim_kind = derive_claim_kind(claim.check_type)
+            request = self._requests.build(
+                candidate,
+                claim,
+                domains=domains,
+                assumptions=assumptions,
+                selected_tools=selected_tools,
+            )
+            if not request.ready:
                 claim.verification_state = ClaimVerificationState.UNKNOWN.value
-                if claim.check_type.strip().lower() != "reasoning":
+                if request.status != "unsupported" or claim.check_type.strip().lower() != "reasoning":
                     try:
                         record = ledger.record_unknown_check(
                             candidate_id=candidate.candidate_id,
                             claim_id=claim.claim_id,
                             check_suggestion=claim.check_type,
+                            tool_name=request.tool_name,
+                            request_status=request.status,
+                            validation_errors=request.validation_errors,
+                            reason={
+                                "route_not_selected": "check not selected by route",
+                                "argument_unavailable": (
+                                    "safe argument reconstruction unavailable"
+                                ),
+                                "schema_invalid": "tool input schema invalid",
+                            }.get(
+                                request.status,
+                                "unsupported check suggestion",
+                            ),
                         )
                     except BudgetExceeded:
                         break
                     records.append(record)
                 continue
-            if route_tools is not None and tool_name not in route_tools:
-                claim.verification_state = ClaimVerificationState.UNKNOWN.value
-                try:
-                    records.append(
-                        ledger.record_unknown_check(
-                            candidate_id=candidate.candidate_id,
-                            claim_id=claim.claim_id,
-                            check_suggestion=claim.check_type,
-                            reason="check not selected by route",
-                        )
-                    )
-                except BudgetExceeded:
-                    break
-                continue
-            arguments = self._arguments(
-                candidate,
-                tool_name,
-                claim.statement,
-                domains=domains,
-                assumptions=effective_assumptions,
-            )
-            if arguments is None:
-                claim.verification_state = ClaimVerificationState.UNKNOWN.value
-                try:
-                    records.append(
-                        ledger.record_unknown_check(
-                            candidate_id=candidate.candidate_id,
-                            claim_id=claim.claim_id,
-                            check_suggestion=claim.check_type,
-                            reason="safe argument reconstruction unavailable",
-                        )
-                    )
-                except BudgetExceeded:
-                    break
-                continue
+            tool_name = request.tool_name
+            arguments = request.arguments
             timeout = self._tools.default_timeout
             if budget is not None:
                 try:
@@ -279,6 +290,17 @@ class ClaimEvidenceVerifier:
                     domains=domains,
                     duration_ms=duration_seconds * 1000,
                     timeout_seconds=timeout,
+                    claim_kind=claim.claim_kind,
+                    input_complete=True,
+                    context_complete=(
+                        tool_name != "symbolic_equivalence"
+                        or (
+                            "assumptions" in arguments
+                            and "domains" in arguments
+                        )
+                    ),
+                    request_status=request.status,
+                    schema_valid=request.schema_valid,
                 )
             except BudgetExceeded:
                 break
@@ -288,96 +310,32 @@ class ClaimEvidenceVerifier:
             if (
                 result.strength == "hard"
                 and result.status == "pass"
-                and capability_verifies_claim(result.capability)
+                and capability_applies_to_claim(
+                    result.capability,
+                    claim.claim_kind,
+                )
             ):
                 claim.status = "verified"
                 claim.verification_state = ClaimVerificationState.SEMANTICALLY_VERIFIED.value
             elif (
                 result.strength == "hard"
                 and result.status == "fail"
-                and capability_verifies_claim(result.capability)
+                and fatal_capability_applies(
+                    result.capability,
+                    claim.claim_kind,
+                    input_complete=True,
+                    context_complete=(
+                        tool_name != "symbolic_equivalence"
+                        or (
+                            "assumptions" in arguments
+                            and "domains" in arguments
+                        )
+                    ),
+                )
             ):
                 claim.status = "rejected"
                 claim.verification_state = ClaimVerificationState.REJECTED.value
         return records
-
-    @staticmethod
-    def _tool_name(check_suggestion: str) -> str | None:
-        normalized = str(check_suggestion).strip().lower()
-        if normalized in {
-            "safe_parse_expression",
-            "symbolic_equivalence",
-            "simplify_expression",
-            "numerical_residual",
-            "matrix_shape_check",
-            "density_normalization",
-            "small_case_enumeration",
-            "latex_syntax_check",
-            "answer_type_check",
-        }:
-            return normalized
-        return None
-
-    @staticmethod
-    def _arguments(
-        candidate: CandidateSolution,
-        check_type: str,
-        statement: str,
-        *,
-        domains: dict[str, str] | None = None,
-        assumptions: list[str] | None = None,
-    ) -> dict | None:
-        if check_type in {"symbolic_equivalence", "numerical_residual"}:
-            parts = re.split(r"==|(?<![<>!])=(?!=)", statement, maxsplit=1)
-            if len(parts) != 2:
-                return None
-            arguments = {"left": parts[0].strip(), "right": parts[1].strip()}
-            if check_type == "symbolic_equivalence":
-                arguments["assumptions"] = list(assumptions or candidate.assumptions)
-                arguments["domains"] = dict(domains or {})
-            return arguments
-        if check_type in {"safe_parse_expression", "simplify_expression"}:
-            return {"expression": statement}
-        if check_type == "matrix_shape_check":
-            return {"matrix": statement}
-        if check_type == "latex_syntax_check":
-            return {"text": statement}
-        if check_type == "answer_type_check":
-            return {"answer": candidate.final_answer, "answer_type": candidate.answer_type}
-        if check_type == "density_normalization":
-            matched = re.fullmatch(
-                r"\s*density\[\s*expression=(?P<expression>[^;]+);\s*"
-                r"variable=(?P<variable>[A-Za-z][A-Za-z0-9_]*);\s*"
-                r"lower=(?P<lower>[^;]+);\s*upper=(?P<upper>[^\]]+)\]\s*",
-                statement,
-            )
-            if matched is None:
-                return None
-            return {
-                key: value.strip()
-                for key, value in matched.groupdict().items()
-            }
-        if check_type == "small_case_enumeration":
-            matched = re.fullmatch(
-                r"\s*cases\[\s*variable=(?P<variable>[A-Za-z][A-Za-z0-9_]*);\s*"
-                r"values=(?P<values>-?\d+(?:\s*,\s*-?\d+)*);\s*"
-                r"expression=(?P<expression>[^;]+);\s*"
-                r"expected=(?P<expected>[^\]]+)\]\s*",
-                statement,
-            )
-            if matched is None:
-                return None
-            return {
-                "variable": matched.group("variable"),
-                "values": [
-                    int(value.strip())
-                    for value in matched.group("values").split(",")
-                ],
-                "expression": matched.group("expression").strip(),
-                "expected": matched.group("expected").strip(),
-            }
-        return None
-
 
 def _tool_invocation(
     result: ToolResult,
@@ -387,6 +345,11 @@ def _tool_invocation(
     domains: dict[str, str] | None,
     duration_ms: float | None,
     timeout_seconds: float | None,
+    claim_kind: str,
+    input_complete: bool,
+    context_complete: bool,
+    request_status: str,
+    schema_valid: bool,
 ) -> dict:
     reproducible = _json_safe(
         {
@@ -406,6 +369,17 @@ def _tool_invocation(
     ).encode("utf-8")
     return {
         **reproducible,
+        "claim_kind": str(claim_kind),
+        "input_complete": bool(input_complete),
+        "context_complete": bool(context_complete),
+        "request_status": str(request_status),
+        "schema_valid": bool(schema_valid),
+        "fatal_eligible": fatal_capability_applies(
+            result.capability,
+            claim_kind,
+            input_complete=input_complete and schema_valid,
+            context_complete=context_complete,
+        ),
         "input_digest": sha256(canonical).hexdigest(),
         "timeout_seconds": timeout_seconds,
         "duration_ms": round(max(0.0, float(duration_ms or 0.0)), 3),
@@ -414,3 +388,29 @@ def _tool_invocation(
 
 def _json_safe(value):
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def is_fatal_hard_failure(record: EvidenceRecord) -> bool:
+    return (
+        record.transaction_status == "active"
+        and record.strength == "hard"
+        and record.status == "fail"
+        and record.invocation.get("fatal_eligible") is True
+        and capability_applies_to_claim(
+            record.capability,
+            str(record.invocation.get("claim_kind", "unknown")),
+        )
+    )
+
+
+def is_semantic_hard_pass(record: EvidenceRecord) -> bool:
+    return (
+        record.transaction_status == "active"
+        and record.strength == "hard"
+        and record.status == "pass"
+        and record.invocation.get("schema_valid") is True
+        and capability_applies_to_claim(
+            record.capability,
+            str(record.invocation.get("claim_kind", "unknown")),
+        )
+    )

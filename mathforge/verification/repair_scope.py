@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from mathforge.context.claim_graph import ClaimGraph, namespaced_claim_id
 from mathforge.harness.schemas import CandidateSolution, EvidenceRecord
+from mathforge.verification.evidence import is_fatal_hard_failure
 
 
 def failed_claim_ids(candidate_id: str, evidence: list[EvidenceRecord]) -> list[str]:
@@ -11,9 +12,7 @@ def failed_claim_ids(candidate_id: str, evidence: list[EvidenceRecord]) -> list[
             for record in evidence
             if record.candidate_id == candidate_id
             and record.claim_id is not None
-            and record.transaction_status == "active"
-            and record.status == "fail"
-            and record.strength == "hard"
+            and is_fatal_hard_failure(record)
         }
     )
 

@@ -89,7 +89,7 @@ def test_manifest_resume_validates_schema_and_bound_output_hash(tmp_path):
     assert set(public) == {"id", "status", "final_response", "trace"}
     assert public["status"] == "success"
     assert internal["status"] == "completed"
-    assert internal["cases"]["1"]["run_metrics"]["schema_version"] == "1.3"
+    assert internal["cases"]["1"]["run_metrics"]["schema_version"] == "1.4"
     assert internal["cases"]["1"]["output_sha256"] == sha256(
         output_path.read_bytes()
     ).hexdigest()

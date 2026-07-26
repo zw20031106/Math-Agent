@@ -5,6 +5,17 @@ from mathforge.harness.schemas import CandidateSolution
 
 def candidate_method_signature(candidate: CandidateSolution) -> tuple:
     """Describe actual structured work without trusting a free-text method label."""
+    claim_structure = tuple(
+        sorted(
+            (
+                claim.claim_kind.strip().lower(),
+                claim.check_type.strip().lower(),
+                tuple(sorted(claim.depends_on)),
+                claim.importance.strip().lower(),
+            )
+            for claim in candidate.claims
+        )
+    )
     if candidate.method_steps:
         steps = tuple(
             (
@@ -16,19 +27,10 @@ def candidate_method_signature(candidate: CandidateSolution) -> tuple:
             for step in candidate.method_steps
         )
     else:
-        steps = tuple(
-            sorted(
-                (
-                    claim.claim_kind.strip().lower(),
-                    claim.check_type.strip().lower(),
-                    tuple(sorted(claim.depends_on)),
-                    claim.importance.strip().lower(),
-                )
-                for claim in candidate.claims
-            )
-        )
+        steps = claim_structure
     return (
         tuple(sorted(theorem.strip().lower() for theorem in candidate.theorems)),
+        claim_structure,
         steps,
     )
 

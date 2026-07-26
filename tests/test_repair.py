@@ -21,7 +21,21 @@ def _candidate() -> CandidateSolution:
 
 
 def _record(candidate_id: str, claim_id: str, status: str) -> EvidenceRecord:
-    return EvidenceRecord("e", candidate_id, claim_id, "tool:test", status, "hard", "test")
+    return EvidenceRecord(
+        "e",
+        candidate_id,
+        claim_id,
+        "tool:symbolic_equivalence",
+        status,
+        "hard",
+        "test",
+        invocation={
+            "claim_kind": "equality",
+            "schema_valid": True,
+            "fatal_eligible": status == "fail",
+        },
+        capability="equality.symbolic_under_domain",
+    )
 
 
 def test_no_evidence_means_no_repair():

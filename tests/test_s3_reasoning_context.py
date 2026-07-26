@@ -59,6 +59,11 @@ def _evidence(candidate_id: str, claim_id: str, status: str) -> EvidenceRecord:
         status,
         "hard",
         "check",
+        invocation={
+            "claim_kind": "equality",
+            "schema_valid": True,
+            "fatal_eligible": status == "fail",
+        },
         capability="equality.symbolic_under_domain",
     )
 

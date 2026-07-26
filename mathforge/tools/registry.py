@@ -250,6 +250,33 @@ class ToolRegistry:
         except KeyError as error:
             raise KeyError(f"unknown tool: {name}") from error
 
+    def validate_arguments(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> list[str]:
+        self.get(name)
+        if not isinstance(arguments, dict):
+            return ["arguments:not_object"]
+        properties = _INPUT_SCHEMAS[name]
+        required = {
+            key
+            for key in properties
+            if key not in _OPTIONAL_ARGUMENTS.get(name, set())
+        }
+        errors = [
+            f"{key}:missing"
+            for key in sorted(required - set(arguments))
+        ]
+        errors.extend(
+            f"{key}:unexpected"
+            for key in sorted(set(arguments) - set(properties))
+        )
+        for key in sorted(set(arguments).intersection(properties)):
+            if not _matches_schema(arguments[key], properties[key]):
+                errors.append(f"{key}:invalid_type")
+        return errors
+
     def claim_prompt_examples(
         self,
         names: list[str] | tuple[str, ...],
@@ -306,3 +333,30 @@ def run_tool_direct(name: str, arguments: dict[str, Any]) -> ToolResult:
         capability=definition.capability,
         claim_state=definition.claim_state,
     )
+
+
+def _matches_schema(value: Any, schema: dict[str, Any]) -> bool:
+    alternatives = schema.get("anyOf")
+    if isinstance(alternatives, list):
+        return any(_matches_schema(value, item) for item in alternatives)
+    expected = schema.get("type")
+    if expected == "string":
+        return isinstance(value, str)
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "array":
+        return isinstance(value, list) and all(
+            _matches_schema(item, schema.get("items", {}))
+            for item in value
+        )
+    if expected == "object":
+        if not isinstance(value, dict):
+            return False
+        additional = schema.get("additionalProperties", {})
+        return all(
+            isinstance(key, str) and _matches_schema(item, additional)
+            for key, item in value.items()
+        )
+    return True

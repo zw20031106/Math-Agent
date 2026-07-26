@@ -384,6 +384,7 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
     context_attempts = sum(item.context_view_attempts for item in metrics)
     context_failures = sum(item.context_view_failures for item in metrics)
     tool_checks = sum(item.tool_checks for item in metrics)
+    tool_requests = sum(item.tool_requests for item in metrics)
     lemma_checks = sum(item.lemma_checks for item in metrics)
     repair_attempts = sum(item.repair_attempts for item in metrics)
     rag_queries = sum(item.rag_queries for item in metrics)
@@ -493,6 +494,16 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
             if tool_checks
             else 0.0
         ),
+        "tool_argument_success_rate": (
+            sum(item.tool_argument_ready for item in metrics) / tool_requests
+            if tool_requests
+            else 0.0
+        ),
+        "tool_schema_success_rate": (
+            sum(item.tool_schema_valid for item in metrics) / tool_requests
+            if tool_requests
+            else 0.0
+        ),
         "tool_unknown_rate": (
             sum(item.tool_unknowns for item in metrics) / tool_checks
             if tool_checks
@@ -518,6 +529,14 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
             sum(item.repair_successes for item in metrics) / repair_attempts
             if repair_attempts
             else 0.0
+        ),
+        "repair_rollback_rate": (
+            sum(item.repair_rollbacks for item in metrics) / repair_attempts
+            if repair_attempts
+            else 0.0
+        ),
+        "repair_evidence_quality_rollback_count": sum(
+            item.repair_evidence_quality_rollbacks for item in metrics
         ),
         "rag_hit_rate": (
             sum(item.rag_hits for item in metrics) / rag_queries
@@ -847,6 +866,32 @@ def _metrics_from_payload(
             legacy.get("context_view_failures", context_failures)
         ),
         tool_checks=_nonnegative_int(legacy.get("tool_checks", len(checks))),
+        tool_requests=_nonnegative_int(
+            legacy.get(
+                "tool_requests",
+                sum(check.get("claim_id") is not None for check in checks),
+            )
+        ),
+        tool_argument_ready=_nonnegative_int(
+            legacy.get(
+                "tool_argument_ready",
+                sum(
+                    check.get("claim_id") is not None
+                    and check.get("request_status") == "ready"
+                    for check in checks
+                ),
+            )
+        ),
+        tool_schema_valid=_nonnegative_int(
+            legacy.get(
+                "tool_schema_valid",
+                sum(
+                    check.get("claim_id") is not None
+                    and check.get("schema_valid") is True
+                    for check in checks
+                ),
+            )
+        ),
         tool_timeouts=_nonnegative_int(
             legacy.get(
                 "tool_timeouts",
@@ -892,6 +937,21 @@ def _metrics_from_payload(
             legacy.get(
                 "repair_successes",
                 sum(not event.get("rolled_back", True) for event in repairs),
+            )
+        ),
+        repair_rollbacks=_nonnegative_int(
+            legacy.get(
+                "repair_rollbacks",
+                sum(bool(event.get("rolled_back", True)) for event in repairs),
+            )
+        ),
+        repair_evidence_quality_rollbacks=_nonnegative_int(
+            legacy.get(
+                "repair_evidence_quality_rollbacks",
+                sum(
+                    event.get("reason") == "evidence_quality_decreased"
+                    for event in repairs
+                ),
             )
         ),
         rag_queries=_nonnegative_int(

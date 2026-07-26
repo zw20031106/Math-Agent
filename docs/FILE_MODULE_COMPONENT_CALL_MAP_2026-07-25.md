@@ -147,7 +147,7 @@
 | `mathforge/harness/fallback.py` | 模型/闭环失败时返回非空确定性说明 | Runtime、逐题 Watchdog |
 | `mathforge/harness/fingerprints.py` | 请求、文件、语义对象和 Markdown 目录哈希 | Benchmark、Provenance、Tool/Skill/Prompt |
 | `mathforge/harness/lemma_loop.py` | 高风险证明题的 Lemma eligibility、轮次、验证、扩展候选和停止原因 | Runtime、LemmaCurator、LemmaVerifier、LemmaMemory |
-| `mathforge/harness/metrics.py` | `RunMetrics` Schema 1.2，收集调用、Token、Tool、Evidence、Repair、RAG、污染和终态指标 | Runtime、Benchmark、Trace |
+| `mathforge/harness/metrics.py` | `RunMetrics` Schema 1.4，收集调用、Token、Tool 参数/Schema、Evidence、Repair 成功/回滚、RAG、污染和终态指标 | Runtime、Benchmark、Trace |
 | `mathforge/harness/orchestration.py` | 候选 Fanout，固定方法族，线程池分支失败隔离，候选 Trace payload | Runtime、SolverExecutor |
 | `mathforge/harness/provider.py` | 唯一模型访问边界；`ModelCallGate` 限并发，`OfficialClientProvider` 做 Context 分配和计量 | Runtime、所有 LLM 角色 |
 | `mathforge/harness/repair.py` | `ClaimRepairService`：失败 Claim 影响闭包、版本化候选、局部再验证、回滚 | Runtime、RepairAgent、Evidence |
@@ -229,7 +229,9 @@
 |---|---|---|
 | `mathforge/verification/__init__.py` | 导出 EvidenceLedger、ArbitrationPolicy、ProofObligationEngine | 包级导入 |
 | `mathforge/verification/capabilities.py` | ClaimKind、VerificationCapability、ClaimVerificationState 和能力匹配矩阵 | Evidence、Completion、Tools |
-| `mathforge/verification/evidence.py` | EvidenceLedger、ClaimEvidenceVerifier、工具参数重建、可重现 invocation | Runtime、ToolExecutor、Repair |
+| `mathforge/verification/tool_requests.py` | Host 侧 Claim→Tool 参数构造、统一输入 Schema 状态和可复现成功率统计 | ClaimEvidenceVerifier、ToolExecutor、Benchmark |
+| `mathforge/verification/evidence.py` | EvidenceLedger、ClaimEvidenceVerifier、fatal capability gate、可重现 invocation | Runtime、ToolExecutor、Repair |
+| `mathforge/verification/answer_normalization.py` | Box/Answer 包装、分数、集合、向量、区间、矩阵等安全正规化和形状验证 | AnswerValidator、Formatting Tool、Equivalence |
 | `mathforge/verification/proof_obligations.py` | 根据题型、定理、目标和 Claim check_type 生成义务 | Runtime、ProofCompletion |
 | `mathforge/verification/completion.py` | 检查每个 required obligation 是否有匹配 Claim/Evidence/Capability | Runtime、Lemma 扩展 |
 | `mathforge/verification/equivalence.py` | 按 answer type、假设、域比较候选答案，构造等价/未知/不一致关系 | Arbitration |

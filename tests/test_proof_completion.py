@@ -27,7 +27,14 @@ def test_mapped_skeptic_pass_completes_obligation_but_remains_soft():
         "direct",
         "QED",
         "text",
-        claims=[Claim("claim-1", "sufficiency", check_type="sufficiency")],
+        claims=[
+            Claim(
+                "claim-1",
+                "x = x + 1",
+                check_type="symbolic_equivalence",
+                claim_kind="equality",
+            )
+        ],
     )
     evidence = [
         EvidenceRecord(
@@ -71,6 +78,11 @@ def test_hard_failure_cannot_be_overridden_by_skeptic_pass():
             "fail",
             "hard",
             "false",
+            invocation={
+                "claim_kind": "equality",
+                "schema_valid": True,
+                "fatal_eligible": True,
+            },
             capability=VerificationCapability.EQUALITY_SYMBOLIC_UNDER_DOMAIN.value,
         ),
         EvidenceRecord(

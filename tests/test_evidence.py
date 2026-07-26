@@ -1,4 +1,8 @@
 from mathforge.tools.registry import ToolResult
+from mathforge.verification.capabilities import (
+    ClaimVerificationState,
+    VerificationCapability,
+)
 from mathforge.verification.evidence import EvidenceLedger
 import json
 
@@ -8,7 +12,21 @@ def test_claim_level_hard_failure_gate():
     ledger.record_tool_result(
         candidate_id="candidate-1",
         claim_id="claim-2",
-        result=ToolResult("symbolic_equivalence", "fail", "hard", "counterexample", {}),
+        result=ToolResult(
+            "symbolic_equivalence",
+            "fail",
+            "hard",
+            "counterexample",
+            {},
+            "2",
+            VerificationCapability.EQUALITY_SYMBOLIC_UNDER_DOMAIN.value,
+            ClaimVerificationState.SEMANTICALLY_VERIFIED.value,
+        ),
+        claim_kind="equality",
+        input_complete=True,
+        context_complete=True,
+        request_status="ready",
+        schema_valid=True,
     )
     assert ledger.has_hard_fail("candidate-1")
     assert ledger.has_hard_fail("candidate-1", "claim-2")

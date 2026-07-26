@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, fields
 from typing import Any, ClassVar
 
 
-RUN_METRICS_SCHEMA_VERSION = "1.3"
+RUN_METRICS_SCHEMA_VERSION = "1.4"
 _OUTCOMES = frozenset({"primary", "fallback", "error", "timeout"})
 _ERROR_CODES = frozenset(
     {
@@ -68,6 +68,9 @@ class RunMetrics:
     context_view_attempts: int = 0
     context_view_failures: int = 0
     tool_checks: int = 0
+    tool_requests: int = 0
+    tool_argument_ready: int = 0
+    tool_schema_valid: int = 0
     tool_timeouts: int = 0
     tool_unknowns: int = 0
     tool_errors: int = 0
@@ -75,6 +78,8 @@ class RunMetrics:
     lemma_errors: int = 0
     repair_attempts: int = 0
     repair_successes: int = 0
+    repair_rollbacks: int = 0
+    repair_evidence_quality_rollbacks: int = 0
     rag_queries: int = 0
     rag_hits: int = 0
 
@@ -118,6 +123,9 @@ class RunMetrics:
             "context_view_attempts",
             "context_view_failures",
             "tool_checks",
+            "tool_requests",
+            "tool_argument_ready",
+            "tool_schema_valid",
             "tool_timeouts",
             "tool_unknowns",
             "tool_errors",
@@ -125,6 +133,8 @@ class RunMetrics:
             "lemma_errors",
             "repair_attempts",
             "repair_successes",
+            "repair_rollbacks",
+            "repair_evidence_quality_rollbacks",
             "rag_queries",
             "rag_hits",
         )
@@ -183,10 +193,18 @@ class RunMetrics:
             raise ValueError("context failures cannot exceed attempts")
         if self.tool_timeouts + self.tool_unknowns + self.tool_errors > self.tool_checks:
             raise ValueError("tool outcome counters cannot exceed checks")
+        if self.tool_argument_ready > self.tool_requests:
+            raise ValueError("ready tool arguments cannot exceed requests")
+        if self.tool_schema_valid > self.tool_argument_ready:
+            raise ValueError("valid tool schemas cannot exceed ready arguments")
         if self.lemma_errors > self.lemma_checks:
             raise ValueError("lemma errors cannot exceed checks")
         if self.repair_successes > self.repair_attempts:
             raise ValueError("repair successes cannot exceed attempts")
+        if self.repair_rollbacks > self.repair_attempts:
+            raise ValueError("repair rollbacks cannot exceed attempts")
+        if self.repair_evidence_quality_rollbacks > self.repair_rollbacks:
+            raise ValueError("evidence-quality rollbacks cannot exceed rollbacks")
         if self.rag_hits > self.rag_queries:
             raise ValueError("RAG hits cannot exceed queries")
 
@@ -281,6 +299,17 @@ def collect_run_metrics(
         context_view_attempts=context_successes + context_failures,
         context_view_failures=context_failures,
         tool_checks=len(checks),
+        tool_requests=sum(check.get("claim_id") is not None for check in checks),
+        tool_argument_ready=sum(
+            check.get("claim_id") is not None
+            and check.get("request_status") == "ready"
+            for check in checks
+        ),
+        tool_schema_valid=sum(
+            check.get("claim_id") is not None
+            and check.get("schema_valid") is True
+            for check in checks
+        ),
         tool_timeouts=sum(
             check.get("outcome_reason") == "timeout" for check in checks
         ),
@@ -299,6 +328,13 @@ def collect_run_metrics(
         repair_attempts=len(repair_events),
         repair_successes=sum(
             not bool(event.get("rolled_back", True)) for event in repair_events
+        ),
+        repair_rollbacks=sum(
+            bool(event.get("rolled_back", True)) for event in repair_events
+        ),
+        repair_evidence_quality_rollbacks=sum(
+            event.get("reason") == "evidence_quality_decreased"
+            for event in repair_events
         ),
         rag_queries=len(retrieval_events),
         rag_hits=sum(

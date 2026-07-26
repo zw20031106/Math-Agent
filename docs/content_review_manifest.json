@@ -64,13 +64,30 @@
       "paths": [
         "mathforge/tool_prompt_examples.py",
         "mathforge/tools/registry.py",
-        "mathforge/verification/capabilities.py"
+        "mathforge/verification/capabilities.py",
+        "mathforge/verification/tool_requests.py",
+        "mathforge/verification/evidence.py"
       ],
-      "expected_count": 3,
-      "version": "tool-contract-3",
-      "engineering_reviewer": "codex-phase3-prompt-audit",
+      "expected_count": 5,
+      "version": "tool-contract-4",
+      "engineering_reviewer": "codex-phase4-evidence-audit",
       "review_date": "2026-07-26",
-      "sha256": "8f52fbc8b451492212ba61351dc94011b8e5cd7cdc111ff8af0316461d4074e1"
+      "sha256": "75ad14da19e9ce8329efbe1292c681091ac201d54ecdc728aa6fbb6dfa0c5036"
+    },
+    {
+      "id": "answer-normalization",
+      "kind": "file_set",
+      "paths": [
+        "mathforge/verification/answer_normalization.py",
+        "mathforge/tools/formatting.py",
+        "mathforge/output/answer_validator.py",
+        "mathforge/verification/equivalence.py"
+      ],
+      "expected_count": 4,
+      "version": "answer-normalization-1",
+      "engineering_reviewer": "codex-phase4-evidence-audit",
+      "review_date": "2026-07-26",
+      "sha256": "6b0be93ffcc18959369ee9206017d4d99dbbc71c53077a120a3f1e4629251892"
     },
     {
       "id": "router-calibration",

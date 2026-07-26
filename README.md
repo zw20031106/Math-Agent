@@ -37,6 +37,18 @@ fallback tokens instead of the audited roughly 9.5K. Natural-language-only,
 truncated, malformed, empty, compatibility-wrapped, or Schema-invalid model
 responses are classified separately and rejected as Candidates.
 
+Claim checks are compiled by the Host into typed tool requests and validated
+against the same input Schema used by the tool registry before execution.
+Only a hard failure from a semantic capability applicable to that Claim, with
+complete inputs and condition context, is fatal. Answer-shape and notation
+checks remain non-mathematical evidence. Equivalent answer wrappers and common
+fraction, set, vector, interval, and matrix representations are normalized
+before shape and equivalence decisions. If the optional Verifier is genuinely
+unavailable, proof completion may retain an incomplete candidate only when it
+already carries deterministic semantic evidence and has no fatal failure.
+Benchmark metrics expose tool argument/Schema success, unknown/error rates,
+and Repair success/rollback rates.
+
 ## Public output
 
 `ReasoningAgent.solve(problem, metadata)` returns exactly one flat public

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Phase 4 evidence, tool, and proof closure
+
+- Added a Host-owned Claim-to-tool request builder and a shared input-Schema
+  validator. Every supported Claim now records whether arguments were
+  reconstructable, Schema-valid, executed, unknown, or erroneous.
+- Restricted fatal hard failures to evidence whose semantic capability applies
+  to the Claim kind and whose input and assumption/domain context are complete.
+  Answer-shape and syntax checks can no longer reject mathematical truth.
+- Added answer normalization for wrappers, fractions, ordered/unordered
+  structures, vectors, intervals, and matrices before shape or equivalence
+  decisions.
+- Added a deterministic proof degradation path for genuine Verifier
+  unavailability. It preserves only candidates with existing semantic hard
+  evidence and no fatal failure; malformed Verifier findings still fail closed.
+- Strengthened method independence with both MethodStep and Claim-topology
+  signatures, and added tool argument/Schema rates plus Repair success,
+  rollback, and evidence-quality rollback metrics.
+- Kept Repair claim-local and versioned; invalid answer-shape patches,
+  incomplete reverification, remaining fatal evidence, and reduced evidence
+  quality are rolled back.
+
 ### Phase 3 prompt, parser, and output integrity
 
 - Added a Host-side Prompt Compiler that selects `minimal`, `standard`,

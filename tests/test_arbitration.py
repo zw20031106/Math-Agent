@@ -10,7 +10,21 @@ def _candidate(identifier: str, answer: str, role: str = "PrimarySolver") -> Can
 
 
 def _evidence(identifier: str, status: str, strength: str) -> EvidenceRecord:
-    return EvidenceRecord("e", identifier, None, "test", status, strength, "test")
+    return EvidenceRecord(
+        "e",
+        identifier,
+        None,
+        "tool:symbolic_equivalence",
+        status,
+        strength,
+        "test",
+        invocation={
+            "claim_kind": "equality",
+            "schema_valid": True,
+            "fatal_eligible": status == "fail" and strength == "hard",
+        },
+        capability="equality.symbolic_under_domain",
+    )
 
 
 def test_soft_score_can_never_rescue_hard_failed_candidate():
