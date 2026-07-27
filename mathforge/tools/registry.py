@@ -186,7 +186,12 @@ _INPUT_SCHEMAS: dict[str, dict[str, dict[str, Any]]] = {
     "small_case_enumeration": {
         "expression": {"type": "string"},
         "variable": {"type": "string"},
-        "values": {"type": "array", "items": {"type": "integer"}},
+        "values": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "minItems": 1,
+            "maxItems": 128,
+        },
         "expected": {"type": "string"},
     },
     "latex_syntax_check": {
@@ -347,9 +352,14 @@ def _matches_schema(value: Any, schema: dict[str, Any]) -> bool:
     if expected == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
     if expected == "array":
-        return isinstance(value, list) and all(
-            _matches_schema(item, schema.get("items", {}))
-            for item in value
+        return (
+            isinstance(value, list)
+            and len(value) >= int(schema.get("minItems", 0))
+            and len(value) <= int(schema.get("maxItems", len(value)))
+            and all(
+                _matches_schema(item, schema.get("items", {}))
+                for item in value
+            )
         )
     if expected == "object":
         if not isinstance(value, dict):

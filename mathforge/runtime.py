@@ -82,12 +82,9 @@ _SKILL_RUNTIME_ROLES = (
 
 _PUBLIC_METADATA_KEYS = (
     "idx",
+    "id",
     "benchmark_nonce",
-    "label",
-    "labels",
-    "benchmark_label",
     "case_id",
-    "split",
 )
 
 

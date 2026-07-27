@@ -45,17 +45,42 @@ def density_normalization(*, expression: str, variable: str, lower: str, upper: 
 def small_case_enumeration(
     *, expression: str, variable: str, values: list[int], expected: str = "0"
 ) -> dict:
+    input_count = len(values)
+    if input_count == 0 or input_count > 128:
+        return _result(
+            "unknown",
+            "hard",
+            "finite enumeration requires between 1 and 128 explicit values",
+            {
+                "input_count": input_count,
+                "checked_count": 0,
+                "truncated": False,
+                "counterexamples": [],
+            },
+        )
     parsed = parse_expression(expression)
     expected_value = parse_expression(expected)
     symbol = sympy.Symbol(variable)
     failures: list[dict[str, str]] = []
-    for value in values[:128]:
+    checked_count = 0
+    for value in values:
+        checked_count += 1
         actual = sympy.simplify(parsed.subs(symbol, int(value)))
         if sympy.simplify(actual - expected_value) != 0:
             failures.append({"value": str(value), "actual": str(actual)})
             break
     status = "fail" if failures else "pass"
-    return _result(status, "hard", "finite cases enumerated exactly", {"counterexamples": failures})
+    return _result(
+        status,
+        "hard",
+        "finite cases enumerated exactly",
+        {
+            "input_count": input_count,
+            "checked_count": checked_count,
+            "truncated": False,
+            "counterexamples": failures,
+        },
+    )
 
 
 def _result(status: str, strength: str, summary: str, payload: dict) -> dict:

@@ -67,6 +67,13 @@ def require_exact_intern_model(
     )
 
 
+def official_client_model_identity() -> ModelIdentity:
+    return ModelIdentity(
+        requested_model=EXACT_INTERN_MODEL,
+        request_source="official_client_injected",
+    )
+
+
 def unreported_model_identity() -> ModelIdentity:
     return ModelIdentity(
         requested_model="unreported",

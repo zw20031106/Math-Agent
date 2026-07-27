@@ -40,14 +40,16 @@ def test_exact_model_gate_uses_one_environment_source_and_marks_boundaries():
     assert identity.thinking_mode_observable is False
 
 
-def test_public_runner_fails_before_use_when_model_is_not_explicit(monkeypatch):
+def test_public_runner_uses_the_injected_official_client_without_local_model_env(
+    monkeypatch,
+):
     monkeypatch.delenv("INTERN_MODEL", raising=False)
     client = FakeClient()
 
-    with pytest.raises(RuntimeError, match="must be explicitly set"):
-        ReasoningAgent(client)
+    result = ReasoningAgent(client).solve("1 + 1", {})
 
-    assert client.calls == []
+    assert result["status"] == "success"
+    assert client.calls
 
 
 def test_caller_cannot_replace_environment_model_with_a_display_label():
@@ -58,7 +60,7 @@ def test_caller_cannot_replace_environment_model_with_a_display_label():
     session_started = result["trace"][0]
 
     assert session_started["requested_model"] == EXACT_INTERN_MODEL
-    assert session_started["request_source"] == "environment:INTERN_MODEL"
+    assert session_started["request_source"] == "official_client_injected"
     assert session_started["response_model_observable"] is False
     assert session_started["thinking_mode_observable"] is False
     assert "model_identifier" not in session_started

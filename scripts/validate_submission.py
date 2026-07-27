@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 import re
 import sys
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,9 +18,9 @@ from mathforge.evaluation.evidence_registry import (  # noqa: E402
     validate_evidence_registry,
 )
 from mathforge.governance.reviews import validate_review_manifest  # noqa: E402
-from mathforge.model_identity import (  # noqa: E402
-    EXACT_INTERN_MODEL,
-    MODEL_ENVIRONMENT_VARIABLE,
+from scripts.formal_smoke_fixture import (  # noqa: E402
+    FormalSmokeClient,
+    assert_formal_smoke_result,
 )
 from scripts.scan_secrets import scan_repository  # noqa: E402
 from user_agent import ReasoningAgent  # noqa: E402
@@ -33,12 +31,6 @@ _WINDOWS_ABSOLUTE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:[\\/]")
 _GENERATED_DIRECTORIES = frozenset(
     {".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__"}
 )
-
-
-class OfflineClient:
-    def chat(self, *, messages, temperature, max_tokens) -> str:
-        del messages, temperature, max_tokens
-        return '{"method":"offline","solution_text":"1+1=2","final_answer":"2"}'
 
 
 def validate(max_file_mb: float = 5.0) -> list[str]:
@@ -58,23 +50,12 @@ def validate(max_file_mb: float = 5.0) -> list[str]:
         )
     )
     try:
-        with patch.dict(
-            os.environ,
-            {MODEL_ENVIRONMENT_VARIABLE: EXACT_INTERN_MODEL},
-        ):
-            result = ReasoningAgent(client=OfflineClient()).solve(
-                "Calculate the integer 1+1",
-                {},
-            )
+        result = ReasoningAgent(client=FormalSmokeClient()).solve(
+            "Calculate the integer 1+1",
+            {},
+        )
         json.dumps(result)
-        if set(result) != {"id", "status", "final_response", "trace"}:
-            errors.append("public result fields are invalid")
-        if result.get("status") not in {"success", "failed", "timeout"}:
-            errors.append("public result status is invalid")
-        if not isinstance(result.get("trace"), list):
-            errors.append("trace is not a list")
-        if not str(result.get("final_response", "")).strip():
-            errors.append("final_response is empty")
+        assert_formal_smoke_result(result)
     except Exception as error:
         errors.append(f"public interface failed: {type(error).__name__}")
     errors.extend(

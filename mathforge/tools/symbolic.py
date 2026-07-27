@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from itertools import islice, product
 import re
 
@@ -35,22 +36,32 @@ def symbolic_equivalence(
     assumptions: list[str] | None = None,
     domains: dict[str, str] | None = None,
 ) -> dict:
+    risk_reasons = sorted(
+        _domain_sensitive_reasons(left) | _domain_sensitive_reasons(right)
+    )
+    constraints, domain_rules, context_complete = _parse_context(
+        assumptions or [], domains or {}
+    )
     difference = sympy.simplify(parse_expression(left) - parse_expression(right))
     if difference == 0:
+        if risk_reasons:
+            return _domain_unknown(difference, risk_reasons)
         return _result(
             "pass",
             "hard",
             "symbolic difference simplifies to zero",
-            {"difference": "0", "context_complete": True},
+            {
+                "difference": "0",
+                "context_complete": context_complete,
+            },
         )
 
-    constraints, domain_rules, context_complete = _parse_context(
-        assumptions or [], domains or {}
-    )
     predicate = _assumption_predicate(constraints, domain_rules)
     if predicate is not None:
         refined = sympy.simplify(sympy.refine(difference, predicate))
         if refined == 0:
+            if not context_complete:
+                return _domain_unknown(difference, risk_reasons)
             return _result(
                 "pass",
                 "hard",
@@ -59,6 +70,14 @@ def symbolic_equivalence(
                     "difference": "0",
                     "context_complete": context_complete,
                     "conditional": True,
+                    **(
+                        {
+                            "domain_sensitive": True,
+                            "risk_reasons": risk_reasons,
+                        }
+                        if risk_reasons
+                        else {}
+                    ),
                 },
             )
     counterexample = _counterexample(difference, constraints, domain_rules)
@@ -71,12 +90,27 @@ def symbolic_equivalence(
                 "difference": str(difference),
                 "counterexample": counterexample,
                 "context_complete": True,
+                **(
+                    {
+                        "domain_sensitive": True,
+                        "risk_reasons": risk_reasons,
+                    }
+                    if risk_reasons
+                    else {}
+                ),
             },
         )
     payload = {
         "difference": str(difference),
-        "context_complete": context_complete,
+        "context_complete": context_complete and not risk_reasons,
     }
+    if risk_reasons:
+        payload.update(
+            {
+                "domain_sensitive": True,
+                "risk_reasons": risk_reasons,
+            }
+        )
     if counterexample is not None:
         payload["provisional_counterexample"] = counterexample
     return _result(
@@ -88,6 +122,62 @@ def symbolic_equivalence(
             else "no domain-valid counterexample was found"
         ),
         payload,
+    )
+
+
+def _domain_unknown(
+    difference: sympy.Expr,
+    risk_reasons: list[str],
+) -> dict:
+    return _result(
+        "unknown",
+        "medium",
+        "domain equivalence was not established for a domain-sensitive expression",
+        {
+            "difference": str(difference),
+            "context_complete": False,
+            "domain_sensitive": True,
+            "risk_reasons": risk_reasons,
+        },
+    )
+
+
+def _domain_sensitive_reasons(source: str) -> set[str]:
+    try:
+        tree = ast.parse(source.replace("^", "**"), mode="eval")
+    except SyntaxError:
+        return {"unclassified_expression"}
+    reasons: set[str] = set()
+    sensitive_functions = {
+        "acos",
+        "asin",
+        "cot",
+        "csc",
+        "log",
+        "sec",
+        "sqrt",
+        "tan",
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = node.func.id if isinstance(node.func, ast.Name) else ""
+            if name in sensitive_functions:
+                reasons.add(f"function:{name}")
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            if any(isinstance(item, ast.Name) for item in ast.walk(node.right)):
+                reasons.add("variable_denominator")
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            if not _is_nonnegative_integer_literal(node.right):
+                reasons.add("non_polynomial_power")
+    return reasons
+
+
+def _is_nonnegative_integer_literal(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+        and node.value >= 0
     )
 
 
@@ -107,6 +197,8 @@ def _parse_context(
             complete = False
             continue
         domain_rules[sympy.Symbol(str(symbol_name))] = domain
+        if domain == "natural":
+            complete = False
     for raw_assumption in assumptions:
         pieces = [
             piece.strip()
@@ -123,6 +215,8 @@ def _parse_context(
             elif isinstance(parsed, tuple):
                 symbol, domain = parsed
                 domain_rules[symbol] = domain
+                if domain == "natural":
+                    complete = False
             else:
                 constraints.append(parsed)
     return constraints, domain_rules, complete

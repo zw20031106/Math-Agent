@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Phase 0 stop-line remediation (2026-07-27)
+
+- Decoupled the formal `ReasoningAgent` entry from local API/model
+  environment variables while retaining exact-model enforcement in local
+  benchmark runners.
+- Replaced the permissive offline smoke with one strict Candidate fixture and
+  assertions for genuine success, answer `2`, list-valued trace, and no
+  fallback.
+- Reduced runtime metadata to opaque identifiers before context, memory,
+  prompts, or trace construction.
+- Made finite enumeration fail closed for empty or oversized input, removed
+  silent truncation, exposed counts, and enforced the same 1–128 bounds in
+  tool Schemas.
+- Made symbolic equivalence conservative for variable denominators,
+  domain-sensitive functions, non-polynomial powers, incomplete assumptions,
+  and the ambiguous natural-number convention.
+
 ### Phase 5 trace and observability
 
 - Added explicit per-call Transport Events with canonical fixed-role names,

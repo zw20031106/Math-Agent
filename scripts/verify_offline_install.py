@@ -9,18 +9,19 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SMOKE_TEST = """
+import os
+
+os.environ.pop("INTERN_MODEL", None)
+os.environ.pop("INTERN_API_KEY", None)
+
+from scripts.formal_smoke_fixture import FormalSmokeClient, assert_formal_smoke_result
 from user_agent import ReasoningAgent
 
-class OfflineClient:
-    def chat(self, *, messages, temperature, max_tokens):
-        del messages, temperature, max_tokens
-        return '{"method":"offline","solution_text":"1+1=2","final_answer":"2"}'
-
-result = ReasoningAgent(OfflineClient()).solve("Calculate the integer 1+1", {})
-assert set(result) == {"id", "status", "final_response", "trace"}
-assert result["status"] == "success"
-assert result["final_response"]
-assert isinstance(result["trace"], list)
+result = ReasoningAgent(FormalSmokeClient()).solve(
+    "Calculate the integer 1+1",
+    {},
+)
+assert_formal_smoke_result(result)
 """
 
 

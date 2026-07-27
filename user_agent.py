@@ -1,5 +1,5 @@
 from mathforge.config import HarnessConfig, load_competition_config
-from mathforge.model_identity import require_exact_intern_model
+from mathforge.model_identity import official_client_model_identity
 from mathforge.output.public_result import (
     build_public_result,
     identifier_from_metadata,
@@ -16,7 +16,7 @@ class ReasoningAgent:
         self._harness = MathForgeHarness(
             client,
             config or load_competition_config(),
-            model_identity=require_exact_intern_model(),
+            model_identity=official_client_model_identity(),
         )
 
     def solve(self, problem: str, metadata: dict) -> dict:
