@@ -18,9 +18,9 @@ _SUCCESS_PHASES = [
     RuntimePhase.CANDIDATES_READY,
     RuntimePhase.EVIDENCE_READY,
     RuntimePhase.OBLIGATIONS_READY,
-    RuntimePhase.VERIFIED,
+    RuntimePhase.PRECHECKED,
     RuntimePhase.LEMMA_EXPANDED,
-    RuntimePhase.REVERIFIED,
+    RuntimePhase.VERIFIED,
     RuntimePhase.ARBITRATED,
     RuntimePhase.FORMATTED,
     RuntimePhase.FINALIZED,
@@ -57,6 +57,24 @@ def test_runtime_state_machine_accepts_only_declared_transitions():
         phase.value for phase in _SUCCESS_PHASES[1:]
     ]
 
+    repaired = create_session("x", {}, CallBudget(1))
+    for expected, target in zip(_SUCCESS_PHASES, _SUCCESS_PHASES[1:]):
+        if expected == RuntimePhase.VERIFIED:
+            repaired.transition(
+                RuntimePhase.VERIFIED,
+                RuntimePhase.REVERIFIED,
+                reason="post_verifier_repair_revalidated",
+            )
+            repaired.transition(
+                RuntimePhase.REVERIFIED,
+                RuntimePhase.ARBITRATED,
+                reason="test",
+            )
+            continue
+        if repaired.phase == expected:
+            repaired.transition(expected, target, reason="test")
+    assert repaired.phase == RuntimePhase.COMPLETED
+
     another = create_session("x", {}, CallBudget(1))
     with pytest.raises(InvalidRuntimeTransition):
         another.transition(
@@ -75,7 +93,10 @@ def test_runtime_state_machine_accepts_only_declared_transitions():
 )
 def test_every_runtime_phase_can_fail_into_the_safe_terminal_path(phase):
     session = create_session("x", {}, CallBudget(1))
-    for expected, target in zip(_SUCCESS_PHASES, _SUCCESS_PHASES[1:]):
+    path = list(_SUCCESS_PHASES)
+    if phase == RuntimePhase.REVERIFIED:
+        path.insert(path.index(RuntimePhase.ARBITRATED), RuntimePhase.REVERIFIED)
+    for expected, target in zip(path, path[1:]):
         if session.phase == phase:
             break
         session.transition(expected, target, reason="reach_test_phase")

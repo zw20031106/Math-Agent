@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Phase 1 trusted correctness path (2026-07-27)
+
+- Added a no-throw terminalizer and a dependency-free outer fallback so
+  bookkeeping, metrics, trace, debug-sink, and final token-count faults cannot
+  violate the public result contract.
+- Added one deterministic Candidate admission gate and applied it to primary,
+  alternative, lemma-expanded, repaired, and selected Candidates before they
+  can advance.
+- Narrowed Verifier unavailability handling to expected budget, transport, and
+  context failures; programming defects now fail closed through the runtime
+  fallback.
+- Removed proof-completion degradation: every required obligation must have
+  mapped active evidence before arbitration, regardless of problem type.
+- Added one bounded post-Verifier repair cycle with claim-local scope, full
+  admission/evidence/obligation/Verifier replay, strict-improvement acceptance,
+  and evidence rollback.
+- Corrected lifecycle semantics with `PRECHECKED`, post-completion `VERIFIED`,
+  and conditional `REVERIFIED` only after a post-Verifier repair was actually
+  revalidated.
+
 ### Phase 0 stop-line remediation (2026-07-27)
 
 - Decoupled the formal `ReasoningAgent` entry from local API/model

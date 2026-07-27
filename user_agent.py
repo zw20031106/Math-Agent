@@ -1,5 +1,6 @@
 from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.model_identity import official_client_model_identity
+from mathforge.harness.terminalizer import minimal_fallback_result
 from mathforge.output.public_result import (
     build_public_result,
     identifier_from_metadata,
@@ -20,5 +21,16 @@ class ReasoningAgent:
         )
 
     def solve(self, problem: str, metadata: dict) -> dict:
-        result = self._harness.solve(problem, metadata)
-        return build_public_result(identifier_from_metadata(metadata), result)
+        identifier = None
+        try:
+            identifier = identifier_from_metadata(metadata)
+            result = self._harness.solve(problem, metadata)
+            return build_public_result(identifier, result)
+        except Exception:
+            fallback = minimal_fallback_result()
+            return {
+                "id": identifier,
+                "status": "failed",
+                "final_response": fallback["final_response"],
+                "trace": fallback["trace"],
+            }

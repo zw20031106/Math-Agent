@@ -7,7 +7,9 @@ import re
 from mathforge.agents.prompt_compiler import PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
+from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.harness.budget import CallBudget
+from mathforge.harness.errors import BudgetExceeded, ModelTransportError
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import (
     CandidateSolution,
@@ -127,7 +129,7 @@ class VerifierSkepticAgent:
             )
             if budget.deadline.must_finalize():
                 return BatchVerificationResult([], False, "finalize_cutoff")
-        except Exception:
+        except (BudgetExceeded, ModelTransportError, ContextBudgetExceeded):
             return BatchVerificationResult([], False, "verifier_unavailable")
         findings = self._parse_findings(response, candidates, obligations)
         return BatchVerificationResult(

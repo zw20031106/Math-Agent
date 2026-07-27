@@ -143,7 +143,7 @@ class TraceBuilder:
                 event.get("schema_version") == TRACE_SCHEMA_VERSION
                 for event in result
             )
-            and any(event.get("event") == "run_completed" for event in result)
+            and final_response is not None
         ):
             validate_trace_v2(result, final_response=final_response)
         return result

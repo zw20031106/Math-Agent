@@ -26,6 +26,7 @@ class CallAllocationPlan:
         repair_requested: bool,
         lemma_requested: bool,
         finalizer_requested: bool,
+        reverification_requested: bool = False,
     ) -> "CallAllocationPlan":
         router = max(0, router_calls)
         primary = 1
@@ -35,15 +36,36 @@ class CallAllocationPlan:
             raise ValueError("required model stages are unreachable by call budget")
 
         remaining = max_calls - required
-        requested = (
-            ("alternatives", max(0, candidate_count - 1)),
-            ("repair", int(repair_requested)),
-            ("lemma", int(lemma_requested)),
-            ("finalizer", int(finalizer_requested)),
-        )
+        alternative_count = min(max(0, candidate_count - 1), remaining)
+        remaining -= alternative_count
         allocated: dict[str, int] = {}
         unreachable: list[str] = []
-        for stage, count in requested:
+        if alternative_count < max(0, candidate_count - 1):
+            unreachable.append("alternatives")
+        repair_count = 0
+        extra_verifier = 0
+        if repair_requested and reverification_requested:
+            if remaining >= 2:
+                repair_count = 1
+                extra_verifier = 1
+                remaining -= 2
+            else:
+                unreachable.extend(["repair", "reverification"])
+        else:
+            repair_count = min(int(repair_requested), remaining)
+            remaining -= repair_count
+            if repair_count < int(repair_requested):
+                unreachable.append("repair")
+            extra_verifier = min(int(reverification_requested), remaining)
+            remaining -= extra_verifier
+            if extra_verifier < int(reverification_requested):
+                unreachable.append("reverification")
+        allocated["alternatives"] = alternative_count
+        allocated["repair"] = repair_count
+        for stage, count in (
+            ("lemma", int(lemma_requested)),
+            ("finalizer", int(finalizer_requested)),
+        ):
             allocated[stage] = min(count, remaining)
             remaining -= allocated[stage]
             if allocated[stage] < count:
@@ -54,7 +76,7 @@ class CallAllocationPlan:
             router=router,
             primary=primary,
             alternatives=allocated["alternatives"],
-            verifier=verifier,
+            verifier=verifier + extra_verifier,
             repair_reserve=allocated["repair"],
             lemma_reserve=allocated["lemma"],
             finalizer_reserve=allocated["finalizer"],

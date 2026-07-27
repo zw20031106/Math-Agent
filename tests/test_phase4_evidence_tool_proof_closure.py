@@ -206,7 +206,7 @@ class _VerifierUnavailableProofClient:
         )
 
 
-def test_verifier_unavailability_keeps_best_deterministically_verified_candidate():
+def test_verifier_unavailability_does_not_complete_unresolved_proof_obligations():
     config = HarnessConfig(
         max_model_calls=2,
         model_max_concurrency=1,
@@ -235,10 +235,10 @@ def test_verifier_unavailability_keeps_best_deterministically_verified_candidate
     )
 
     assert verifier["reason"] == "verifier_unavailable"
-    assert gate["mode"] == "deterministic_degraded"
-    assert gate["accepted"] == ["primary-1"]
-    assert result["run_metrics"]["outcome"] == "primary"
-    assert "Both sides are the same expression" in result["final_response"]
+    assert gate["mode"] == "strict"
+    assert gate["accepted"] == []
+    assert result["run_metrics"]["outcome"] == "fallback"
+    assert any(event["event"] == "fallback_used" for event in result["trace"])
 
 
 def test_method_independence_uses_claim_topology_even_with_model_step_labels():

@@ -10,7 +10,11 @@ from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.debug import DebugSink, sanitized_failure_record
-from mathforge.harness.errors import BudgetExceeded, classify_failure
+from mathforge.harness.errors import (
+    BudgetExceeded,
+    ModelTransportError,
+    classify_failure,
+)
 from mathforge.harness.fallback import FallbackSolver
 from mathforge.harness.fingerprints import request_fingerprint
 from mathforge.harness.context_budget import ModelContextBudget
@@ -32,6 +36,11 @@ from mathforge.harness.trace_summary import (
     build_case_trace_summary,
     build_transport_summary,
 )
+from mathforge.harness.terminalizer import (
+    MINIMAL_FALLBACK_RESPONSE,
+    NoThrowTerminalizer,
+    minimal_fallback_metrics,
+)
 from mathforge.output.answer_validator import AnswerValidator
 from mathforge.output.deterministic_formatter import DeterministicFormatter
 from mathforge.parsing.problem_parser import ProblemParser
@@ -40,6 +49,7 @@ from mathforge.tools.executor import ToolExecutor
 from mathforge.verification.evidence import (
     EvidenceLedger,
     is_fatal_hard_failure,
+    is_semantic_hard_pass,
 )
 from mathforge.verification.arbitration import ArbitrationPolicy
 from mathforge.verification.proof_obligations import ProofObligationEngine
@@ -53,11 +63,13 @@ from mathforge.provenance import build_run_provenance
 from mathforge.verification.evidence import ClaimEvidenceVerifier
 from mathforge.agents.repair import RepairAgent
 from mathforge.harness.repair import ClaimRepairService
+from mathforge.verification.repair_scope import claim_impact_closure
 from mathforge.agents.finalizer import LLMFinalizer
 from mathforge.agents.verifier import VerifierSkepticAgent
-from mathforge.verification.completion import (
-    ProofCompletionGate,
-    deterministic_degraded_candidates,
+from mathforge.verification.completion import ProofCompletionGate
+from mathforge.verification.admission import (
+    CandidateAdmissionError,
+    CandidateAdmissionGate,
 )
 
 
@@ -139,6 +151,9 @@ class MathForgeHarness:
         self._problem_parser = ProblemParser()
         self._solution_parser = SolutionParser()
         self._answer_validator = AnswerValidator()
+        self._candidate_admission = CandidateAdmissionGate(
+            self._answer_validator
+        )
         self._formatter = DeterministicFormatter()
         self._contracts = PromptContractLoader()
         self._role_contexts = RoleContextFactory()
@@ -268,12 +283,14 @@ class MathForgeHarness:
             request_fingerprint=run_fingerprint,
             **self._provenance,
         )
+        terminalizer = NoThrowTerminalizer()
         outcome = "fallback"
         error_code = ""
         failure: Exception | None = None
         failed_phase = RuntimePhase.CREATED
         selected_candidate_id = ""
         candidate_states: list[dict[str, Any]] = []
+        final_response = MINIMAL_FALLBACK_RESPONSE
 
         try:
             session.budget.ensure_stage("problem_parser")
@@ -663,8 +680,19 @@ class MathForgeHarness:
                 fanout.candidates,
             )
             tool_results = []
-            if self._config.enable_tools:
-                for item in fanout.candidates:
+            admission_rejections: dict[str, list[str]] = {}
+            admitted_candidates = []
+            for item in fanout.candidates:
+                admission = self._candidate_admission.evaluate(
+                    item,
+                    session.problem_ir,
+                )
+                if not admission.accepted:
+                    admission_rejections[item.candidate_id] = (
+                        admission.rejection_codes
+                    )
+                    continue
+                if self._config.enable_tools:
                     result, _ = self._run_answer_type_check(session, item, ledger)
                     tool_results.append(
                         {
@@ -684,34 +712,46 @@ class MathForgeHarness:
                             ),
                         }
                     )
-                    if self._config.enable_evidence:
-                        claim_records = self._claim_verifier.verify(
-                            item,
-                            ledger,
-                            domains=session.problem_ir.domains,
-                            assumptions=session.problem_ir.assumptions,
-                            budget=session.budget,
-                            selected_tools=session.route_plan.selected_tools,
+                    admission = self._candidate_admission.evaluate(
+                        item,
+                        session.problem_ir,
+                        answer_shape_status=result.status,
+                    )
+                    if not admission.accepted:
+                        admission_rejections[item.candidate_id] = (
+                            admission.rejection_codes
                         )
-                        tool_results.extend(
-                            {
-                                "candidate_id": item.candidate_id,
-                                "claim_id": record.claim_id,
-                                "status": record.status,
-                                "request_status": record.invocation.get(
-                                    "request_status",
-                                    record.payload.get("request_status", ""),
-                                ),
-                                "schema_valid": bool(
-                                    record.invocation.get("schema_valid", False)
-                                ),
-                                "outcome_reason": _tool_outcome_reason(
-                                    record.status,
-                                    record.description,
-                                ),
-                            }
-                            for record in claim_records
-                        )
+                        continue
+                if self._config.enable_tools and self._config.enable_evidence:
+                    claim_records = self._claim_verifier.verify(
+                        item,
+                        ledger,
+                        domains=session.problem_ir.domains,
+                        assumptions=session.problem_ir.assumptions,
+                        budget=session.budget,
+                        selected_tools=session.route_plan.selected_tools,
+                    )
+                    tool_results.extend(
+                        {
+                            "candidate_id": item.candidate_id,
+                            "claim_id": record.claim_id,
+                            "status": record.status,
+                            "request_status": record.invocation.get(
+                                "request_status",
+                                record.payload.get("request_status", ""),
+                            ),
+                            "schema_valid": bool(
+                                record.invocation.get("schema_valid", False)
+                            ),
+                            "outcome_reason": _tool_outcome_reason(
+                                record.status,
+                                record.description,
+                            ),
+                        }
+                        for record in claim_records
+                    )
+                admitted_candidates.append(item)
+            if self._config.enable_tools:
                 trace.add("tool_checks", checks=tool_results)
                 if self._config.enable_memory:
                     blackboard.publish(
@@ -737,17 +777,27 @@ class MathForgeHarness:
                         if record.candidate_id == candidate.candidate_id
                     ],
                     status=(
-                        "completed"
-                        if evidence_checks_enabled
-                        else "skipped"
+                        "rejected"
+                        if candidate.candidate_id in admission_rejections
+                        else (
+                            "completed"
+                            if evidence_checks_enabled
+                            else "skipped"
+                        )
                     ),
                     reason=(
-                        "evidence_completed"
-                        if evidence_checks_enabled
-                        else "evidence_checks_disabled"
+                        "candidate_admission_rejected"
+                        if candidate.candidate_id in admission_rejections
+                        else (
+                            "evidence_completed"
+                            if evidence_checks_enabled
+                            else "evidence_checks_disabled"
+                        )
                     ),
                 )
-            active_candidates = list(fanout.candidates)
+            active_candidates = admitted_candidates
+            if not active_candidates:
+                raise RuntimeError("all candidates failed admission")
             repair_triggers = {
                 item.candidate_id: sorted(
                     {
@@ -832,13 +882,14 @@ class MathForgeHarness:
                     stage="before_repair",
                     disabled=["repair"],
                 )
+            repair_service = ClaimRepairService(max_total_repairs=1)
+            repair_attempted = False
             if (
                 self._config.enable_repair
                 and self._config.enable_evidence
                 and allocation.repair_reserve > 0
                 and session.budget.deadline.exploration_allowed()
             ):
-                repair_service = ClaimRepairService()
                 repaired_candidates = []
                 for item in active_candidates:
                     repair_result = repair_service.attempt(
@@ -901,6 +952,7 @@ class MathForgeHarness:
                             reason=repair_result.reason,
                         )
                     if repair_result.triggered:
+                        repair_attempted = True
                         trace.add(
                             "repair_completed",
                             source_candidate_id=item.candidate_id,
@@ -996,7 +1048,7 @@ class MathForgeHarness:
                 session,
                 trace,
                 RuntimePhase.OBLIGATIONS_READY,
-                RuntimePhase.VERIFIED,
+                RuntimePhase.PRECHECKED,
                 "pre_lemma_checks_completed",
             )
             if not session.budget.deadline.optional_work_allowed():
@@ -1032,7 +1084,7 @@ class MathForgeHarness:
             self._transition(
                 session,
                 trace,
-                RuntimePhase.VERIFIED,
+                RuntimePhase.PRECHECKED,
                 RuntimePhase.LEMMA_EXPANDED,
                 lemma_result.stop_reason,
             )
@@ -1044,21 +1096,26 @@ class MathForgeHarness:
                 rejection_codes: list[str] = []
                 ledger.register_candidate(expanded)
                 try:
-                    expanded.validate()
                     session.budget.record_claims(len(expanded.claims))
-                except (BudgetExceeded, TypeError, ValueError):
-                    rejection_codes.append("schema_or_claim_budget")
-                rejection_codes.extend(
-                    self._answer_validator.validate(
-                        expanded,
-                        session.problem_ir,
-                    )
+                except BudgetExceeded:
+                    rejection_codes.append("claim_budget")
+                admission = self._candidate_admission.evaluate(
+                    expanded,
+                    session.problem_ir,
                 )
+                rejection_codes.extend(admission.rejection_codes)
                 if not rejection_codes and self._config.enable_tools:
-                    self._run_answer_type_check(
+                    answer_shape, _ = self._run_answer_type_check(
                         session,
                         expanded,
                         ledger,
+                    )
+                    rejection_codes.extend(
+                        self._candidate_admission.evaluate(
+                            expanded,
+                            session.problem_ir,
+                            answer_shape_status=answer_shape.status,
+                        ).rejection_codes
                     )
                 if (
                     not rejection_codes
@@ -1161,8 +1218,35 @@ class MathForgeHarness:
                 )
                 if obligation.required
             ]
+            post_verifier_repair_requested = (
+                self._config.enable_repair
+                and self._config.enable_evidence
+                and self._config.enable_verifier
+                and bool(required_obligations)
+                and not repair_attempted
+                and session.budget.deadline.exploration_allowed()
+            )
+            if post_verifier_repair_requested:
+                allocation = CallAllocationPlan.build(
+                    max_calls=self._config.max_model_calls,
+                    router_calls=allocation.router,
+                    candidate_count=session.route_plan.candidate_count,
+                    verifier_required=verifier_required,
+                    repair_requested=True,
+                    lemma_requested=allocation.lemma_reserve > 0,
+                    finalizer_requested=allocation.finalizer_reserve > 0,
+                    reverification_requested=True,
+                )
+                session.budget.set_allocation_plan(allocation)
+                trace.add(
+                    "call_allocation_rebalanced",
+                    evidence_repair_triggers={},
+                    post_verifier_repair_requested=True,
+                    **allocation.to_dict(),
+                )
             skeptic_reviewed: set[str] = set()
             verifier_reason = "not_requested"
+            verifier_result = None
             if (
                 self._config.enable_verifier
                 and self._config.enable_evidence
@@ -1170,73 +1254,242 @@ class MathForgeHarness:
                 and required_obligations
                 and session.budget.deadline.exploration_allowed()
             ):
-                try:
-                    verifier_context = self._build_role_context(
-                        session,
-                        blackboard,
-                        trace,
-                        role="VerifierSkeptic",
-                        candidates=viable,
-                        evidence=session.evidence,
+                (
+                    verifier_result,
+                    verifier_reason,
+                    skeptic_reviewed,
+                    _,
+                ) = self._run_skeptic_review(
+                    session,
+                    blackboard,
+                    trace,
+                    viable,
+                    ledger,
+                    role_skill_contexts.get("VerifierSkeptic", ""),
+                    round_name="initial",
+                )
+            post_repair_revalidated = False
+            verifier_triggers: dict[str, list[str]] = {}
+            if verifier_result is not None:
+                for finding in verifier_result.findings:
+                    if (
+                        finding.status in {"fail", "unknown"}
+                        and finding.claim_id is not None
+                    ):
+                        verifier_triggers.setdefault(
+                            finding.candidate_id,
+                            [],
+                        ).append(finding.claim_id)
+            if (
+                post_verifier_repair_requested
+                and allocation.repair_reserve > 0
+                and allocation.verifier > 1
+                and verifier_triggers
+                and session.budget.deadline.exploration_allowed()
+            ):
+                problem_ir = session.problem_ir
+                if problem_ir is None:
+                    raise RuntimeError("problem IR unavailable during repair")
+                for item in viable:
+                    trigger_claim_ids = sorted(
+                        set(verifier_triggers.get(item.candidate_id, []))
                     )
-                    verifier_result = self._verifier_agent.review(
-                        session.problem_ir,
-                        viable,
-                        session.proof_obligations,
-                        session.budget,
-                        max_tokens=self._config.primary_max_tokens,
-                        context_view=verifier_context,
-                        evidence=session.evidence,
-                        skill_context=role_skill_contexts.get(
-                            "VerifierSkeptic",
-                            "",
+                    if not trigger_claim_ids:
+                        continue
+                    before_decision = self._proof_completion_gate.evaluate(
+                        item,
+                        session.evidence,
+                        session.proof_obligations.get(
+                            item.candidate_id,
+                            [],
                         ),
                     )
-                except Exception:
-                    verifier_result = None
-                    verifier_reason = "verifier_unavailable"
-                if verifier_result is not None:
-                    verifier_reason = verifier_result.reason
-                for finding in (
-                    verifier_result.findings
-                    if verifier_result is not None
-                    else []
-                ):
-                    ledger.record_verifier_finding(
-                        candidate_id=finding.candidate_id,
-                        claim_id=finding.claim_id,
-                        obligation_ids=finding.obligation_ids,
-                        status=finding.status,
-                        description=finding.description,
-                        missing_condition=finding.missing_condition,
-                        counterexample_summary=finding.counterexample_summary,
+                    before_score = self._repair_completion_score(
+                        item,
+                        before_decision,
+                        session.evidence,
                     )
-                    skeptic_reviewed.add(finding.candidate_id)
-                trace.add(
-                    "verifier_completed",
-                    used_llm=(
-                        verifier_result.used_llm
-                        if verifier_result is not None
-                        else False
-                    ),
-                    finding_count=(
-                        len(verifier_result.findings)
-                        if verifier_result is not None
-                        else 0
-                    ),
-                    reviewed_candidates=sorted(skeptic_reviewed),
-                    reason=verifier_reason,
-                )
-            self._transition(
-                session,
-                trace,
-                RuntimePhase.LEMMA_EXPANDED,
-                RuntimePhase.REVERIFIED,
-                "expanded_candidates_reverified",
-            )
+                    affected_for_quality = set(
+                        claim_impact_closure(
+                            item,
+                            trigger_claim_ids,
+                        )
+                    )
+                    before_local_hard_passes = sum(
+                        is_semantic_hard_pass(record)
+                        and record.claim_id in affected_for_quality
+                        for record in session.evidence
+                        if record.candidate_id == item.candidate_id
+                    )
+
+                    def accept_post_verifier_repair(
+                        proposed,
+                        new_evidence,
+                    ):
+                        session.proof_obligations[proposed.candidate_id] = (
+                            self._obligation_engine.generate(
+                                problem_ir,
+                                proposed,
+                            )
+                        )
+                        (
+                            _,
+                            rereview_reason,
+                            rereviewed,
+                            verifier_records,
+                        ) = self._run_skeptic_review(
+                            session,
+                            blackboard,
+                            trace,
+                            [proposed],
+                            ledger,
+                            role_skill_contexts.get(
+                                "VerifierSkeptic",
+                                "",
+                            ),
+                            round_name="post_repair",
+                        )
+                        skeptic_reviewed.update(rereviewed)
+                        new_evidence.extend(verifier_records)
+                        if rereview_reason != "accepted":
+                            return False, "post_repair_verifier_unavailable"
+                        after_decision = self._proof_completion_gate.evaluate(
+                            proposed,
+                            session.evidence,
+                            session.proof_obligations.get(
+                                proposed.candidate_id,
+                                [],
+                            ),
+                        )
+                        after_score = self._repair_completion_score(
+                            proposed,
+                            after_decision,
+                            session.evidence,
+                        )
+                        after_local_hard_passes = sum(
+                            is_semantic_hard_pass(record)
+                            and record.claim_id in affected_for_quality
+                            for record in session.evidence
+                            if record.candidate_id == proposed.candidate_id
+                        )
+                        if after_decision.status != "complete":
+                            return False, "post_repair_proof_incomplete"
+                        if after_local_hard_passes < before_local_hard_passes:
+                            return False, "evidence_quality_decreased"
+                        if after_score >= before_score:
+                            return False, "post_repair_not_strictly_better"
+                        return True, "accepted_post_verifier"
+
+                    repair_result = repair_service.attempt_for_trigger(
+                        item,
+                        session.evidence,
+                        trigger_claim_ids,
+                        repair=lambda candidate, affected, local_evidence: self._repair_candidate(
+                            session,
+                            blackboard,
+                            trace,
+                            candidate,
+                            affected,
+                            local_evidence,
+                            role_skill_contexts.get("RepairAgent", ""),
+                        ),
+                        reverify=lambda candidate, affected: self._reverify_repair_candidate(
+                            session,
+                            candidate,
+                            ledger,
+                            affected,
+                        ),
+                        accept=accept_post_verifier_repair,
+                    )
+                    repair_attempted = repair_attempted or repair_result.triggered
+                    post_repair_revalidated = bool(
+                        repair_result.proposed is not None
+                        and repair_result.new_evidence
+                    )
+                    if repair_result.proposed is not None:
+                        session.candidates.append(repair_result.proposed)
+                        if repair_result.rolled_back:
+                            for obligation in session.proof_obligations.get(
+                                repair_result.proposed.candidate_id,
+                                [],
+                            ):
+                                if obligation.required:
+                                    obligation.status = "unresolved"
+                                    obligation.satisfaction_evidence_ids = []
+                        trace.add(
+                            "repair_proposed",
+                            source_candidate_id=item.candidate_id,
+                            proposed_candidate_id=(
+                                repair_result.proposed.candidate_id
+                            ),
+                            affected_claim_ids=repair_result.affected_claim_ids,
+                            changes=self._repair_trace_changes(
+                                item,
+                                repair_result.proposed,
+                                repair_result.changed_claim_ids,
+                            ),
+                            answer_changed=(
+                                item.final_answer
+                                != repair_result.proposed.final_answer
+                            ),
+                            old_final_answer=item.final_answer,
+                            new_final_answer=(
+                                repair_result.proposed.final_answer
+                            ),
+                            proposed_content=public_candidate_content(
+                                repair_result.proposed
+                            ),
+                            content_digest=candidate_trace_payload(
+                                repair_result.proposed
+                            )["content_digest"],
+                            repair_stage="post_verifier",
+                        )
+                    if repair_result.triggered:
+                        trace.add(
+                            "repair_completed",
+                            source_candidate_id=item.candidate_id,
+                            **(
+                                {
+                                    "proposed_candidate_id": (
+                                        repair_result.proposed.candidate_id
+                                    )
+                                }
+                                if repair_result.proposed is not None
+                                else {}
+                            ),
+                            selected_candidate_id=(
+                                repair_result.selected.candidate_id
+                            ),
+                            affected_claim_ids=repair_result.affected_claim_ids,
+                            reverified_claim_ids=sorted(
+                                {
+                                    record.claim_id
+                                    for record in repair_result.new_evidence
+                                    if record.claim_id is not None
+                                }
+                            ),
+                            evidence_ids=[
+                                record.evidence_id
+                                for record in repair_result.new_evidence
+                            ],
+                            evidence_quality_before=str(before_score),
+                            evidence_quality_after=repair_result.reason,
+                            rolled_back=repair_result.rolled_back,
+                            reason=repair_result.reason,
+                            repair_stage="post_verifier",
+                        )
+                    viable = [
+                        (
+                            repair_result.selected
+                            if candidate.candidate_id == item.candidate_id
+                            else candidate
+                        )
+                        for candidate in viable
+                    ]
+                    break
             if (
                 self._config.enable_proof_obligations
-                and session.problem_ir.problem_type in {"proof", "derivation"}
+                and required_obligations
             ):
                 completion_decisions = [
                     self._proof_completion_gate.evaluate(
@@ -1251,28 +1504,10 @@ class MathForgeHarness:
                     for decision in completion_decisions
                     if decision.status == "complete"
                 }
-                degraded_candidates = []
-                if (
-                    not completed_ids
-                    and verifier_reason
-                    in {"verifier_unavailable", "finalize_cutoff"}
-                ):
-                    degraded_candidates = deterministic_degraded_candidates(
-                        viable,
-                        session.evidence,
-                        session.proof_obligations,
-                    )
-                    completed_ids = {
-                        item.candidate_id for item in degraded_candidates
-                    }
                 trace.add(
                     "proof_completion_gate",
                     accepted=sorted(completed_ids),
-                    mode=(
-                        "deterministic_degraded"
-                        if degraded_candidates
-                        else "strict"
-                    ),
+                    mode="strict",
                     verifier_reason=verifier_reason,
                     decisions=[
                         {
@@ -1301,6 +1536,27 @@ class MathForgeHarness:
                     ],
                 )
                 viable = [item for item in viable if item.candidate_id in completed_ids]
+            self._transition(
+                session,
+                trace,
+                RuntimePhase.LEMMA_EXPANDED,
+                RuntimePhase.VERIFIED,
+                "verification_and_completion_finished",
+            )
+            arbitration_source_phase = RuntimePhase.VERIFIED
+            if post_repair_revalidated:
+                self._transition(
+                    session,
+                    trace,
+                    RuntimePhase.VERIFIED,
+                    RuntimePhase.REVERIFIED,
+                    "post_verifier_repair_revalidated",
+                )
+                arbitration_source_phase = RuntimePhase.REVERIFIED
+            candidate_precheck_rejections = dict(admission_rejections)
+            candidate_precheck_rejections.update(
+                expanded_precheck_rejections
+            )
             accepted_expanded = sorted(
                 item.candidate_id
                 for item in viable
@@ -1315,16 +1571,13 @@ class MathForgeHarness:
                 verification_chain={
                     expanded_id: {
                         "schema_validated": (
-                            "schema_or_claim_budget"
+                            "candidate_schema_invalid"
                             not in expanded_precheck_rejections.get(expanded_id, [])
                         ),
                         "answer_validated": not any(
-                            code
-                            not in {
-                                "schema_or_claim_budget",
-                                "answer_type_hard_fail",
-                                "claim_hard_fail",
-                            }
+                            code == "empty_answer"
+                            or code == "incompatible_answer_type"
+                            or code.startswith("invalid_")
                             for code in expanded_precheck_rejections.get(
                                 expanded_id,
                                 [],
@@ -1368,7 +1621,7 @@ class MathForgeHarness:
                 rejected_candidates=self._arbitration_rejections(
                     session,
                     viable,
-                    expanded_precheck_rejections,
+                    candidate_precheck_rejections,
                 ),
                 selection_reason=(
                     "lowest lexicographic evidence rank; stable generation order "
@@ -1385,7 +1638,7 @@ class MathForgeHarness:
                 viable,
                 selected_candidate_id,
                 fanout.failures,
-                expanded_precheck_rejections,
+                candidate_precheck_rejections,
             )
             trace.add(
                 "candidate_final_states",
@@ -1394,11 +1647,20 @@ class MathForgeHarness:
             self._transition(
                 session,
                 trace,
-                RuntimePhase.REVERIFIED,
+                arbitration_source_phase,
                 RuntimePhase.ARBITRATED,
                 "candidate_selected",
             )
-            validation_errors = self._answer_validator.validate(candidate, session.problem_ir)
+            selected_admission = self._candidate_admission.evaluate(
+                candidate,
+                session.problem_ir,
+            )
+            if not selected_admission.accepted:
+                raise RuntimeError("selected candidate failed admission")
+            validation_errors = self._answer_validator.validate(
+                candidate,
+                session.problem_ir,
+            )
             trace.add(
                 "primary_completed",
                 model_calls=session.budget.used_calls,
@@ -1511,88 +1773,216 @@ class MathForgeHarness:
             outcome = "primary"
         except Exception as error:  # The public contract requires a result on every path.
             failure = error
+            caught_error = error
             failed_phase = session.phase
-            error_code = classify_failure(error, failed_phase).value
-            transition = session.transition(
-                failed_phase,
-                RuntimePhase.FAILED,
-                reason=error_code,
+            error_code = terminalizer.safe(
+                "failure_classification",
+                lambda: classify_failure(caught_error, failed_phase).value,
+                "all_candidates_failed",
             )
-            trace.add("phase_transition", **transition)
-            final_response = self._fallback.solve(normalized_problem)
-            transition = session.transition(
-                RuntimePhase.FAILED,
-                RuntimePhase.FALLBACK_COMPLETED,
-                reason="fallback_completed",
+            transition = terminalizer.safe(
+                "failure_transition",
+                lambda: session.transition(
+                    failed_phase,
+                    RuntimePhase.FAILED,
+                    reason=error_code,
+                ),
+                None,
             )
-            trace.add("phase_transition", **transition)
-            trace.add(
-                "fallback_used",
-                reason=error_code,
-                error_code=error_code,
-                failed_phase=failed_phase.value,
+            if transition is not None:
+                transition_payload = transition
+                terminalizer.safe(
+                    "failure_transition_trace",
+                    lambda: trace.add(
+                        "phase_transition",
+                        **transition_payload,
+                    ),
+                    None,
+                )
+            final_response = terminalizer.safe(
+                "fallback_response",
+                lambda: self._fallback.solve(normalized_problem),
+                MINIMAL_FALLBACK_RESPONSE,
+            )
+            transition = terminalizer.safe(
+                "fallback_transition",
+                lambda: session.transition(
+                    RuntimePhase.FAILED,
+                    RuntimePhase.FALLBACK_COMPLETED,
+                    reason="fallback_completed",
+                ),
+                None,
+            )
+            if transition is not None:
+                transition_payload = transition
+                terminalizer.safe(
+                    "fallback_transition_trace",
+                    lambda: trace.add(
+                        "phase_transition",
+                        **transition_payload,
+                    ),
+                    None,
+                )
+            terminalizer.safe(
+                "fallback_trace",
+                lambda: trace.add(
+                    "fallback_used",
+                    reason=error_code,
+                    error_code=error_code,
+                    failed_phase=failed_phase.value,
+                ),
+                None,
             )
 
-        self._close_trace_invariants(trace)
-        proof_graph = build_claim_evidence_graph(
-            session.candidates,
-            session.evidence,
-            session.proof_obligations,
-            candidate_states=candidate_states,
-            selected_candidate_id=selected_candidate_id,
+        terminalizer.safe(
+            "close_trace_invariants",
+            lambda: self._close_trace_invariants(trace),
+            None,
         )
-        trace.add("proof_graph_completed", graph=proof_graph)
-        transport = build_transport_summary(session.budget.model_call_records)
-        trace.add("model_transport_completed", **transport)
-        case_summary = build_case_trace_summary(
-            candidates=session.candidates,
-            evidence=session.evidence,
-            candidate_states=candidate_states,
-            internal_events=trace.internal_events,
-            model_call_records=session.budget.model_call_records,
-            selected_candidate_id=selected_candidate_id,
-            proof_graph_summary=proof_graph["summary"],
-            outcome=outcome,
-        )
-        case_summary["trace_streams"] = trace.stream_stats
-        trace.add("case_trace_summary", summary=case_summary)
-        final_count = self._context_budget.ensure_text_within_window(
-            final_response
-        )
-        session.budget.record_final_response(
-            final_count.tokens,
-            final_count.counting_mode,
-        )
-        trace.add(
-            "background_tail_audit",
-            **session.budget.background_tail_snapshot(),
-            note=(
-                "timed-out provider threads cannot mutate the returned result"
+        empty_graph: dict[str, Any] = {
+            "schema_version": "1.0",
+            "selected_candidate_id": selected_candidate_id,
+            "nodes": [],
+            "edges": [],
+            "summary": {
+                "node_counts": {},
+                "evidence_status_counts": {},
+                "unresolved_required_obligations": 0,
+            },
+        }
+        proof_graph: dict[str, Any] = terminalizer.safe(
+            "proof_graph",
+            lambda: build_claim_evidence_graph(
+                session.candidates,
+                session.evidence,
+                session.proof_obligations,
+                candidate_states=candidate_states,
+                selected_candidate_id=selected_candidate_id,
             ),
+            empty_graph,
         )
-        trace.add(
+        terminalizer.safe(
+            "proof_graph_trace",
+            lambda: trace.add("proof_graph_completed", graph=proof_graph),
+            None,
+        )
+        empty_transport: dict[str, Any] = {"calls": [], "summary": {}}
+        transport: dict[str, Any] = terminalizer.safe(
+            "transport_summary",
+            lambda: build_transport_summary(session.budget.model_call_records),
+            empty_transport,
+        )
+        terminalizer.safe(
+            "transport_trace",
+            lambda: trace.add("model_transport_completed", **transport),
+            None,
+        )
+        empty_case_summary: dict[str, Any] = {
+            "schema_version": "1.0",
+            "outcome": outcome,
+            "selected_candidate_id": selected_candidate_id,
+        }
+        case_summary: dict[str, Any] = terminalizer.safe(
+            "case_summary",
+            lambda: build_case_trace_summary(
+                candidates=session.candidates,
+                evidence=session.evidence,
+                candidate_states=candidate_states,
+                internal_events=trace.internal_events,
+                model_call_records=session.budget.model_call_records,
+                selected_candidate_id=selected_candidate_id,
+                proof_graph_summary=proof_graph["summary"],
+                outcome=outcome,
+            ),
+            empty_case_summary,
+        )
+        empty_stream_stats: dict[str, int] = {}
+        case_summary["trace_streams"] = terminalizer.safe(
+            "trace_stream_stats",
+            lambda: trace.stream_stats,
+            empty_stream_stats,
+        )
+        terminalizer.safe(
+            "case_summary_trace",
+            lambda: trace.add("case_trace_summary", summary=case_summary),
+            None,
+        )
+        final_count = terminalizer.safe(
+            "final_token_count",
+            lambda: self._context_budget.ensure_text_within_window(
+                final_response
+            ),
+            None,
+        )
+        if final_count is not None:
+            terminalizer.safe(
+                "final_token_record",
+                lambda: session.budget.record_final_response(
+                    final_count.tokens,
+                    final_count.counting_mode,
+                ),
+                None,
+            )
+        empty_background_tail: dict[str, int] = {}
+        background_tail: dict[str, int] = terminalizer.safe(
+            "background_tail_summary",
+            lambda: session.budget.background_tail_snapshot(),
+            empty_background_tail,
+        )
+        terminalizer.safe(
+            "background_tail_trace",
+            lambda: trace.add(
+                "background_tail_audit",
+                **background_tail,
+                note=(
+                    "timed-out provider threads cannot mutate the returned result"
+                ),
+            ),
+            None,
+        )
+        empty_budget_summary: dict[str, Any] = {}
+        budget_summary: dict[str, Any] = terminalizer.safe(
             "budget_summary",
-            **session.budget.to_dict(),
-            outcome=outcome,
+            lambda: session.budget.to_dict(),
+            empty_budget_summary,
         )
-        trace.add(
-            "run_completed",
-            outcome=outcome,
-            error_code=error_code,
-            final_phase=session.phase.value,
+        terminalizer.safe(
+            "budget_summary_trace",
+            lambda: trace.add(
+                "budget_summary",
+                **budget_summary,
+                outcome=outcome,
+            ),
+            None,
         )
-        metrics = collect_run_metrics(
-            budget=session.budget,
-            internal_events=trace.internal_events,
-            session_id=session.session_id,
-            request_fingerprint=run_fingerprint,
-            outcome=outcome,
-            final_phase=session.phase.value,
-            error_code=error_code,
+        terminalizer.safe(
+            "run_completed_trace",
+            lambda: trace.add(
+                "run_completed",
+                outcome=outcome,
+                error_code=error_code,
+                final_phase=session.phase.value,
+            ),
+            None,
+        )
+        metrics = terminalizer.safe(
+            "run_metrics",
+            lambda: collect_run_metrics(
+                budget=session.budget,
+                internal_events=trace.internal_events,
+                session_id=session.session_id,
+                request_fingerprint=run_fingerprint,
+                outcome=outcome,
+                final_phase=session.phase.value,
+                error_code=error_code,
+            ).to_dict(),
+            minimal_fallback_metrics(),
         )
         if failure is not None and self._debug_sink is not None:
-            try:
-                self._debug_sink.record(
+            debug_sink = self._debug_sink
+            terminalizer.safe(
+                "debug_sink",
+                lambda: debug_sink.record(
                     sanitized_failure_record(
                         failure,
                         session_id=session.session_id,
@@ -1600,15 +1990,19 @@ class MathForgeHarness:
                         error_code=error_code,
                         internal_events=trace.internal_events,
                     )
-                )
-            except Exception:
-                pass
-        return {
-            "final_response": final_response,
-            "trace": trace.build(final_response=final_response),
-            "run_metrics": metrics.to_dict(),
-            "provenance": self._run_provenance.to_dict(),
-        }
+                ),
+                None,
+            )
+        return terminalizer.build_result(
+            final_response=final_response,
+            trace_factory=lambda: trace.build(final_response=final_response),
+            metrics_factory=lambda: metrics,
+            provenance=terminalizer.safe(
+                "provenance",
+                lambda: self._run_provenance.to_dict(),
+                {},
+            ),
+        )
 
     def _validated_final_response(self, text: str):
         try:
@@ -1789,7 +2183,26 @@ class MathForgeHarness:
         affected_claim_ids: list[str],
     ):
         ledger.register_candidate(candidate)
-        _, records = self._run_answer_type_check(session, candidate, ledger)
+        admission = self._candidate_admission.evaluate(
+            candidate,
+            session.problem_ir,
+        )
+        if not admission.accepted:
+            raise CandidateAdmissionError(
+                ",".join(admission.rejection_codes)
+            )
+        answer_shape, records = self._run_answer_type_check(
+            session,
+            candidate,
+            ledger,
+        )
+        admission = self._candidate_admission.evaluate(
+            candidate,
+            session.problem_ir,
+            answer_shape_status=answer_shape.status,
+        )
+        if not admission.accepted:
+            return records
         records.extend(
             self._claim_verifier.verify(
                 candidate,
@@ -1802,6 +2215,84 @@ class MathForgeHarness:
             )
         )
         return records
+
+    def _run_skeptic_review(
+        self,
+        session,
+        blackboard: MemoryBlackboard,
+        trace: TraceBuilder,
+        candidates,
+        ledger: EvidenceLedger,
+        skill_context: str,
+        *,
+        round_name: str,
+    ):
+        try:
+            verifier_context = self._build_role_context(
+                session,
+                blackboard,
+                trace,
+                role="VerifierSkeptic",
+                candidates=candidates,
+                evidence=session.evidence,
+            )
+            verifier_result = self._verifier_agent.review(
+                session.problem_ir,
+                candidates,
+                session.proof_obligations,
+                session.budget,
+                max_tokens=self._config.primary_max_tokens,
+                context_view=verifier_context,
+                evidence=session.evidence,
+                skill_context=skill_context,
+            )
+        except (
+            BudgetExceeded,
+            ModelTransportError,
+            ContextBudgetExceeded,
+        ):
+            verifier_result = None
+        verifier_reason = (
+            verifier_result.reason
+            if verifier_result is not None
+            else "verifier_unavailable"
+        )
+        reviewed: set[str] = set()
+        records = []
+        for finding in (
+            verifier_result.findings
+            if verifier_result is not None
+            else []
+        ):
+            records.append(
+                ledger.record_verifier_finding(
+                    candidate_id=finding.candidate_id,
+                    claim_id=finding.claim_id,
+                    obligation_ids=finding.obligation_ids,
+                    status=finding.status,
+                    description=finding.description,
+                    missing_condition=finding.missing_condition,
+                    counterexample_summary=finding.counterexample_summary,
+                )
+            )
+            reviewed.add(finding.candidate_id)
+        trace.add(
+            "verifier_completed",
+            used_llm=(
+                verifier_result.used_llm
+                if verifier_result is not None
+                else False
+            ),
+            finding_count=(
+                len(verifier_result.findings)
+                if verifier_result is not None
+                else 0
+            ),
+            reviewed_candidates=sorted(reviewed),
+            reason=verifier_reason,
+            round=round_name,
+        )
+        return verifier_result, verifier_reason, reviewed, records
 
     def _expand_with_verified_lemmas(
         self,
@@ -1968,6 +2459,34 @@ class MathForgeHarness:
             for claim_id in changed_claim_ids
             if claim_id in old_claims and claim_id in new_claims
         ]
+
+    @staticmethod
+    def _repair_completion_score(
+        candidate,
+        decision,
+        evidence,
+    ) -> tuple[int, int, int]:
+        own_active = [
+            record
+            for record in evidence
+            if record.candidate_id == candidate.candidate_id
+            and record.transaction_status == "active"
+        ]
+        fatal_failures = sum(
+            is_fatal_hard_failure(record)
+            for record in own_active
+        )
+        verifier_adverse = sum(
+            record.evidence_type == "llm:VerifierSkeptic"
+            and record.status in {"fail", "unknown"}
+            for record in own_active
+        )
+        return (
+            fatal_failures,
+            len(decision.unresolved_obligation_ids)
+            + len(decision.failed_obligation_ids),
+            verifier_adverse,
+        )
 
     @staticmethod
     def _lemma_eligibility(session, candidates) -> tuple[bool, list[str]]:

@@ -11,8 +11,9 @@ class RuntimePhase(str, Enum):
     CANDIDATES_READY = "candidates_ready"
     EVIDENCE_READY = "evidence_ready"
     OBLIGATIONS_READY = "obligations_ready"
-    VERIFIED = "verified"
+    PRECHECKED = "prechecked"
     LEMMA_EXPANDED = "lemma_expanded"
+    VERIFIED = "verified"
     REVERIFIED = "reverified"
     ARBITRATED = "arbitrated"
     FORMATTED = "formatted"
@@ -33,9 +34,13 @@ _SUCCESSOR = {
     RuntimePhase.CONTEXT_READY: RuntimePhase.CANDIDATES_READY,
     RuntimePhase.CANDIDATES_READY: RuntimePhase.EVIDENCE_READY,
     RuntimePhase.EVIDENCE_READY: RuntimePhase.OBLIGATIONS_READY,
-    RuntimePhase.OBLIGATIONS_READY: RuntimePhase.VERIFIED,
-    RuntimePhase.VERIFIED: RuntimePhase.LEMMA_EXPANDED,
-    RuntimePhase.LEMMA_EXPANDED: RuntimePhase.REVERIFIED,
+    RuntimePhase.OBLIGATIONS_READY: RuntimePhase.PRECHECKED,
+    RuntimePhase.PRECHECKED: RuntimePhase.LEMMA_EXPANDED,
+    RuntimePhase.LEMMA_EXPANDED: RuntimePhase.VERIFIED,
+    RuntimePhase.VERIFIED: {
+        RuntimePhase.REVERIFIED,
+        RuntimePhase.ARBITRATED,
+    },
     RuntimePhase.REVERIFIED: RuntimePhase.ARBITRATED,
     RuntimePhase.ARBITRATED: RuntimePhase.FORMATTED,
     RuntimePhase.FORMATTED: RuntimePhase.FINALIZED,
@@ -50,6 +55,11 @@ _FAILABLE = frozenset(RuntimePhase) - {
 
 
 def transition_allowed(current: RuntimePhase, target: RuntimePhase) -> bool:
-    return _SUCCESSOR.get(current) == target or (
+    successor = _SUCCESSOR.get(current)
+    return (
+        target in successor
+        if isinstance(successor, set)
+        else successor == target
+    ) or (
         current in _FAILABLE and target == RuntimePhase.FAILED
     )

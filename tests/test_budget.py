@@ -86,3 +86,36 @@ def test_call_allocation_protects_required_verifier_from_optional_stages():
         budget.consume(stage="repair", optional=True)
     budget.consume(stage="verifier")
     assert budget.used_calls == 3
+
+
+def test_call_allocation_reserves_post_verifier_repair_as_an_atomic_cycle():
+    plan = CallAllocationPlan.build(
+        max_calls=4,
+        router_calls=0,
+        candidate_count=1,
+        verifier_required=True,
+        repair_requested=True,
+        lemma_requested=False,
+        finalizer_requested=False,
+        reverification_requested=True,
+    )
+    assert plan.primary == 1
+    assert plan.verifier == 2
+    assert plan.repair_reserve == 1
+    assert plan.unreachable_by_budget == ()
+
+    insufficient = CallAllocationPlan.build(
+        max_calls=3,
+        router_calls=0,
+        candidate_count=1,
+        verifier_required=True,
+        repair_requested=True,
+        lemma_requested=False,
+        finalizer_requested=False,
+        reverification_requested=True,
+    )
+    assert insufficient.verifier == 1
+    assert insufficient.repair_reserve == 0
+    assert {"repair", "reverification"} <= set(
+        insufficient.unreachable_by_budget
+    )

@@ -14,12 +14,17 @@ from mathforge.verification.evidence import (
     is_fatal_hard_failure,
     is_semantic_hard_pass,
 )
+from mathforge.verification.admission import CandidateAdmissionError
 
 
 RepairCallable = Callable[
     [CandidateSolution, list[str], list[EvidenceRecord]], CandidateSolution
 ]
 ReverifyCallable = Callable[[CandidateSolution, list[str]], list[EvidenceRecord]]
+AcceptanceCallable = Callable[
+    [CandidateSolution, list[EvidenceRecord]],
+    tuple[bool, str],
+]
 
 
 @dataclass
@@ -127,6 +132,17 @@ class ClaimRepairService:
                 claim.verification_state = "unknown"
         try:
             new_evidence = reverify(proposed, affected)
+        except CandidateAdmissionError:
+            return RepairResult(
+                candidate,
+                proposed,
+                True,
+                True,
+                affected,
+                changed,
+                [],
+                "candidate_validation_failed",
+            )
         except Exception:
             return RepairResult(
                 candidate,
@@ -141,6 +157,24 @@ class ClaimRepairService:
         if not new_evidence:
             return RepairResult(
                 candidate, proposed, True, True, affected, changed, [], "reverification_missing"
+            )
+        if any(
+            record.claim_id is None
+            and record.transaction_status == "active"
+            and record.status == "fail"
+            and record.strength == "hard"
+            for record in new_evidence
+        ):
+            self._mark_transaction(new_evidence, "rejected")
+            return RepairResult(
+                candidate,
+                proposed,
+                True,
+                True,
+                affected,
+                changed,
+                new_evidence,
+                "candidate_validation_failed",
             )
         passed_failed_claims = {
             record.claim_id
@@ -192,24 +226,6 @@ class ClaimRepairService:
                 new_evidence,
                 "affected_claim_not_reverified",
             )
-        if any(
-            record.claim_id is None
-            and record.transaction_status == "active"
-            and record.status == "fail"
-            and record.strength == "hard"
-            for record in new_evidence
-        ):
-            self._mark_transaction(new_evidence, "rejected")
-            return RepairResult(
-                candidate,
-                proposed,
-                True,
-                True,
-                affected,
-                changed,
-                new_evidence,
-                "candidate_validation_failed",
-            )
         new_local = [record for record in new_evidence if record.claim_id in affected]
         old_local = self._local_evidence(candidate, evidence, affected)
         if self._evidence_quality(new_local) < self._evidence_quality(old_local):
@@ -239,6 +255,172 @@ class ClaimRepairService:
         self._mark_transaction(new_evidence, "active")
         return RepairResult(
             proposed, proposed, True, False, affected, changed, new_evidence, "accepted"
+        )
+
+    def attempt_for_trigger(
+        self,
+        candidate: CandidateSolution,
+        evidence: list[EvidenceRecord],
+        trigger_claim_ids: list[str],
+        *,
+        repair: RepairCallable,
+        reverify: ReverifyCallable,
+        accept: AcceptanceCallable,
+    ) -> RepairResult:
+        valid_claim_ids = {claim.claim_id for claim in candidate.claims}
+        roots = sorted(set(trigger_claim_ids).intersection(valid_claim_ids))
+        affected = claim_impact_closure(candidate, roots)
+        if not affected:
+            return RepairResult(
+                candidate,
+                None,
+                False,
+                False,
+                [],
+                [],
+                [],
+                "no_verifier_trigger",
+            )
+        if candidate.candidate_id in self._repaired_candidates:
+            return RepairResult(
+                candidate,
+                None,
+                False,
+                False,
+                affected,
+                [],
+                [],
+                "candidate_limit",
+            )
+        if self._total_repairs >= self._max_total_repairs:
+            return RepairResult(
+                candidate,
+                None,
+                False,
+                False,
+                affected,
+                [],
+                [],
+                "problem_limit",
+            )
+        self._repaired_candidates.add(candidate.candidate_id)
+        self._total_repairs += 1
+        try:
+            patch = repair(
+                candidate,
+                affected,
+                self._local_evidence(candidate, evidence, affected),
+            )
+            proposed, changed = self._merge_local_patch(
+                candidate,
+                patch,
+                affected,
+            )
+        except Exception:
+            return RepairResult(
+                candidate,
+                None,
+                True,
+                True,
+                affected,
+                [],
+                [],
+                "repair_agent_failed",
+            )
+        if not changed:
+            return RepairResult(
+                candidate,
+                proposed,
+                True,
+                True,
+                affected,
+                [],
+                [],
+                "no_local_change",
+            )
+        if proposed.final_answer != candidate.final_answer:
+            terminal_claim_ids = {
+                claim_id.rsplit("::", 1)[-1]
+                for claim_id in ClaimGraph.from_candidate(
+                    proposed
+                ).terminal_claim_ids(proposed.candidate_id)
+            }
+            if not terminal_claim_ids.intersection(affected):
+                return RepairResult(
+                    candidate,
+                    proposed,
+                    True,
+                    True,
+                    affected,
+                    changed,
+                    [],
+                    "final_answer_dependency_missing",
+                )
+        try:
+            new_evidence = reverify(proposed, affected)
+        except CandidateAdmissionError:
+            return RepairResult(
+                candidate,
+                proposed,
+                True,
+                True,
+                affected,
+                changed,
+                [],
+                "candidate_validation_failed",
+            )
+        except Exception:
+            return RepairResult(
+                candidate,
+                proposed,
+                True,
+                True,
+                affected,
+                changed,
+                [],
+                "reverification_failed",
+            )
+        if any(
+            record.claim_id is None
+            and record.transaction_status == "active"
+            and record.status == "fail"
+            and record.strength == "hard"
+            for record in new_evidence
+        ):
+            self._mark_transaction(new_evidence, "rejected")
+            return RepairResult(
+                candidate,
+                proposed,
+                True,
+                True,
+                affected,
+                changed,
+                new_evidence,
+                "candidate_validation_failed",
+            )
+        accepted, reason = accept(proposed, new_evidence)
+        if not accepted:
+            self._mark_transaction(new_evidence, "rejected")
+            return RepairResult(
+                candidate,
+                proposed,
+                True,
+                True,
+                affected,
+                changed,
+                new_evidence,
+                reason,
+            )
+        self._mark_transaction(new_evidence, "active")
+        return RepairResult(
+            proposed,
+            proposed,
+            True,
+            False,
+            affected,
+            changed,
+            new_evidence,
+            reason,
         )
 
     @staticmethod
