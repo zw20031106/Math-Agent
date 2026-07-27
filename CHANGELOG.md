@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Phase 4 domain-aware math kernel and sandbox (2026-07-27)
+
+- Added a minimal Expression IR that preserves normalized source, restricted
+  AST, SymPy expression, symbols, explicit domains, derived constraints,
+  singularities, unresolved conditions, and context completeness.
+- Replaced the temporary syntax-risk gate with source-domain equivalence:
+  removable singularities remain conditional, supplied conditions can
+  discharge domain obligations, and ambiguous natural/complex conventions
+  cannot produce unconditional hard evidence.
+- Changed numerical residual checks to deterministic independent,
+  domain-aware products and exposed attempted/valid/rejected sample counts,
+  symbol count, strategy, and maximum residual while retaining medium strength.
+- Added expression length/node/depth/integer/exponent/cost limits, isolated
+  every SymPy-backed formal tool, POSIX CPU/address/file limits, bounded worker
+  requests/responses, suppressed tool stdout/stderr, and safe crash/timeout
+  outcomes.
+- Added deterministic property/metamorphic tests and explicit branch gates for
+  symbolic, numerical, worker, formal-entry, completion, and terminalization
+  code, including subprocess coverage collection.
+
 ### Phase 3 judge trace and output governance (2026-07-27)
 
 - Added an explicit Judge Trace V3 projection for the formal public result

@@ -68,9 +68,10 @@ _DEFINITIONS = (
     ToolDefinition(
         "safe_parse_expression",
         safe_parse_expression,
-        False,
+        True,
         "restricted syntax acceptance",
         "does not prove a formula",
+        "2",
         capability=VerificationCapability.SYNTAX_RESTRICTED_PARSE.value,
         claim_state=ClaimVerificationState.SYNTAX_CHECKED.value,
     ),
@@ -90,6 +91,7 @@ _DEFINITIONS = (
         True,
         "an exact algebraic simplification",
         "does not establish theorem conditions",
+        "2",
         capability=VerificationCapability.ALGEBRA_SIMPLIFICATION.value,
     ),
     ToolDefinition(
@@ -98,6 +100,7 @@ _DEFINITIONS = (
         True,
         "finite-sample residual evidence",
         "cannot prove universal equality",
+        "2",
         capability=VerificationCapability.EQUALITY_NUMERICAL_SAMPLES.value,
         claim_state=ClaimVerificationState.NUMERICALLY_SUPPORTED.value,
     ),
@@ -116,6 +119,7 @@ _DEFINITIONS = (
         True,
         "an exact integral normalization check",
         "does not prove nonnegativity",
+        "2",
         capability=VerificationCapability.PROBABILITY_NORMALIZATION.value,
         claim_state=ClaimVerificationState.SEMANTICALLY_VERIFIED.value,
     ),
@@ -125,6 +129,7 @@ _DEFINITIONS = (
         True,
         "the supplied finite cases",
         "cannot prove untested cases",
+        "2",
         capability=VerificationCapability.FINITE_CASE_EXACT.value,
         claim_state=ClaimVerificationState.SEMANTICALLY_VERIFIED.value,
     ),
@@ -168,6 +173,11 @@ _INPUT_SCHEMAS: dict[str, dict[str, dict[str, Any]]] = {
         "right": {"type": "string"},
         "tolerance": {"type": "number"},
         "samples": {"type": "array", "items": {"type": "number"}},
+        "domains": {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+        },
+        "max_samples": {"type": "integer"},
     },
     "matrix_shape_check": {
         "matrix": {
@@ -205,7 +215,13 @@ _INPUT_SCHEMAS: dict[str, dict[str, dict[str, Any]]] = {
 
 _OPTIONAL_ARGUMENTS: dict[str, set[str]] = {
     "symbolic_equivalence": {"assumptions", "domains"},
-    "numerical_residual": {"right", "tolerance", "samples"},
+    "numerical_residual": {
+        "right",
+        "tolerance",
+        "samples",
+        "domains",
+        "max_samples",
+    },
     "small_case_enumeration": {"expected"},
 }
 

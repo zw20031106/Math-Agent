@@ -24,7 +24,9 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.coverage.run]
 branch = true
-source = ["mathforge"]
+source = ["mathforge", "user_agent"]
+parallel = true
+patch = ["subprocess"]
 
 [tool.coverage.report]
 fail_under = 80

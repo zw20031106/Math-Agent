@@ -191,6 +191,15 @@
 | `mathforge/output/judge_trace.py` | 将内部 Trace V2 投影并校验为有界 Judge Trace V3；未选候选摘要化、关键事件保护、安全过滤和结构化压缩 | `public_result.py`、公共输出对抗测试 |
 | `mathforge/output/public_result.py` | 将内部结果投影为 `id/status/final_response/trace`；执行 Judge Trace V3 与最终 UTF-8 序列化字节预算 | `user_agent.py`、逐题 runner、提交校验 |
 
+## 11A. `mathforge.math_ir` 与数学工具沙箱
+
+| 文件 | 作用 | 主要关系 |
+|---|---|---|
+| `mathforge/math_ir/domain.py` | 解析显式域与题面约束，保留自然数约定歧义，构造可验证的 SymPy predicate | Expression IR、Symbolic、Numerical |
+| `mathforge/math_ir/expression.py` | 构建受限 Expression IR，保留源 AST、定义域约束、奇点和未满足条件 | Symbolic 工具 |
+| `mathforge/tools/resource_limits.py` | 在 SymPy 构造前限制字符、AST、数字、指数、深度、估算成本及 Worker 协议大小 | Safe Parse、Executor、Worker |
+| `mathforge/tools/worker.py` | 独立执行 SymPy-backed 工具；应用 CPU/地址空间/文件限制并只返回有界结构化 JSON | ToolExecutor 子进程 |
+
 ## 12. `mathforge.evaluation` 与 `governance`
 
 | 文件 | 作用 | 主要关系 |

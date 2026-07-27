@@ -57,8 +57,7 @@ def _candidate_files(root: Path) -> list[Path]:
             cwd=root,
             check=True,
             capture_output=True,
-            text=True,
-        ).stdout
+        ).stdout.decode("utf-8", errors="surrogateescape")
     except (OSError, subprocess.CalledProcessError):
         return sorted(path for path in root.rglob("*") if path.is_file())
     return [root / relative for relative in output.split("\0") if relative]

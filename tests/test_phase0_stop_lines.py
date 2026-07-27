@@ -120,7 +120,7 @@ def test_finite_enumeration_schema_declares_and_enforces_bounds():
     ).status != "pass"
 
 
-def test_symbolic_equivalence_is_conservative_about_domain_sensitive_forms():
+def test_symbolic_equivalence_uses_source_domains_for_sensitive_forms():
     executor = ToolExecutor()
     polynomial = executor.execute(
         "symbolic_equivalence",
@@ -145,16 +145,15 @@ def test_symbolic_equivalence_is_conservative_about_domain_sensitive_forms():
 
     assert polynomial.status == "pass"
     assert polynomial.strength == "hard"
-    for result in (
-        removable_singularity,
-        logarithm,
-        square_root,
-        fractional_power,
-    ):
-        assert not (result.status == "pass" and result.strength == "hard")
+    assert removable_singularity.status == logarithm.status == "unknown"
+    assert square_root.status == "fail"
+    assert square_root.strength == "hard"
+    assert fractional_power.status == "pass"
+    assert fractional_power.strength == "hard"
+    for result in (removable_singularity, logarithm, square_root, fractional_power):
         assert result.payload["domain_sensitive"] is True
-        if result.status == "unknown":
-            assert result.payload["context_complete"] is False
+    assert removable_singularity.payload["context_complete"] is False
+    assert logarithm.payload["context_complete"] is False
 
 
 def test_ambiguous_natural_domain_never_yields_unconditional_hard_evidence():

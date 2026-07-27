@@ -5,6 +5,8 @@ import re
 
 import sympy
 
+from mathforge.tools.resource_limits import inspect_expression
+
 
 _FUNCTIONS = {
     "abs": sympy.Abs,
@@ -33,13 +35,11 @@ class UnsafeExpression(ValueError):
 
 
 def parse_expression(expression: str) -> sympy.Expr:
-    source = str(expression).strip().replace("^", "**")
-    if not source or len(source) > 2048:
-        raise UnsafeExpression("expression is empty or too long")
-    tree = ast.parse(source, mode="eval")
-    if sum(1 for _ in ast.walk(tree)) > 256:
-        raise UnsafeExpression("expression is too complex")
-    return _convert(tree.body)
+    try:
+        inspection = inspect_expression(expression)
+    except ValueError as error:
+        raise UnsafeExpression(str(error)) from error
+    return _convert(inspection.tree.body)
 
 
 def _convert(node: ast.AST) -> sympy.Expr:

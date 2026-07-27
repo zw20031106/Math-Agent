@@ -7,6 +7,13 @@ import sys
 from typing import Any
 
 from mathforge.tools.registry import ToolRegistry, ToolResult, run_tool_direct
+from mathforge.tools.resource_limits import (
+    ExpressionLimitError,
+    MAX_WORKER_REQUEST_BYTES,
+    MAX_WORKER_RESPONSE_BYTES,
+    MAX_WORKER_STDERR_BYTES,
+    inspect_tool_arguments,
+)
 from typing import Protocol
 
 
@@ -24,7 +31,7 @@ class ToolExecutor:
     def __init__(
         self,
         registry: ToolRegistry | None = None,
-        default_timeout: float = 3.0,
+        default_timeout: float = 10.0,
         *,
         use_mcp: bool = False,
         mcp_adapter: MCPAdapter | None = None,
@@ -95,6 +102,19 @@ class ToolExecutor:
             return ToolResult(
                 name, "error", "soft", "tool is not registered", {}, "unregistered"
             )
+        try:
+            inspect_tool_arguments(arguments)
+        except ExpressionLimitError:
+            return ToolResult(
+                name,
+                "error",
+                "soft",
+                "tool input rejected by resource limits",
+                {},
+                definition.version,
+                definition.capability,
+                definition.claim_state,
+            )
         if not definition.isolated:
             try:
                 return run_tool_direct(name, dict(arguments))
@@ -109,7 +129,21 @@ class ToolExecutor:
                     definition.capability,
                     definition.claim_state,
                 )
-        request = json.dumps({"name": name, "arguments": arguments}, ensure_ascii=False)
+        request = json.dumps(
+            {"name": name, "arguments": arguments},
+            ensure_ascii=False,
+        )
+        if len(request.encode("utf-8")) > MAX_WORKER_REQUEST_BYTES:
+            return ToolResult(
+                name,
+                "error",
+                "soft",
+                "isolated tool request exceeded limit",
+                {},
+                definition.version,
+                definition.capability,
+                definition.claim_state,
+            )
         try:
             completed = subprocess.run(
                 [sys.executable, "-m", "mathforge.tools.worker"],
@@ -138,6 +172,20 @@ class ToolExecutor:
                 "error",
                 "soft",
                 "isolated tool failed",
+                {},
+                definition.version,
+                definition.capability,
+                definition.claim_state,
+            )
+        if (
+            len(completed.stdout.encode("utf-8")) > MAX_WORKER_RESPONSE_BYTES
+            or len(completed.stderr.encode("utf-8")) > MAX_WORKER_STDERR_BYTES
+        ):
+            return ToolResult(
+                name,
+                "error",
+                "soft",
+                "isolated tool response exceeded limit",
                 {},
                 definition.version,
                 definition.capability,

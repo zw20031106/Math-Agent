@@ -69,10 +69,10 @@
         "mathforge/verification/evidence.py"
       ],
       "expected_count": 5,
-      "version": "tool-contract-5",
-      "engineering_reviewer": "codex-phase0-stop-line-audit",
+      "version": "tool-contract-6",
+      "engineering_reviewer": "codex-phase4-math-kernel-audit",
       "review_date": "2026-07-27",
-      "sha256": "783cd4893598adee4a288932c5d1931b53c20c81237a0fd38bccd6216553fab4"
+      "sha256": "80196db9cb957e11b796eb1ba7df5b36823a84be9ead632873d80077f0aed46c"
     },
     {
       "id": "answer-normalization",

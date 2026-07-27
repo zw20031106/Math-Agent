@@ -49,6 +49,15 @@ already carries deterministic semantic evidence and has no fatal failure.
 Benchmark metrics expose tool argument/Schema success, unknown/error rates,
 and Repair success/rollback rates.
 
+Symbolic verification first builds a restricted, source-preserving Expression
+IR. Denominator, logarithm, square-root, fractional-power, negative-exponent,
+and tangent constraints are compared before an equality can become hard
+evidence; unresolved natural-number conventions and complex branches fail
+closed. Numerical residuals use deterministic independent domain-aware samples
+and remain medium evidence. Every SymPy-backed formal tool executes in a
+bounded worker process with expression complexity, wall/CPU/address-space, and
+request/response limits.
+
 ## Public output
 
 `ReasoningAgent.solve(problem, metadata)` returns exactly one flat public

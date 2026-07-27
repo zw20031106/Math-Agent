@@ -119,6 +119,8 @@ class ClaimToolRequestBuilder:
                     dict.fromkeys([*(assumptions or []), *candidate.assumptions])
                 )
                 arguments["domains"] = dict(domains or {})
+            elif domains:
+                arguments["domains"] = dict(domains)
             return arguments
         if check_type in {"safe_parse_expression", "simplify_expression"}:
             return {"expression": statement.strip()} if statement.strip() else None
