@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import asdict, dataclass, fields
 from hashlib import sha256
 import json
-import os
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import ClassVar
+
+from mathforge.resources import resource_path
 
 
 CONFIG_SCHEMA_VERSION = "1.4"
-REPO_ROOT = Path(__file__).resolve().parents[1]
-COMPETITION_CONFIG_PATH = REPO_ROOT / "config" / "competition.json"
+COMPETITION_CONFIG_PATH = resource_path("config", "competition.json")
 _METADATA_FIELDS = frozenset({"schema_version", "profile", "status"})
 
 
@@ -292,29 +292,6 @@ class HarnessConfig:
     def from_json(cls, path: Path) -> "HarnessConfig":
         payload = json.loads(path.read_text(encoding="utf-8"))
         return cls.from_dict(payload)
-
-    @classmethod
-    def from_environment(
-        cls,
-        base: "HarnessConfig | None" = None,
-    ) -> "HarnessConfig":
-        configured = base or load_competition_config()
-        values: dict[str, Any] = {}
-        if "MATHFORGE_MODEL_MAX_CONCURRENCY" in os.environ:
-            raw = os.environ["MATHFORGE_MODEL_MAX_CONCURRENCY"]
-            try:
-                values["model_max_concurrency"] = int(raw)
-            except ValueError as error:
-                raise ValueError(
-                    "MATHFORGE_MODEL_MAX_CONCURRENCY must be an integer"
-                ) from error
-        if "MATHFORGE_USE_MCP" in os.environ:
-            raw = os.environ["MATHFORGE_USE_MCP"].strip().lower()
-            if raw not in {"0", "1", "false", "true"}:
-                raise ValueError("MATHFORGE_USE_MCP must be true or false")
-            values["use_mcp"] = raw in {"1", "true"}
-        return replace(configured, **values)
-
 
 def load_competition_config() -> HarnessConfig:
     return HarnessConfig.from_json(COMPETITION_CONFIG_PATH)

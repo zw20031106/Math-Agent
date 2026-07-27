@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Phase 5 architecture and engineering governance (2026-07-27)
+
+- Added typed Candidate, Evidence, and Proof Stage boundaries without changing
+  the public API or the runtime state topology.
+- Made disabled RAG and LLM Finalizer construction lazy, retained lazy MCP
+  opt-in, and removed import-time Git/DB/registry Provenance work.
+- Established the fully expanded competition profile as the formal
+  configuration source and removed unused Harness environment overrides.
+- Split immutable and participant-mutable baseline manifest groups and expanded
+  secret scanning with digest-scoped allowlisting.
+- Added PEP 621 metadata, bundled runtime resources, Linux Python 3.10
+  constraints, a real installed-wheel smoke from outside the repository, and
+  an Ubuntu 3.10 network-denial formal CI gate.
+- Documented the formal entry, safe bounded single-case runner, and immutable
+  legacy runner boundary.
+
 ### Phase 4 domain-aware math kernel and sandbox (2026-07-27)
 
 - Added a minimal Expression IR that preserves normalized source, restricted

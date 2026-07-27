@@ -55,6 +55,10 @@ class ToolExecutor:
         return self._registry.fingerprint
 
     @property
+    def manifest(self) -> list[dict[str, str]]:
+        return self._registry.manifest
+
+    @property
     def registered_tools(self) -> frozenset[str]:
         return frozenset(self._registry.names())
 

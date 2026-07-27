@@ -438,3 +438,15 @@ scripts/run_case_outputs.py
    重要的调用关系分叉。
 7. 任何新增文件都应同时更新：注册/指纹、对应 Contract、单元测试、内容审核范围、
    本文件和总架构报告。
+
+## 22. Phase 5 新增工程文件
+
+| 文件 | 作用 | 主要调用方 |
+|---|---|---|
+| `mathforge/harness/stages.py` | Candidate、Evidence、Proof、Context/Route 的强类型阶段边界 | `MathForgeHarness` |
+| `mathforge/resources.py` | 统一解析源码树与安装后 wheel 的资源目录 | Config、Prompt/Skill Registry、Retriever、Provenance |
+| `data/build_provenance_manifest.json` | 构建期静态内容指纹，避免正式初始化扫描 Git/DB | `mathforge.provenance` |
+| `config/secret_scan_allowlist.json` | 按路径、类型和值摘要记录已审核的误报 | `scripts.scan_secrets` |
+| `scripts/verify_build_provenance.py` | 校验构建期静态指纹未漂移 | 本地质量门、Linux CI |
+| `scripts/formal_offline_smoke.py` | 禁网条件下验证正式注入 Client 入口 | Linux Python 3.10 CI |
+| `.github/workflows/formal-linux.yml` | Python 3.10 编译、静态检查、测试、治理和禁网门 | GitHub Actions |

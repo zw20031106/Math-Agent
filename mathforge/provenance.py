@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 import json
 from pathlib import Path
 import subprocess
@@ -10,17 +11,20 @@ from typing import Any
 from mathforge.agents.registry import PromptContractLoader, SkillRegistry
 from mathforge.config import HarnessConfig
 from mathforge.harness.context_budget import tokenizer_provenance
-from mathforge.harness.fingerprints import file_fingerprint, semantic_fingerprint
+from mathforge.harness.fingerprints import semantic_fingerprint
 from mathforge.model_identity import ModelIdentity, unreported_model_identity
 from mathforge.retrieval.retriever import Retriever
 from mathforge.retrieval.schemas import RAG_SCHEMA_VERSION
+from mathforge.resources import resource_path
 from mathforge.tools.registry import ToolRegistry
 
 
 PROVENANCE_SCHEMA_VERSION = "1.2"
 ROOT = Path(__file__).resolve().parents[1]
-CONTENT_REVIEW_MANIFEST = ROOT / "docs" / "content_review_manifest.json"
-COMPONENT_DECISIONS = ROOT / "config" / "component_decisions.json"
+BUILD_PROVENANCE_MANIFEST = resource_path(
+    "data",
+    "build_provenance_manifest.json",
+)
 
 
 @dataclass(frozen=True)
@@ -133,18 +137,20 @@ def build_run_provenance(
     skills: SkillRegistry | None = None,
     retriever: Retriever | None = None,
     tools: ToolRegistry | None = None,
+    tool_manifest: list[dict[str, str]] | None = None,
     model_identity: ModelIdentity | None = None,
+    inspect_worktree: bool = False,
 ) -> RunProvenance:
-    static = _DEFAULT_STATIC_PROVENANCE
+    static = _default_static_provenance(inspect_worktree)
     prompt_manifest = (
         contracts.manifest
         if contracts is not None
-        else deepcopy(static["prompts"])
+        else PromptContractLoader().manifest
     )
     skill_manifest = (
         skills.manifest
         if skills is not None
-        else deepcopy(static["skills"])
+        else SkillRegistry().manifest
     )
     rag_hash = (
         retriever.fingerprint
@@ -152,9 +158,11 @@ def build_run_provenance(
         else str(static["knowledge_db_sha256"])
     )
     tool_manifest = (
-        tools.manifest
+        tool_manifest
+        if tool_manifest is not None
+        else tools.manifest
         if tools is not None
-        else deepcopy(static["tools"])
+        else ToolRegistry().manifest
     )
     return RunProvenance(
         schema_version=PROVENANCE_SCHEMA_VERSION,
@@ -224,27 +232,19 @@ def _require_sha256(value: str | None, name: str) -> None:
         raise ValueError(f"{name} provenance hash is invalid")
 
 
-def _build_default_static_provenance() -> dict[str, Any]:
-    review_payload = _read_json(CONTENT_REVIEW_MANIFEST)
-    decision_payload = _read_json(COMPONENT_DECISIONS)
+@lru_cache(maxsize=2)
+def _default_static_provenance(inspect_worktree: bool) -> dict[str, Any]:
+    build_manifest = _read_json(BUILD_PROVENANCE_MANIFEST)
     return {
-        "code_commit": _git_commit(),
-        "code_dirty": _git_dirty(),
-        "prompts": PromptContractLoader().manifest,
-        "skills": SkillRegistry().manifest,
-        "knowledge_db_sha256": Retriever().fingerprint,
-        "tools": ToolRegistry().manifest,
-        "content_reviews": {
-            "schema_version": str(review_payload.get("schema_version", "")),
-            "status": str(review_payload.get("status", "missing")),
-            "manifest_sha256": file_fingerprint(CONTENT_REVIEW_MANIFEST),
-        },
-        "component_decisions": {
-            "schema_version": str(decision_payload.get("schema_version", "")),
-            "status": str(decision_payload.get("decision_status", "missing")),
-            "manifest_sha256": file_fingerprint(COMPONENT_DECISIONS),
-        },
+        "code_commit": _git_commit() if inspect_worktree else "uninspected-runtime",
+        "code_dirty": _git_dirty() if inspect_worktree else None,
+        "knowledge_db_sha256": str(
+            build_manifest.get("knowledge_db_sha256", "")
+        ),
+        "content_reviews": dict(
+            build_manifest.get("content_reviews", {})
+        ),
+        "component_decisions": dict(
+            build_manifest.get("component_decisions", {})
+        ),
     }
-
-
-_DEFAULT_STATIC_PROVENANCE = _build_default_static_provenance()

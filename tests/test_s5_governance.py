@@ -125,7 +125,8 @@ def test_run_and_benchmark_provenance_are_complete_and_tamper_evident(tmp_path):
 
     assert provenance["schema_version"] == "1.2"
     assert provenance["code_commit"]
-    assert isinstance(provenance["code_dirty"], bool)
+    assert provenance["code_commit"] == "uninspected-runtime"
+    assert provenance["code_dirty"] is None
     assert provenance["model_identity"]["requested_model"] == EXACT_INTERN_MODEL
     assert provenance["model_identity"]["response_model_observable"] is False
     assert provenance["tokenizer"]["repository"] == "internlm/Intern-S2-Preview-397B"

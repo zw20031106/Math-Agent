@@ -471,7 +471,10 @@ class CaseRunManifest:
                 case_ids=expected_ids,
                 seed=seed,
             )
-        elif any((output_dir / f"{case.idx}.json").exists() for case in cases):
+        elif any(
+            _contained_case_path(output_dir, case.idx).exists()
+            for case in cases
+        ):
             if not resume:
                 raise FileExistsError(
                     "case outputs already exist; pass --resume to validate them"
@@ -513,7 +516,7 @@ class CaseRunManifest:
         remaining = []
         entries = payload.setdefault("cases", {})
         for case in cases:
-            case_path = output_dir / f"{case.idx}.json"
+            case_path = _contained_case_path(output_dir, case.idx)
             if not case_path.exists():
                 remaining.append(case)
                 continue
@@ -962,7 +965,7 @@ def write_case_output(record: BenchmarkRecord, output_dir: Path) -> Path:
     _validate_identifier(identifier)
     payload = build_public_result(_json_identifier(identifier), record.result)
     _validate_public_payload(payload, identifier)
-    destination = output_dir / f"{identifier}.json"
+    destination = _contained_case_path(output_dir, identifier)
     _atomic_write_json(destination, payload)
     return destination
 
@@ -1400,6 +1403,15 @@ def _validate_identifier(identifier: str) -> None:
         or any(character in '<>:"/\\|?*' for character in identifier)
     ):
         raise ValueError("case id is not safe for a filename")
+
+
+def _contained_case_path(output_dir: Path, identifier: str) -> Path:
+    _validate_identifier(identifier)
+    root = output_dir.resolve()
+    destination = (root / f"{identifier}.json").resolve()
+    if destination.parent != root:
+        raise ValueError("case output path escapes the output directory")
+    return destination
 
 
 def _json_identifier(identifier: str) -> int | str:

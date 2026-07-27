@@ -1,6 +1,47 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools==82.0.1"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "mathforge-agent"
+version = "0.5.0"
+description = "Competition-grade mathematical reasoning harness for the official Intern-S client"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31,<3",
+    "sympy>=1.12,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.18,<2",
+    "pytest>=8,<9",
+    "pytest-cov>=7,<8",
+    "ruff>=0.15,<1",
+]
+
+[tool.setuptools]
+include-package-data = true
+py-modules = ["user_agent"]
+
+[tool.setuptools.packages.find]
+include = ["mathforge*"]
+
+[tool.setuptools.data-files]
+"share/mathforge/config" = ["config/*.json"]
+"share/mathforge/config/ablation" = ["config/ablation/*.json"]
+"share/mathforge/data" = ["data/*"]
+"share/mathforge/docs" = ["docs/content_review_manifest.json"]
+"share/mathforge/prompts/alternative_solver" = ["prompts/alternative_solver/*.md"]
+"share/mathforge/prompts/finalizer" = ["prompts/finalizer/*.md"]
+"share/mathforge/prompts/lemma_curator" = ["prompts/lemma_curator/*.md"]
+"share/mathforge/prompts/primary_solver" = ["prompts/primary_solver/*.md"]
+"share/mathforge/prompts/repair" = ["prompts/repair/*.md"]
+"share/mathforge/prompts/router_planner" = ["prompts/router_planner/*.md"]
+"share/mathforge/prompts/verifier_skeptic" = ["prompts/verifier_skeptic/*.md"]
+"share/mathforge/skills/domains" = ["skills/domains/*.md"]
+"share/mathforge/skills/general" = ["skills/general/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

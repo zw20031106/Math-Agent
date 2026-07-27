@@ -107,7 +107,9 @@ fixed at one concurrent request.
 
 The custom runner is strictly single-case: its default concurrency is one and
 other values are rejected, so a queued case never consumes its 1,200-second
-deadline before dispatch. `run_manifest.json` moves through `created`,
+deadline before dispatch. Its execution queue is therefore bounded at one case;
+each result is atomically written before the next case begins. `run_manifest.json`
+moves through `created`,
 `preflight_passed`, and `running`, then ends as `completed`, `degraded`,
 `aborted`, or `failed`. SIGINT/SIGTERM lets the active case finish its atomic
 write, prevents another case from starting, and records `aborted`.
@@ -119,7 +121,10 @@ manifest-bound hash. It skips only `success` by default and reruns
 `failed,timeout`; use `--rerun-status` to override that set. `--max-cases N`
 and `--stop-after-case ID` provide deterministic, resumable stopping points.
 
-The official `main.py` remains byte-frozen. Its wrapper still emits `idx`,
+The formal platform entry is `user_agent.py`; the resumable local batch entry is
+`scripts/run_case_outputs.py`. The official `main.py` and `llm_client.py` are
+immutable legacy baseline fixtures, not the participant output contract.
+`main.py` still emits `idx`,
 forces normal agent returns to `success`, emits a fifth `error` field on
 exceptions, and defaults to eight local tasks. The exact four-field/status
 lifecycle contract therefore belongs to `scripts/run_case_outputs.py` unless
@@ -207,11 +212,15 @@ wheelhouse; installation and the smoke test are offline.
 
 - `INTERN_MODEL=intern-s2-preview-397b`: required only by local benchmark
   runners; aliases fail closed.
-- `MATHFORGE_MODEL_MAX_CONCURRENCY`: bounded shared client concurrency (default `4`).
 - `MATHFORGE_INTERN_S2_TOKENIZER_DIR`: optional pinned local tokenizer snapshot;
   a mismatch activates the recorded UTF-8 fallback instead of loading it.
-- `MATHFORGE_USE_MCP=1`: explicitly opt into the one-shot local StdIO adapter;
-  Direct remains the production default.
+
+The formal entry loads exactly `config/competition.json`. Harness feature and
+concurrency settings have no environment-variable override. Programmatic
+`HarnessConfig(...)` values are for tests/custom embedding, and benchmark
+runners load only their explicit `--config` path. The tested source hierarchy
+and intentional custom/default differences are recorded in
+`docs/CONFIGURATION_SOURCES.md`.
 
 The competition profile allows six model calls and has no artificial aggregate
 model-token quota. It stops low-value optional work at 800 seconds, closes all

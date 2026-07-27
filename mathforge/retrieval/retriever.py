@@ -7,6 +7,7 @@ import re
 import sqlite3
 
 from mathforge.harness.fingerprints import file_fingerprint
+from mathforge.resources import resource_path
 from mathforge.retrieval.schemas import (
     RAG_SCHEMA_VERSION,
     KnowledgeCard,
@@ -59,7 +60,7 @@ _BILINGUAL_TERMS = {
 
 class Retriever:
     def __init__(self, database: Path | None = None, max_top_k: int = 5) -> None:
-        self._database = database or Path(__file__).resolve().parents[2] / "data" / "math_knowledge.sqlite"
+        self._database = database or resource_path("data", "math_knowledge.sqlite")
         self._max_top_k = max(1, max_top_k)
 
     @property

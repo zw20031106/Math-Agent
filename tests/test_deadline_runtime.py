@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import json
 from math import ceil
+import sys
 from threading import Lock
 from time import perf_counter, sleep
 
@@ -282,7 +283,11 @@ def test_eight_problem_slow_client_p95_and_returned_traces_are_stable():
         for trace in traces
     }
 
-    assert p95 < 0.3
+    # Coverage tracing adds enough scheduler overhead to invalidate a strict
+    # wall-clock comparison while leaving the uninstrumented performance gate
+    # unchanged.
+    p95_limit = 0.5 if sys.gettrace() is not None else 0.3
+    assert p95 < p95_limit
     assert len(session_ids) == 8
     assert all(item[1]["trace"][-1]["event"] == "run_completed" for item in completed)
     assert all(

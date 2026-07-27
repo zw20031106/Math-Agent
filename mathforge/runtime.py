@@ -30,6 +30,12 @@ from mathforge.harness.orchestration import (
 )
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
 from mathforge.harness.session import create_session
+from mathforge.harness.stages import (
+    CandidateStage,
+    ContextRouteStage,
+    EvidenceStage,
+    ProofStage,
+)
 from mathforge.harness.state import RuntimePhase
 from mathforge.harness.trace import TraceBuilder
 from mathforge.harness.trace_summary import (
@@ -52,7 +58,6 @@ from mathforge.verification.evidence import (
     is_semantic_hard_pass,
 )
 from mathforge.verification.arbitration import ArbitrationPolicy
-from mathforge.verification.proof_obligations import ProofObligationEngine
 from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.context.role_views import RoleContextFactory
 from mathforge.memory.blackboard import MemoryBlackboard
@@ -60,13 +65,11 @@ from mathforge.harness.lemma_loop import VerifiedLemmaLoop
 from mathforge.model_identity import ModelIdentity
 from mathforge.retrieval.retriever import Retriever
 from mathforge.provenance import build_run_provenance
-from mathforge.verification.evidence import ClaimEvidenceVerifier
 from mathforge.agents.repair import RepairAgent
 from mathforge.harness.repair import ClaimRepairService
 from mathforge.verification.repair_scope import claim_impact_closure
 from mathforge.agents.finalizer import LLMFinalizer
 from mathforge.agents.verifier import VerifierSkepticAgent
-from mathforge.verification.completion import ProofCompletionGate
 from mathforge.verification.admission import (
     CandidateAdmissionError,
     CandidateAdmissionGate,
@@ -155,13 +158,15 @@ class MathForgeHarness:
         self._problem_parser = ProblemParser()
         self._solution_parser = SolutionParser()
         self._answer_validator = AnswerValidator()
-        self._candidate_admission = CandidateAdmissionGate(
-            self._answer_validator
+        self._candidate_stage = CandidateStage(
+            CandidateAdmissionGate(self._answer_validator)
         )
         self._formatter = DeterministicFormatter()
         self._contracts = PromptContractLoader()
-        self._role_contexts = RoleContextFactory()
-        self._router = RouterPlanner(contracts=self._contracts)
+        self._context_route_stage = ContextRouteStage(
+            RouterPlanner(contracts=self._contracts),
+            RoleContextFactory(),
+        )
         self._skills = SkillRegistry()
         self._solver_executor = SolverExecutor(self._provider, self._solution_parser)
         self._candidate_orchestrator = CandidateOrchestrator(
@@ -169,26 +174,32 @@ class MathForgeHarness:
             self._contracts,
         )
         self._tool_executor = ToolExecutor(use_mcp=self._config.use_mcp)
-        self._obligation_engine = ProofObligationEngine()
         self._arbitration = ArbitrationPolicy(self._tool_executor)
         self._lemma_loop = VerifiedLemmaLoop()
-        self._retriever = Retriever()
-        self._claim_verifier = ClaimEvidenceVerifier(self._tool_executor)
+        self._retriever = Retriever() if self._config.enable_rag else None
+        self._evidence_stage = EvidenceStage(self._tool_executor)
+        self._proof_stage = ProofStage()
         self._repair_agent = RepairAgent(
             self._provider,
             self._solution_parser,
             self._contracts,
         )
-        self._finalizer = LLMFinalizer(
-            self._provider,
-            self._solution_parser,
-            self._formatter,
-            self._contracts,
+        self._finalizer = (
+            LLMFinalizer(
+                self._provider,
+                self._solution_parser,
+                self._formatter,
+                self._contracts,
+            )
+            if self._config.enable_finalizer
+            else None
         )
         self._verifier_agent = VerifierSkepticAgent(self._provider, self._contracts)
-        self._proof_completion_gate = ProofCompletionGate()
         self._run_provenance = build_run_provenance(
             self._config,
+            contracts=self._contracts,
+            skills=self._skills,
+            tool_manifest=self._tool_executor.manifest,
             model_identity=model_identity,
         )
         identity = ModelIdentity.from_dict(self._run_provenance.model_identity)
@@ -199,7 +210,7 @@ class MathForgeHarness:
             "config_hash": self._config.fingerprint,
             "prompt_hash": self._contracts.fingerprint,
             "skill_hash": self._skills.fingerprint,
-            "rag_hash": self._retriever.fingerprint,
+            "rag_hash": self._run_provenance.rag["knowledge_db_sha256"],
             "tool_hash": self._tool_executor.fingerprint,
             "code_commit": self._run_provenance.code_commit,
             "code_dirty": self._run_provenance.code_dirty,
@@ -350,7 +361,7 @@ class MathForgeHarness:
                 )
             except (ContextBudgetExceeded, BudgetExceeded):
                 router_enabled = False
-            session.route_plan = self._router.plan(
+            session.route_plan = self._context_route_stage.plan(
                 session.problem_ir,
                 llm_chat=(
                     (
@@ -465,7 +476,10 @@ class MathForgeHarness:
                 and session.budget.deadline.optional_work_allowed()
             ):
                 session.budget.ensure_stage("rag", optional=True)
-                retrieval_result = self._retriever.search_with_status(
+                retriever = self._retriever
+                if retriever is None:
+                    raise RuntimeError("enabled retriever was not constructed")
+                retrieval_result = retriever.search_with_status(
                     session.problem_ir.normalized_problem,
                     subject=session.route_plan.primary_subject,
                     role="PrimarySolver",
@@ -535,7 +549,7 @@ class MathForgeHarness:
                 selected_skills=session.route_plan.selected_skills,
                 selected_tools=session.route_plan.selected_tools,
                 method_families=session.route_plan.method_families,
-                routing_reasons=self._router.routing_reasons(
+                routing_reasons=self._context_route_stage.routing_reasons(
                     session.problem_ir,
                     session.route_plan,
                 ),
@@ -690,7 +704,7 @@ class MathForgeHarness:
             admission_rejections: dict[str, list[str]] = {}
             admitted_candidates = []
             for item in fanout.candidates:
-                admission = self._candidate_admission.evaluate(
+                admission = self._candidate_stage.evaluate(
                     item,
                     session.problem_ir,
                 )
@@ -719,7 +733,7 @@ class MathForgeHarness:
                             ),
                         }
                     )
-                    admission = self._candidate_admission.evaluate(
+                    admission = self._candidate_stage.evaluate(
                         item,
                         session.problem_ir,
                         answer_shape_status=result.status,
@@ -730,7 +744,7 @@ class MathForgeHarness:
                         )
                         continue
                 if self._config.enable_tools and self._config.enable_evidence:
-                    claim_records = self._claim_verifier.verify(
+                    claim_records = self._evidence_stage.verify(
                         item,
                         ledger,
                         domains=session.problem_ir.domains,
@@ -1000,15 +1014,12 @@ class MathForgeHarness:
                         )
                     repaired_candidates.append(repair_result.selected)
                 active_candidates = repaired_candidates
-            viable = (
-                [
-                    item
-                    for item in active_candidates
-                    if not ledger.has_hard_fail(item.candidate_id)
-                ]
-                if self._config.enable_evidence
-                else list(active_candidates)
+            evidence_gate = self._evidence_stage.hard_gate(
+                active_candidates,
+                ledger,
+                enabled=self._config.enable_evidence,
             )
+            viable = evidence_gate.accepted
             trace.add(
                 "hard_evidence_gate",
                 accepted=[item.candidate_id for item in viable],
@@ -1027,7 +1038,7 @@ class MathForgeHarness:
             )
             if self._config.enable_proof_obligations:
                 for item in viable:
-                    session.proof_obligations[item.candidate_id] = self._obligation_engine.generate(
+                    session.proof_obligations[item.candidate_id] = self._proof_stage.generate(
                         session.problem_ir, item
                     )
             trace.add(
@@ -1106,7 +1117,7 @@ class MathForgeHarness:
                     session.budget.record_claims(len(expanded.claims))
                 except BudgetExceeded:
                     rejection_codes.append("claim_budget")
-                admission = self._candidate_admission.evaluate(
+                admission = self._candidate_stage.evaluate(
                     expanded,
                     session.problem_ir,
                 )
@@ -1118,7 +1129,7 @@ class MathForgeHarness:
                         ledger,
                     )
                     rejection_codes.extend(
-                        self._candidate_admission.evaluate(
+                        self._candidate_stage.evaluate(
                             expanded,
                             session.problem_ir,
                             answer_shape_status=answer_shape.status,
@@ -1129,7 +1140,7 @@ class MathForgeHarness:
                     and self._config.enable_tools
                     and self._config.enable_evidence
                 ):
-                    self._claim_verifier.verify(
+                    self._evidence_stage.verify(
                         expanded,
                         ledger,
                         domains=session.problem_ir.domains,
@@ -1170,7 +1181,7 @@ class MathForgeHarness:
                     continue
                 if self._config.enable_proof_obligations:
                     session.proof_obligations[expanded.candidate_id] = (
-                        self._obligation_engine.generate(
+                        self._proof_stage.generate(
                             session.problem_ir,
                             expanded,
                         )
@@ -1303,7 +1314,7 @@ class MathForgeHarness:
                     )
                     if not trigger_claim_ids:
                         continue
-                    before_decision = self._proof_completion_gate.evaluate(
+                    before_decision = self._proof_stage.evaluate(
                         item,
                         session.evidence,
                         session.proof_obligations.get(
@@ -1334,7 +1345,7 @@ class MathForgeHarness:
                         new_evidence,
                     ):
                         session.proof_obligations[proposed.candidate_id] = (
-                            self._obligation_engine.generate(
+                            self._proof_stage.generate(
                                 problem_ir,
                                 proposed,
                             )
@@ -1360,7 +1371,7 @@ class MathForgeHarness:
                         new_evidence.extend(verifier_records)
                         if rereview_reason != "accepted":
                             return False, "post_repair_verifier_unavailable"
-                        after_decision = self._proof_completion_gate.evaluate(
+                        after_decision = self._proof_stage.evaluate(
                             proposed,
                             session.evidence,
                             session.proof_obligations.get(
@@ -1499,7 +1510,7 @@ class MathForgeHarness:
                 and required_obligations
             ):
                 completion_decisions = [
-                    self._proof_completion_gate.evaluate(
+                    self._proof_stage.evaluate(
                         item,
                         session.evidence,
                         session.proof_obligations.get(item.candidate_id, []),
@@ -1658,7 +1669,7 @@ class MathForgeHarness:
                 RuntimePhase.ARBITRATED,
                 "candidate_selected",
             )
-            selected_admission = self._candidate_admission.evaluate(
+            selected_admission = self._candidate_stage.evaluate(
                 candidate,
                 session.problem_ir,
             )
@@ -1706,7 +1717,10 @@ class MathForgeHarness:
                         reason="context_budget_infeasible",
                     )
                 else:
-                    finalization = self._finalizer.finalize(
+                    finalizer = self._finalizer
+                    if finalizer is None:
+                        raise RuntimeError("enabled finalizer was not constructed")
+                    finalization = finalizer.finalize(
                         session.problem_ir,
                         candidate,
                         final_response,
@@ -2101,7 +2115,7 @@ class MathForgeHarness:
             if use_all_candidates or candidate_id in candidate_ids
         }
         try:
-            view = self._role_contexts.build(
+            view = self._context_route_stage.build_context(
                 problem=session.problem_ir,
                 candidates=selected_candidates,
                 evidence=selected_evidence,
@@ -2217,7 +2231,7 @@ class MathForgeHarness:
         affected_claim_ids: list[str],
     ):
         ledger.register_candidate(candidate)
-        admission = self._candidate_admission.evaluate(
+        admission = self._candidate_stage.evaluate(
             candidate,
             session.problem_ir,
         )
@@ -2230,7 +2244,7 @@ class MathForgeHarness:
             candidate,
             ledger,
         )
-        admission = self._candidate_admission.evaluate(
+        admission = self._candidate_stage.evaluate(
             candidate,
             session.problem_ir,
             answer_shape_status=answer_shape.status,
@@ -2238,7 +2252,7 @@ class MathForgeHarness:
         if not admission.accepted:
             return records
         records.extend(
-            self._claim_verifier.verify(
+            self._evidence_stage.verify(
                 candidate,
                 ledger,
                 only_claim_ids=affected_claim_ids,

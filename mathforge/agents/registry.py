@@ -8,6 +8,7 @@ from typing import Iterable
 from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.harness.fingerprints import content_tree_fingerprint
 from mathforge.harness.fingerprints import semantic_fingerprint
+from mathforge.resources import resource_path
 
 
 FIXED_ROLES = (
@@ -92,7 +93,7 @@ class SkillComposition:
 
 class SkillRegistry:
     def __init__(self, root: Path | None = None) -> None:
-        self._root = root or Path(__file__).resolve().parents[2] / "skills"
+        self._root = root or resource_path("skills")
         self._skills = self._load()
 
     @property
@@ -256,7 +257,7 @@ class PromptContract:
 
 class PromptContractLoader:
     def __init__(self, root: Path | None = None) -> None:
-        self._root = root or Path(__file__).resolve().parents[2] / "prompts"
+        self._root = root or resource_path("prompts")
 
     @property
     def fingerprint(self) -> str:

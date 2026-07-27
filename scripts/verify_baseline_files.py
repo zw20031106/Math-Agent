@@ -24,11 +24,21 @@ def git_blob_sha(path: Path) -> str:
 def verify() -> list[str]:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     errors: list[str] = []
+    if manifest.get("schema_version") != "2.0":
+        errors.append("baseline manifest schema must be 2.0")
+    immutable = manifest.get("official_immutable")
+    if not isinstance(immutable, dict) or set(immutable) != set(IMMUTABLE_FILES):
+        errors.append("baseline manifest immutable file group is invalid")
+        immutable = {}
+    if manifest.get("participant_mutable") != ["user_agent.py"]:
+        errors.append("baseline manifest participant-mutable group is invalid")
     for relative_path in IMMUTABLE_FILES:
         path = ROOT / relative_path
-        expected = manifest["files"][relative_path]
+        expected = immutable.get(relative_path)
         if not path.is_file():
             errors.append(f"missing baseline file: {relative_path}")
+            continue
+        if not isinstance(expected, str):
             continue
         actual = git_blob_sha(path)
         if actual != expected:

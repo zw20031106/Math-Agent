@@ -40,6 +40,7 @@ def build_benchmark_metadata(
     provenance = build_run_provenance(
         config,
         model_identity=model_identity,
+        inspect_worktree=True,
     )
     return {
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,

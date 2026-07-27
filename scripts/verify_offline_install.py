@@ -14,14 +14,20 @@ import os
 os.environ.pop("INTERN_MODEL", None)
 os.environ.pop("INTERN_API_KEY", None)
 
-from scripts.formal_smoke_fixture import FormalSmokeClient, assert_formal_smoke_result
 from user_agent import ReasoningAgent
+
+class FormalSmokeClient:
+    def chat(self, *, messages, temperature, max_tokens):
+        del messages, temperature, max_tokens
+        return '{"method":"direct-deduction","final_answer":"2","public_solution_steps":["Evaluate the sum directly: 1+1=2."],"claims":[{"claim_id":"c1","statement":"1+1=2","depends_on":[],"check_type":"symbolic_equivalence","importance":"critical"}],"method_steps":[{"step_id":"s1","kind":"computation","claim_ids":["c1"],"theorem":""}],"solution_text":"Adding the two unit quantities gives 1+1=2.","assumptions":[],"theorems":[],"unresolved_obligations":[]}'
 
 result = ReasoningAgent(FormalSmokeClient()).solve(
     "Calculate the integer 1+1",
     {},
 )
-assert_formal_smoke_result(result)
+assert result["status"] == "success", result
+assert "2" in result["final_response"], result
+assert isinstance(result["trace"], list), result
 """
 
 
@@ -52,6 +58,20 @@ def main() -> int:
                     str(wheelhouse),
                     "-r",
                     str(ROOT / "requirements-lock.txt"),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "wheel",
+                    "--no-deps",
+                    "--wheel-dir",
+                    str(wheelhouse),
+                    str(ROOT),
                 ],
                 cwd=ROOT,
                 check=True,
@@ -88,13 +108,16 @@ def _verify(wheelhouse: Path) -> int:
                 str(wheelhouse),
                 "-r",
                 str(ROOT / "requirements-lock.txt"),
+                "mathforge-agent",
             ],
-            cwd=ROOT,
+            cwd=temporary,
             check=True,
         )
+        smoke_directory = Path(temporary) / "outside-repository"
+        smoke_directory.mkdir()
         subprocess.run(
             [str(python), "-c", SMOKE_TEST],
-            cwd=ROOT,
+            cwd=smoke_directory,
             check=True,
         )
     print("Clean offline installation and smoke test passed.")
