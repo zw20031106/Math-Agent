@@ -62,6 +62,12 @@ def test_runtime_trace_exposes_transport_proof_graph_and_case_summary():
             "failure_code": "",
             "response_validation": "strict_candidate_json",
             "elapsed_seconds": transport["calls"][0]["elapsed_seconds"],
+            "queue_elapsed_seconds": transport["calls"][0][
+                "queue_elapsed_seconds"
+            ],
+            "execution_elapsed_seconds": transport["calls"][0][
+                "execution_elapsed_seconds"
+            ],
             "output_chars": transport["calls"][0]["output_chars"],
         }
     ]

@@ -141,7 +141,11 @@ class MathForgeHarness:
             context_window_tokens=self._config.model_context_window_tokens,
             safety_margin_tokens=self._config.context_safety_margin_tokens,
         )
-        gate = ModelCallGate(self._config.model_max_concurrency)
+        gate = ModelCallGate(
+            self._config.model_max_concurrency,
+            max_background_tails=self._config.max_background_model_tails,
+            late_registry_limit=self._config.late_result_registry_max_entries,
+        )
         self._provider = OfficialClientProvider(
             client,
             gate,
@@ -234,6 +238,9 @@ class MathForgeHarness:
                 ),
                 model_call_start_margin_seconds=(
                     self._config.model_call_start_margin_seconds
+                ),
+                model_queue_budget_seconds=(
+                    self._config.model_queue_budget_seconds
                 ),
                 max_claims=self._config.max_claims,
                 max_tool_calls=self._config.max_tool_calls,
@@ -1835,6 +1842,11 @@ class MathForgeHarness:
             )
 
         terminalizer.safe(
+            "session_freeze",
+            session.freeze,
+            None,
+        )
+        terminalizer.safe(
             "close_trace_invariants",
             lambda: self._close_trace_invariants(trace),
             None,
@@ -1963,6 +1975,16 @@ class MathForgeHarness:
                 error_code=error_code,
                 final_phase=session.phase.value,
             ),
+            None,
+        )
+        terminalizer.safe(
+            "budget_freeze",
+            session.budget.freeze,
+            None,
+        )
+        terminalizer.safe(
+            "trace_freeze",
+            trace.freeze,
             None,
         )
         metrics = terminalizer.safe(

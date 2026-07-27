@@ -65,8 +65,8 @@ from mathforge.runtime import MathForgeHarness  # noqa: E402
 from scripts.run_benchmark import load_benchmark_config  # noqa: E402
 
 
-PER_CASE_WALL_CLOCK_SECONDS = 900.0
-RESULT_SERIALIZATION_RESERVE_SECONDS = 30.0
+PER_CASE_WALL_CLOCK_SECONDS = 1200.0
+RESULT_SERIALIZATION_RESERVE_SECONDS = 50.0
 RUN_MANIFEST_SCHEMA_VERSION = "1.2"
 COMPATIBLE_RUN_MANIFEST_SCHEMA_VERSIONS = frozenset({"1.1", "1.2"})
 RUN_MANIFEST_FILENAME = "run_manifest.json"
@@ -229,7 +229,7 @@ class RunStopController:
 
 
 class PerCaseWallClockRunner:
-    """Return a terminal result before the 15-minute persistence deadline."""
+    """Return a terminal result before the configured persistence deadline."""
 
     def __init__(
         self,
@@ -306,7 +306,7 @@ class PerCaseWallClockRunner:
     ) -> dict[str, Any]:
         elapsed = max(0.0, float(elapsed_seconds))
         final_response = (
-            "未能在单题 15 分钟墙钟限制内完成求解；"
+            "未能在单题 20 分钟墙钟限制内完成求解；"
             "为避免输出未经验证的结论，本题返回确定性超时结果。"
         )
         session_id = f"timeout-{uuid4().hex}"
@@ -831,7 +831,14 @@ def main(argv: list[str] | None = None) -> int:
                 args.output_dir / ".trace-journal"
             ),
         )
-        wall_clock_runner = PerCaseWallClockRunner(harness.solve)
+        wall_clock_runner = PerCaseWallClockRunner(
+            harness.solve,
+            wall_clock_seconds=config.outer_platform_limit_seconds,
+            serialization_reserve_seconds=(
+                config.outer_platform_limit_seconds
+                - config.hard_deadline_seconds
+            ),
+        )
 
         def persist(record: BenchmarkRecord) -> None:
             path = write_case_output(record, args.output_dir)

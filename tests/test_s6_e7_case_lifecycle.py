@@ -89,7 +89,7 @@ def test_manifest_resume_validates_schema_and_bound_output_hash(tmp_path):
     assert set(public) == {"id", "status", "final_response", "trace"}
     assert public["status"] == "success"
     assert internal["status"] == "completed"
-    assert internal["cases"]["1"]["run_metrics"]["schema_version"] == "1.4"
+    assert internal["cases"]["1"]["run_metrics"]["schema_version"] == "1.5"
     assert internal["cases"]["1"]["output_sha256"] == sha256(
         output_path.read_bytes()
     ).hexdigest()
@@ -240,6 +240,7 @@ def test_model_availability_preflight_requires_all_three_levels():
 
 def test_model_http_timeout_uses_the_harness_call_window():
     config = SimpleNamespace(
+        outer_platform_limit_seconds=1200.0,
         hard_deadline_seconds=870.0,
         deterministic_finalize_reserve_seconds=30.0,
     )
@@ -585,6 +586,7 @@ def test_max_cases_stops_after_atomic_case_write_and_marks_degraded(
         to_dict=lambda: {"requested_model": "intern-s2-preview-397b"},
     )
     config = SimpleNamespace(
+        outer_platform_limit_seconds=1200.0,
         hard_deadline_seconds=870.0,
         deterministic_finalize_reserve_seconds=30.0,
     )

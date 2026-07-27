@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Phase 2 concurrency, timeout, and lifecycle closure (2026-07-27)
+
+- Added an explicit per-call model queue budget and made role timeouts include
+  semaphore wait, execution, and the shared absolute deadline reserve.
+- Added separate queue, execution, total-call, admission-rejection, and queue
+  timeout telemetry to call records, internal metrics, and the compact budget
+  trace.
+- Added a deterministic provider health state with bounded background tails,
+  circuit-open fast failure, automatic reset only after all tails complete, and
+  a bounded late-result registry that stores no Session or Candidate objects.
+- Froze Session state at terminalization and froze Budget and Trace before
+  returning, while preventing late provider completion from mutating per-case
+  ledgers.
+- Parameterized the 20-minute competition profile as a 1,200-second outer
+  limit, 1,150-second Harness deadline, 50-second Harness finalization reserve,
+  and 50-second runner persistence reserve without changing model concurrency.
+- Added fake-clock deadline checks, 2/4/8 shared-instance concurrency coverage,
+  weak-reference lifecycle checks, and a 100-request circuit/timeout soak.
+
 ### Phase 1 trusted correctness path (2026-07-27)
 
 - Added a no-throw terminalizer and a dependency-free outer fallback so

@@ -1,6 +1,6 @@
 # MathForge 公共输出契约
 
-版本：2.3
+版本：2.4
 
 ## 对外字段
 
@@ -19,7 +19,7 @@
   `null`。
 - `status`：仅允许 `success`、`failed`、`timeout`。只有主求解流程成功才是
   `success`；Fallback、候选生成失败和内部执行失败均为 `failed`；单题
-  900 秒 watchdog 到期为 `timeout`。
+  1,200 秒 watchdog 到期为 `timeout`。
 - `final_response`：非空字符串。
 - `trace`：有序事件列表，以 `run_completed` 结束。
 
@@ -82,8 +82,12 @@ Alternative 24,576、Primary 32,768 Token；总上下文仍为 262,144 Token，
 5. 输出并刷新 `CASE_COMPLETED` 行。
 
 成功、失败和超时都会形成非空、可解析、带终态 Trace 的逐题 JSON。单题
-watchdog 为 900 秒，其中 Harness 最迟在 870 秒交还控制权，预留 30 秒完成
-序列化和写盘。迟到线程不能改写已经返回或落盘的结果。
+watchdog 为 1,200 秒，其中 Harness 最迟在 1,150 秒交还控制权，预留 50 秒
+完成序列化和写盘。每次模型排队最多使用 15 秒，角色调用超时从排队开始计算。
+模型调用超时后，Python daemon thread 不会被伪称为已取消；它进入有上限的
+provider background tail，达到上限后 circuit-open，后续调用快速失败。迟到线程
+只能更新不含题目、Candidate 或 Session 引用的 provider 级登记，不能改写已经
+返回或落盘的结果。
 
 ## 恢复运行
 
@@ -99,7 +103,7 @@ watchdog 为 900 秒，其中 Harness 最迟在 870 秒交还控制权，预留 
 重跑集合。未知文件、损坏文件、哈希变化或不兼容清单会在题目模型调用前
 失败。
 
-Runner 默认且强制 `concurrency=1`，因此未启动题目的 900 秒期限不会在
+Runner 默认且强制 `concurrency=1`，因此未启动题目的 1,200 秒期限不会在
 队列等待期间消耗。Manifest 依次进入 `created`、`preflight_passed`、
 `running`，并以 `completed`、`degraded`、`aborted` 或 `failed` 结束。
 SIGINT/SIGTERM 会等待当前题安全写盘、阻止启动下一题并记录 `aborted`。

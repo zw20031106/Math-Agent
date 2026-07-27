@@ -92,7 +92,7 @@ def _minimal_config(**changes) -> HarnessConfig:
 def test_competition_config_uses_reliable_completion_cap_and_e1_deadlines():
     config = load_competition_config()
 
-    assert config.schema_version == "1.2"
+    assert config.schema_version == "1.3"
     assert config.primary_max_tokens == 65536
     assert config.max_model_tokens == 0
     assert config.model_context_window_tokens == 262144
@@ -105,7 +105,7 @@ def test_competition_config_uses_reliable_completion_cap_and_e1_deadlines():
         config.hard_deadline_seconds,
         config.deterministic_finalize_reserve_seconds,
         config.model_call_start_margin_seconds,
-    ) == (600.0, 705.0, 870.0, 30.0, 135.0)
+    ) == (800.0, 1000.0, 1150.0, 50.0, 100.0)
 
 
 def test_zero_token_quota_records_without_enforcement_and_positive_quota_remains_hard():

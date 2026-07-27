@@ -67,7 +67,7 @@ mapping:
 `MathForgeHarness` results retain metrics and provenance for evaluation, but
 those fields are not exposed by the public agent. `status` is `success` only
 for a primary solution, `failed` for fallback or execution failure, and
-`timeout` for the 900-second per-case deadline.
+`timeout` for the 1,200-second per-case deadline.
 
 For one atomic JSON file per input case, written immediately when that case
 finishes, use:
@@ -97,7 +97,7 @@ transport attempts remain observable. The competition model-call gate remains
 fixed at one concurrent request.
 
 The custom runner is strictly single-case: its default concurrency is one and
-other values are rejected, so a queued case never consumes its 900-second
+other values are rejected, so a queued case never consumes its 1,200-second
 deadline before dispatch. `run_manifest.json` moves through `created`,
 `preflight_passed`, and `running`, then ends as `completed`, `degraded`,
 `aborted`, or `failed`. SIGINT/SIGTERM lets the active case finish its atomic
@@ -194,13 +194,17 @@ wheelhouse; installation and the smoke test are offline.
   Direct remains the production default.
 
 The competition profile allows six model calls and has no artificial aggregate
-model-token quota. It stops low-value optional work at 600 seconds, closes all
-new model calls at 705 seconds, enters deterministic finalization at 840
-seconds, and requires Harness return by 870 seconds. The per-case runner
-reserves the remaining 30 seconds of the 900-second wall clock for a terminal
-result and atomic JSON persistence. A late background result has no persistence
-callback and cannot overwrite the terminal file. Every failure path returns a
-non-empty deterministic fallback.
+model-token quota. It stops low-value optional work at 800 seconds, closes all
+new model calls at 1,000 seconds, enters deterministic finalization at 1,100
+seconds, and requires Harness return by 1,150 seconds. The per-case runner
+reserves the remaining 50 seconds of the 1,200-second wall clock for a terminal
+result and atomic JSON persistence. Each model admission has a separate
+15-second queue budget, and queue time is included in the role timeout. A timed
+out provider thread is not described as cancelled: it becomes a bounded
+background tail, opens the provider circuit at the configured limit, and can
+write only a small provider-level late-result record. It cannot retain or
+mutate the returned Session. Every failure path returns a non-empty
+deterministic fallback.
 Each internal Harness result also carries structured call/token/outcome metrics
 independently of the judge trace, plus versioned
 code/config/prompt/skill/RAG/tool/model provenance. Runtime failures expose only

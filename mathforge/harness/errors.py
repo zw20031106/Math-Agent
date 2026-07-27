@@ -13,6 +13,14 @@ class BudgetExceeded(MathForgeError):
     """A call, token, or time budget was exhausted."""
 
 
+class ModelCallRejected(BudgetExceeded):
+    """A model call was rejected by deterministic admission or deadline policy."""
+
+    def __init__(self, code: str) -> None:
+        self.code = str(code)
+        super().__init__(f"model call rejected: {self.code}")
+
+
 class ContractViolation(MathForgeError):
     """A component returned data outside its public contract."""
 

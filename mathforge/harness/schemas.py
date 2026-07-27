@@ -1163,6 +1163,7 @@ class MathSession:
     trace_events: list[dict[str, Any]] = field(default_factory=list)
     phase: RuntimePhase = RuntimePhase.CREATED
     phase_history: list[dict[str, str]] = field(default_factory=list)
+    _frozen: bool = field(default=False, init=False, repr=False)
 
     def transition(
         self,
@@ -1171,6 +1172,8 @@ class MathSession:
         *,
         reason: str,
     ) -> dict[str, str]:
+        if self._frozen:
+            raise RuntimeError("math session is frozen")
         if self.phase != expected:
             raise InvalidRuntimeTransition(
                 f"expected phase {expected.value}, current phase is {self.phase.value}"
@@ -1187,6 +1190,13 @@ class MathSession:
         self.phase = target
         self.phase_history.append(record)
         return dict(record)
+
+    def freeze(self) -> None:
+        self._frozen = True
+
+    @property
+    def is_frozen(self) -> bool:
+        return self._frozen
 
     def to_dict(self) -> dict:
         return {

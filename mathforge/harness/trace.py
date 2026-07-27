@@ -89,12 +89,15 @@ class TraceBuilder:
         self._internal_event_count = 0
         self._internal_events_dropped = 0
         self._journal_failures = 0
+        self._frozen = False
         self._redacted_values = tuple(
             value for value in redacted_values if isinstance(value, str) and value
         )
 
     def add(self, event: str, **details: Any) -> None:
         with self._lock:
+            if self._frozen:
+                raise RuntimeError("trace is frozen")
             internal_details = {
                 key: self._sanitize(value)
                 for key, value in details.items()
@@ -163,6 +166,15 @@ class TraceBuilder:
                 "internal_events_dropped": self._internal_events_dropped,
                 "journal_failures": self._journal_failures,
             }
+
+    def freeze(self) -> None:
+        with self._lock:
+            self._frozen = True
+
+    @property
+    def is_frozen(self) -> bool:
+        with self._lock:
+            return self._frozen
 
     def _elapsed_ms(self) -> int:
         elapsed = max(0, int((self._clock() - self._started_at) * 1000))

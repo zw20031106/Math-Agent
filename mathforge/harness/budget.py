@@ -19,6 +19,7 @@ class CallBudget:
     hard_deadline_seconds: float = 870.0
     deterministic_finalize_reserve_seconds: float = 30.0
     model_call_start_margin_seconds: float = 135.0
+    model_queue_budget_seconds: float = 15.0
     max_claims: int = 64
     max_tool_calls: int = 32
     max_isolated_tool_calls: int = 16
@@ -53,7 +54,10 @@ class CallBudget:
             raise ValueError("max_tool_seconds must be positive")
         if self.max_evidence_records < 1 or self.max_prompt_chars_total < 1:
             raise ValueError("evidence and prompt budgets must be positive")
+        if self.model_queue_budget_seconds <= 0:
+            raise ValueError("model queue budget must be positive")
         self._lock = Lock()
+        self._frozen = False
         self._stage_calls: dict[str, int] = {}
         self._allocation_plan: CallAllocationPlan | None = None
         self.used_claims = 0
@@ -69,13 +73,23 @@ class CallBudget:
         self.observed_output_tokens = 0
         self.output_chars = 0
         self.model_call_elapsed_seconds = 0.0
+        self.model_queue_wait_seconds = 0.0
+        self.model_execution_seconds = 0.0
         self.model_call_timeout_count = 0
+        self.model_queue_timeout_count = 0
+        self.model_admission_rejection_count = 0
+        self.model_admission_rejection_reasons: dict[str, int] = {}
         self.transport_attempts = 0
         self.model_call_failure_count = 0
         self.model_response_rejection_count = 0
         self.background_tail_started = 0
         self.background_tail_active = 0
         self.background_tail_completed = 0
+        self.provider_health_state = "healthy"
+        self.provider_active_tails = 0
+        self.provider_peak_tails = 0
+        self.provider_circuit_trips = 0
+        self.provider_fast_failures = 0
         self.model_call_records: list[dict] = []
         self.final_response_tokens = 0
         self.final_response_counting_mode = ""
@@ -91,6 +105,7 @@ class CallBudget:
 
     def set_allocation_plan(self, plan: CallAllocationPlan) -> None:
         with self._lock:
+            self._ensure_mutable_locked()
             if plan.max_calls != self.max_calls:
                 raise ValueError("call allocation plan does not match budget")
             for stage, used in self._stage_calls.items():
@@ -102,6 +117,7 @@ class CallBudget:
 
     def consume(self, *, stage: str = "unallocated", optional: bool = False) -> None:
         with self._lock:
+            self._ensure_mutable_locked()
             if self.used_calls >= self.max_calls:
                 raise BudgetExceeded("model call budget exhausted")
             if self._allocation_plan is not None:
@@ -115,6 +131,7 @@ class CallBudget:
 
     def record_tokens(self, tokens: int) -> None:
         with self._lock:
+            self._ensure_mutable_locked()
             proposed = self.used_tokens + max(0, int(tokens))
             if self.max_tokens > 0 and proposed > self.max_tokens:
                 raise BudgetExceeded("model token budget exhausted")
@@ -122,6 +139,7 @@ class CallBudget:
 
     def record_model_call_started(self, stage: str, allocation: dict) -> int:
         with self._lock:
+            self._ensure_mutable_locked()
             prompt_tokens = max(0, int(allocation["prompt_tokens"]))
             requested = max(0, int(allocation["max_output_tokens"]))
             mode = str(allocation["counting_mode"])
@@ -155,6 +173,9 @@ class CallBudget:
                 "output_counting_mode": "",
                 "output_chars": 0,
                 "elapsed_seconds": 0.0,
+                "queue_elapsed_seconds": 0.0,
+                "execution_elapsed_seconds": 0.0,
+                "total_elapsed_seconds": 0.0,
             }
             self.model_call_records.append(record)
             return len(self.model_call_records) - 1
@@ -170,6 +191,7 @@ class CallBudget:
         transport_attempts: int = 1,
     ) -> None:
         with self._lock:
+            self._ensure_mutable_locked()
             observed = max(0, int(observed_output_tokens))
             characters = max(0, int(output_chars))
             elapsed = max(0.0, float(elapsed_seconds))
@@ -198,6 +220,7 @@ class CallBudget:
         transport_attempts: int = 1,
     ) -> None:
         with self._lock:
+            self._ensure_mutable_locked()
             elapsed = max(0.0, float(elapsed_seconds))
             attempts = max(1, int(transport_attempts))
             self.model_call_timeout_count += 1
@@ -222,6 +245,7 @@ class CallBudget:
         transport_attempts: int = 1,
     ) -> None:
         with self._lock:
+            self._ensure_mutable_locked()
             elapsed = max(0.0, float(elapsed_seconds))
             attempts = max(1, int(transport_attempts))
             self.model_call_failure_count += 1
@@ -246,12 +270,14 @@ class CallBudget:
         if index is None:
             return
         with self._lock:
+            self._ensure_mutable_locked()
             self.model_call_records[index]["response_validation"] = str(code)
             if rejected:
                 self.model_response_rejection_count += 1
 
     def record_background_tail(self, event: str) -> None:
         with self._lock:
+            self._ensure_mutable_locked()
             if event == "started":
                 self.background_tail_started += 1
                 self.background_tail_active += 1
@@ -274,8 +300,73 @@ class CallBudget:
 
     def record_final_response(self, tokens: int, counting_mode: str) -> None:
         with self._lock:
+            self._ensure_mutable_locked()
             self.final_response_tokens = max(0, int(tokens))
             self.final_response_counting_mode = str(counting_mode)
+
+    def record_model_call_timing(
+        self,
+        index: int,
+        *,
+        queue_elapsed_seconds: float,
+        execution_elapsed_seconds: float,
+        total_elapsed_seconds: float,
+    ) -> None:
+        with self._lock:
+            self._ensure_mutable_locked()
+            queue_elapsed = max(0.0, float(queue_elapsed_seconds))
+            execution_elapsed = max(0.0, float(execution_elapsed_seconds))
+            total_elapsed = max(0.0, float(total_elapsed_seconds))
+            self.model_queue_wait_seconds += queue_elapsed
+            self.model_execution_seconds += execution_elapsed
+            self.model_call_records[index].update(
+                {
+                    "queue_elapsed_seconds": round(queue_elapsed, 6),
+                    "execution_elapsed_seconds": round(execution_elapsed, 6),
+                    "total_elapsed_seconds": round(total_elapsed, 6),
+                }
+            )
+
+    def record_model_admission_rejection(self, reason: str) -> None:
+        with self._lock:
+            self._ensure_mutable_locked()
+            normalized = str(reason)
+            self.model_admission_rejection_count += 1
+            self.model_admission_rejection_reasons[normalized] = (
+                self.model_admission_rejection_reasons.get(normalized, 0) + 1
+            )
+            if normalized == "model_concurrency_wait_exceeded":
+                self.model_queue_timeout_count += 1
+
+    def record_provider_health(self, snapshot: dict) -> None:
+        with self._lock:
+            self._ensure_mutable_locked()
+            self.provider_health_state = str(snapshot.get("state", "healthy"))
+            self.provider_active_tails = max(
+                0,
+                int(snapshot.get("active_tails", 0)),
+            )
+            self.provider_peak_tails = max(
+                self.provider_peak_tails,
+                int(snapshot.get("peak_tails", 0)),
+            )
+            self.provider_circuit_trips = max(
+                self.provider_circuit_trips,
+                int(snapshot.get("circuit_trips", 0)),
+            )
+            self.provider_fast_failures = max(
+                self.provider_fast_failures,
+                int(snapshot.get("fast_failures", 0)),
+            )
+
+    def freeze(self) -> None:
+        with self._lock:
+            self._frozen = True
+
+    @property
+    def is_frozen(self) -> bool:
+        with self._lock:
+            return self._frozen
 
     def soft_expired(self) -> bool:
         return not self.deadline.optional_work_allowed()
@@ -292,6 +383,7 @@ class CallBudget:
 
     def record_claims(self, count: int) -> None:
         with self._lock:
+            self._ensure_mutable_locked()
             proposed = self.used_claims + max(0, int(count))
             if proposed > self.max_claims:
                 raise BudgetExceeded("session claim budget exhausted")
@@ -299,6 +391,7 @@ class CallBudget:
 
     def begin_tool_call(self, *, isolated: bool, default_timeout: float) -> float:
         with self._lock:
+            self._ensure_mutable_locked()
             if self.used_tool_calls >= self.max_tool_calls:
                 raise BudgetExceeded("tool call budget exhausted")
             if isolated and self.used_isolated_tool_calls >= self.max_isolated_tool_calls:
@@ -319,10 +412,12 @@ class CallBudget:
 
     def finish_tool_call(self, duration_seconds: float) -> None:
         with self._lock:
+            self._ensure_mutable_locked()
             self.used_tool_seconds += max(0.0, float(duration_seconds))
 
     def record_evidence(self, count: int = 1) -> None:
         with self._lock:
+            self._ensure_mutable_locked()
             proposed = self.used_evidence_records + max(0, int(count))
             if proposed > self.max_evidence_records:
                 raise BudgetExceeded("evidence record budget exhausted")
@@ -330,6 +425,7 @@ class CallBudget:
 
     def record_prompt_chars(self, count: int) -> None:
         with self._lock:
+            self._ensure_mutable_locked()
             proposed = self.used_prompt_chars + max(0, int(count))
             if proposed > self.max_prompt_chars_total:
                 raise BudgetExceeded("prompt character budget exhausted")
@@ -360,7 +456,23 @@ class CallBudget:
                     self.model_call_elapsed_seconds,
                     6,
                 ),
+                "model_queue_budget_seconds": self.model_queue_budget_seconds,
+                "model_queue_wait_seconds": round(
+                    self.model_queue_wait_seconds,
+                    6,
+                ),
+                "model_execution_seconds": round(
+                    self.model_execution_seconds,
+                    6,
+                ),
                 "model_call_timeout_count": self.model_call_timeout_count,
+                "model_queue_timeout_count": self.model_queue_timeout_count,
+                "model_admission_rejection_count": (
+                    self.model_admission_rejection_count
+                ),
+                "model_admission_rejection_reasons": dict(
+                    sorted(self.model_admission_rejection_reasons.items())
+                ),
                 "transport_attempts": self.transport_attempts,
                 "model_call_failure_count": self.model_call_failure_count,
                 "model_response_rejection_count": (
@@ -369,6 +481,11 @@ class CallBudget:
                 "background_tail_started": self.background_tail_started,
                 "background_tail_active": self.background_tail_active,
                 "background_tail_completed": self.background_tail_completed,
+                "provider_health_state": self.provider_health_state,
+                "provider_active_tails": self.provider_active_tails,
+                "provider_peak_tails": self.provider_peak_tails,
+                "provider_circuit_trips": self.provider_circuit_trips,
+                "provider_fast_failures": self.provider_fast_failures,
                 "final_response_tokens": self.final_response_tokens,
                 "final_response_counting_mode": (
                     self.final_response_counting_mode
@@ -400,4 +517,9 @@ class CallBudget:
                 "soft_expired": self.soft_expired(),
                 "exploration_open": self.can_start_exploration(),
                 "deadline_phase": self.deadline.phase(),
+                "frozen": self._frozen,
             }
+
+    def _ensure_mutable_locked(self) -> None:
+        if self._frozen:
+            raise RuntimeError("call budget is frozen")

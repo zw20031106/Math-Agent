@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 
-CONFIG_SCHEMA_VERSION = "1.2"
+CONFIG_SCHEMA_VERSION = "1.3"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPETITION_CONFIG_PATH = REPO_ROOT / "config" / "competition.json"
 _METADATA_FIELDS = frozenset({"schema_version", "profile", "status"})
@@ -36,6 +36,10 @@ class HarnessConfig:
     hard_deadline_seconds: float = 870.0
     deterministic_finalize_reserve_seconds: float = 30.0
     model_call_start_margin_seconds: float = 135.0
+    outer_platform_limit_seconds: float = 1200.0
+    model_queue_budget_seconds: float = 15.0
+    max_background_model_tails: int = 4
+    late_result_registry_max_entries: int = 64
     trace_max_chars: int = 0
     trace_max_events: int = 0
     max_claims: int = 64
@@ -125,6 +129,8 @@ class HarnessConfig:
             "max_isolated_tool_calls": (1, 10000),
             "max_evidence_records": (1, 100000),
             "max_prompt_chars_total": (256, 5000000),
+            "max_background_model_tails": (1, 64),
+            "late_result_registry_max_entries": (1, 10000),
         }
         for name, (minimum, maximum) in integer_ranges.items():
             value = getattr(self, name)
@@ -145,6 +151,8 @@ class HarnessConfig:
             "exploration_deadline_seconds",
             "hard_deadline_seconds",
             "deterministic_finalize_reserve_seconds",
+            "outer_platform_limit_seconds",
+            "model_queue_budget_seconds",
             "max_tool_seconds",
         )
         for name in deadline_names:
@@ -162,6 +170,14 @@ class HarnessConfig:
         if self.deterministic_finalize_reserve_seconds >= self.hard_deadline_seconds:
             raise ValueError(
                 "deterministic_finalize_reserve_seconds must be below hard deadline"
+            )
+        if self.hard_deadline_seconds >= self.outer_platform_limit_seconds:
+            raise ValueError(
+                "hard_deadline_seconds must be below outer_platform_limit_seconds"
+            )
+        if self.max_background_model_tails < self.model_max_concurrency:
+            raise ValueError(
+                "max_background_model_tails must cover model_max_concurrency"
             )
         if (
             type(self.model_call_start_margin_seconds) not in {int, float}

@@ -46,6 +46,12 @@ def build_transport_summary(
                 "elapsed_seconds": _nonnegative_float(
                     record.get("elapsed_seconds", 0.0)
                 ),
+                "queue_elapsed_seconds": _nonnegative_float(
+                    record.get("queue_elapsed_seconds", 0.0)
+                ),
+                "execution_elapsed_seconds": _nonnegative_float(
+                    record.get("execution_elapsed_seconds", 0.0)
+                ),
                 "output_chars": _nonnegative_int(
                     record.get("output_chars", 0)
                 ),

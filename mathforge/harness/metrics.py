@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, fields
 from typing import Any, ClassVar
 
 
-RUN_METRICS_SCHEMA_VERSION = "1.4"
+RUN_METRICS_SCHEMA_VERSION = "1.5"
 _OUTCOMES = frozenset({"primary", "fallback", "error", "timeout"})
 _ERROR_CODES = frozenset(
     {
@@ -40,17 +40,26 @@ class RunMetrics:
     observed_output_tokens: int = 0
     output_chars: int = 0
     model_call_timeout_count: int = 0
+    model_queue_timeout_count: int = 0
+    model_admission_rejection_count: int = 0
     transport_attempts: int = 0
     model_call_failure_count: int = 0
     model_response_rejection_count: int = 0
     background_tail_started: int = 0
     background_tail_active: int = 0
     background_tail_completed: int = 0
+    provider_active_tails: int = 0
+    provider_peak_tails: int = 0
+    provider_circuit_trips: int = 0
+    provider_fast_failures: int = 0
     per_case_wall_clock_timeout_count: int = 0
     final_response_tokens: int = 0
     context_window_tokens: int = 0
     safety_margin_tokens: int = 0
     model_call_elapsed_seconds: float = 0.0
+    model_queue_wait_seconds: float = 0.0
+    model_execution_seconds: float = 0.0
+    provider_health_state: str = "healthy"
     token_limit_mode: str = ""
     final_response_counting_mode: str = ""
     deadline_phase: str = ""
@@ -105,12 +114,18 @@ class RunMetrics:
             "observed_output_tokens",
             "output_chars",
             "model_call_timeout_count",
+            "model_queue_timeout_count",
+            "model_admission_rejection_count",
             "transport_attempts",
             "model_call_failure_count",
             "model_response_rejection_count",
             "background_tail_started",
             "background_tail_active",
             "background_tail_completed",
+            "provider_active_tails",
+            "provider_peak_tails",
+            "provider_circuit_trips",
+            "provider_fast_failures",
             "per_case_wall_clock_timeout_count",
             "final_response_tokens",
             "context_window_tokens",
@@ -146,6 +161,8 @@ class RunMetrics:
             "tool_seconds",
             "elapsed_seconds",
             "model_call_elapsed_seconds",
+            "model_queue_wait_seconds",
+            "model_execution_seconds",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
@@ -158,6 +175,7 @@ class RunMetrics:
             "token_limit_mode",
             "final_response_counting_mode",
             "deadline_phase",
+            "provider_health_state",
         ):
             if not isinstance(getattr(self, name), str):
                 raise ValueError(f"RunMetrics.{name} must be a string")
@@ -172,6 +190,10 @@ class RunMetrics:
             raise ValueError("prompt counting-mode totals do not match prompt tokens")
         if self.model_call_timeout_count > self.model_calls:
             raise ValueError("model timeout count cannot exceed model calls")
+        if self.model_queue_timeout_count > self.model_calls:
+            raise ValueError("model queue timeout count cannot exceed model calls")
+        if self.model_admission_rejection_count > self.model_calls:
+            raise ValueError("model admission rejection count cannot exceed model calls")
         if self.model_call_failure_count > self.model_calls:
             raise ValueError("model failure count cannot exceed model calls")
         if self.model_response_rejection_count > self.model_calls:
@@ -183,6 +205,14 @@ class RunMetrics:
             != self.background_tail_started
         ):
             raise ValueError("background-tail counters are inconsistent")
+        if self.provider_active_tails > self.provider_peak_tails:
+            raise ValueError("provider active tails cannot exceed the observed peak")
+        if self.provider_health_state not in {
+            "healthy",
+            "degraded",
+            "circuit_open",
+        }:
+            raise ValueError("provider health state is invalid")
         if self.per_case_wall_clock_timeout_count not in {0, 1}:
             raise ValueError("per-case wall-clock timeout count must be zero or one")
         if (self.outcome == "timeout") != (
@@ -269,12 +299,20 @@ def collect_run_metrics(
         observed_output_tokens=budget.observed_output_tokens,
         output_chars=budget.output_chars,
         model_call_timeout_count=budget.model_call_timeout_count,
+        model_queue_timeout_count=budget.model_queue_timeout_count,
+        model_admission_rejection_count=(
+            budget.model_admission_rejection_count
+        ),
         transport_attempts=budget.transport_attempts,
         model_call_failure_count=budget.model_call_failure_count,
         model_response_rejection_count=budget.model_response_rejection_count,
         background_tail_started=budget.background_tail_started,
         background_tail_active=budget.background_tail_active,
         background_tail_completed=budget.background_tail_completed,
+        provider_active_tails=budget.provider_active_tails,
+        provider_peak_tails=budget.provider_peak_tails,
+        provider_circuit_trips=budget.provider_circuit_trips,
+        provider_fast_failures=budget.provider_fast_failures,
         final_response_tokens=budget.final_response_tokens,
         context_window_tokens=budget.model_context_window_tokens,
         safety_margin_tokens=budget.context_safety_margin_tokens,
@@ -282,6 +320,15 @@ def collect_run_metrics(
             budget.model_call_elapsed_seconds,
             6,
         ),
+        model_queue_wait_seconds=round(
+            budget.model_queue_wait_seconds,
+            6,
+        ),
+        model_execution_seconds=round(
+            budget.model_execution_seconds,
+            6,
+        ),
+        provider_health_state=budget.provider_health_state,
         token_limit_mode=budget.token_limit_mode,
         final_response_counting_mode=budget.final_response_counting_mode,
         deadline_phase=budget.deadline.phase(),
