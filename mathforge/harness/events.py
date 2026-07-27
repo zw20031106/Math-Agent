@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 TRACE_SCHEMA_VERSION = "2.0"
+DEBUG_TRACE_SCHEMA_VERSION = "1.0"
 
 EVENT_STAGES = {
     "session_started": "session",

@@ -1162,7 +1162,23 @@ def _validate_l2_pipeline(candidate: Any) -> None:
         status="passed",
         claim_results=[],
     )
-    trace.add("hard_evidence_gate")
+    trace.add("hard_evidence_gate", accepted=[candidate_id], rejected=[])
+    trace.add(
+        "proof_completion_gate",
+        accepted=[candidate_id],
+        rejected=[],
+        mode="preflight",
+        verifier_reason="preflight_contract_validated",
+        decisions=[
+            {
+                "candidate_id": candidate_id,
+                "status": "complete",
+                "unresolved_obligation_ids": [],
+                "failed_obligation_ids": [],
+                "failed_claim_ids": [],
+            }
+        ],
+    )
     trace.add(
         "candidate_arbitrated",
         selected=candidate_id,
@@ -1171,7 +1187,11 @@ def _validate_l2_pipeline(candidate: Any) -> None:
     trace.add(
         "final_answer_selected",
         candidate_id=candidate_id,
-        public_solution={"final_response": final_response},
+        public_solution={
+            "public_solution_steps": list(candidate.public_solution_steps),
+            "final_answer": candidate.final_answer,
+            "final_response": final_response,
+        },
     )
     trace.add("budget_summary")
     trace.add(

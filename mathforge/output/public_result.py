@@ -1,10 +1,16 @@
 from __future__ import annotations
 
-from copy import deepcopy
+import json
 from typing import Any
 
 from mathforge.harness.events import TRACE_SCHEMA_VERSION
 from mathforge.harness.trace import validate_trace_v2
+from mathforge.output.judge_trace import (
+    JUDGE_TRACE_SCHEMA_VERSION,
+    JudgeTraceLimits,
+    project_judge_trace,
+    validate_judge_trace,
+)
 
 
 PUBLIC_STATUSES = frozenset({"success", "failed", "timeout"})
@@ -16,94 +22,6 @@ _OUTCOME_TO_STATUS = {
     "failed": "failed",
     "timeout": "timeout",
 }
-_PUBLIC_TRACE_OMISSIONS = frozenset(
-    {
-        "phase_transition",
-        "context_view_built",
-        "candidate_fanout_completed",
-        "primary_completed",
-        "finalization_completed",
-        "compression_validated",
-        "candidate_final_states",
-    }
-)
-_SESSION_FIELDS = (
-    "session_id",
-    "request_fingerprint",
-    "config_profile",
-    "config_schema_version",
-    "config_hash",
-    "prompt_hash",
-    "skill_hash",
-    "rag_hash",
-    "tool_hash",
-    "code_commit",
-    "code_dirty",
-    "requested_model",
-    "request_source",
-    "response_model_observable",
-    "thinking_mode_observable",
-    "provenance_hash",
-)
-_ROUTE_FIELDS = (
-    "primary_subject",
-    "auxiliary_subject",
-    "risk_level",
-    "routing_confidence",
-    "complexity_flags",
-    "selected_skills",
-    "selected_tools",
-    "method_families",
-    "routing_reasons",
-)
-_BUDGET_FIELDS = (
-    "max_calls",
-    "used_calls",
-    "model_calls",
-    "prompt_tokens",
-    "requested_output_tokens",
-    "observed_output_tokens",
-    "output_chars",
-    "model_call_elapsed_seconds",
-    "model_queue_budget_seconds",
-    "model_queue_wait_seconds",
-    "model_execution_seconds",
-    "model_call_timeout_count",
-    "model_queue_timeout_count",
-    "model_admission_rejection_count",
-    "model_admission_rejection_reasons",
-    "transport_attempts",
-    "model_call_failure_count",
-    "model_response_rejection_count",
-    "provider_health_state",
-    "provider_active_tails",
-    "provider_peak_tails",
-    "provider_circuit_trips",
-    "provider_fast_failures",
-    "used_tool_calls",
-    "used_evidence_records",
-    "elapsed_seconds",
-    "remaining_seconds",
-    "deadline_phase",
-    "outcome",
-)
-_MODEL_CALL_RECORD_FIELDS = (
-    "stage",
-    "prompt_tokens",
-    "max_output_tokens",
-    "configured_output_tokens",
-    "stage_output_cap_tokens",
-    "status",
-    "transport_attempts",
-    "failure_code",
-    "response_validation",
-    "observed_output_tokens",
-    "output_chars",
-    "elapsed_seconds",
-    "queue_elapsed_seconds",
-    "execution_elapsed_seconds",
-    "total_elapsed_seconds",
-)
 
 
 def build_public_result(identifier: int | str | None, result: dict) -> dict:
@@ -113,20 +31,53 @@ def build_public_result(identifier: int | str | None, result: dict) -> dict:
         raise ValueError("public result requires a non-empty final_response")
     if not isinstance(trace, list):
         raise ValueError("public result requires a list-valued trace")
+    limits = JudgeTraceLimits.from_mapping(
+        result.get("_public_output_limits")
+        if isinstance(result, dict)
+        else None
+    )
     if any(
         isinstance(event, dict)
         and event.get("schema_version") == TRACE_SCHEMA_VERSION
         for event in trace
     ):
         validate_trace_v2(trace, final_response=final_response)
-        trace = _public_trace(trace, final_response)
+        trace = project_judge_trace(
+            trace,
+            final_response=final_response,
+            limits=limits,
+        )
+    elif any(
+        isinstance(event, dict)
+        and event.get("schema_version") == JUDGE_TRACE_SCHEMA_VERSION
+        for event in trace
+    ):
+        validate_judge_trace(
+            trace,
+            final_response=final_response,
+            limits=limits,
+        )
     status = _public_status(result, trace)
-    return {
+    payload = {
         "id": identifier,
         "status": status,
         "final_response": final_response,
         "trace": trace,
     }
+    if serialized_public_result_bytes(payload) > limits.public_result_max_bytes:
+        raise ValueError("serialized public result exceeds configured byte budget")
+    return payload
+
+
+def serialized_public_result_bytes(payload: dict[str, Any]) -> int:
+    return len(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+        ).encode("utf-8")
+    ) + 1
 
 
 def _public_status(result: dict, trace: list) -> str:
@@ -154,96 +105,6 @@ def _public_status(result: dict, trace: list) -> str:
     if explicit is not None:
         return explicit
     return derived or "failed"
-
-
-def _public_trace(trace: list[dict[str, Any]], final_response: str) -> list[dict[str, Any]]:
-    projected: list[dict[str, Any]] = []
-    for event in trace:
-        name = str(event.get("event", ""))
-        if name in _PUBLIC_TRACE_OMISSIONS:
-            continue
-        if name == "background_tail_audit" and not event.get("started"):
-            continue
-        if name == "session_started":
-            item = _select_event_fields(event, _SESSION_FIELDS)
-        elif name == "route_planned":
-            item = _select_event_fields(event, _ROUTE_FIELDS)
-        elif name == "skills_selected":
-            item = _compact_skills_event(event)
-        elif name == "budget_summary":
-            item = _compact_budget_event(event)
-        else:
-            item = deepcopy(event)
-        projected.append(item)
-    for sequence, event in enumerate(projected, start=1):
-        event["seq"] = sequence
-    validate_trace_v2(projected, final_response=final_response)
-    return projected
-
-
-def _select_event_fields(
-    event: dict[str, Any],
-    fields: tuple[str, ...],
-) -> dict[str, Any]:
-    item = {
-        key: deepcopy(event[key])
-        for key in ("schema_version", "seq", "elapsed_ms", "event", "stage")
-    }
-    item.update(
-        {
-            key: deepcopy(event[key])
-            for key in fields
-            if key in event
-        }
-    )
-    return item
-
-
-def _compact_skills_event(event: dict[str, Any]) -> dict[str, Any]:
-    item = _select_event_fields(event, ("skill_fingerprint",))
-    grouped: dict[tuple[str, str, str], list[str]] = {}
-    for skill in event.get("skills", []):
-        if not isinstance(skill, dict):
-            continue
-        skill_key = (
-            str(skill.get("name", "")),
-            str(skill.get("version", "")),
-            str(skill.get("reason", "")),
-        )
-        roles = skill.get("roles", [skill.get("role", "")])
-        if skill_key[0] and isinstance(roles, list):
-            grouped.setdefault(skill_key, []).extend(
-                str(role) for role in roles if role
-            )
-    item["skills"] = [
-        {
-            "name": name,
-            "version": version,
-            "reason": reason,
-            "roles": sorted(set(roles)),
-        }
-        for (name, version, reason), roles in grouped.items()
-    ]
-    for detail_key in ("omitted_by_role", "unknown_by_role"):
-        if event.get(detail_key):
-            item[detail_key] = deepcopy(event[detail_key])
-    return item
-
-
-def _compact_budget_event(event: dict[str, Any]) -> dict[str, Any]:
-    item = _select_event_fields(event, _BUDGET_FIELDS)
-    records = event.get("model_call_records", [])
-    if isinstance(records, list):
-        item["model_call_records"] = [
-            {
-                key: deepcopy(record[key])
-                for key in _MODEL_CALL_RECORD_FIELDS
-                if isinstance(record, dict) and key in record
-            }
-            for record in records
-            if isinstance(record, dict)
-        ]
-    return item
 
 
 def identifier_from_metadata(metadata: dict[str, Any]) -> int | str | None:

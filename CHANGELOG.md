@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Phase 3 judge trace and output governance (2026-07-27)
+
+- Added an explicit Judge Trace V3 projection for the formal public result
+  while retaining the complete sanitized Debug Trace in local incremental
+  journals.
+- Reduced every rejected Candidate to an identity/method/status/digest/
+  rejection/evidence summary; rejected answers, solution steps, Claims, raw
+  responses, and private reasoning never enter public output.
+- Protected selection, evidence, proof-completion, arbitration, terminal, and
+  budget events while applying structured digest summaries to optional
+  overflow.
+- Enforced public-result UTF-8 byte, Judge Trace event/character, per-event
+  character, and rejected-Candidate count budgets from named configuration
+  profiles.
+- Added adversarial coverage for conflicting answers, long proofs, 64 Claims,
+  4,096 internal events, secrets, absolute paths, tracebacks, private payload
+  keys, terminal failures, and final-response consistency.
+
 ### Phase 2 concurrency, timeout, and lifecycle closure (2026-07-27)
 
 - Added an explicit per-call model queue budget and made role timeouts include

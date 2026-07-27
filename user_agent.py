@@ -5,6 +5,7 @@ from mathforge.output.public_result import (
     build_public_result,
     identifier_from_metadata,
 )
+from mathforge.output.judge_trace import minimal_judge_trace
 from mathforge.runtime import MathForgeHarness
 
 
@@ -32,5 +33,5 @@ class ReasoningAgent:
                 "id": identifier,
                 "status": "failed",
                 "final_response": fallback["final_response"],
-                "trace": fallback["trace"],
+                "trace": minimal_judge_trace(),
             }

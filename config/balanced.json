@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.3",
+  "schema_version": "1.4",
   "profile": "balanced",
   "status": "validated",
   "model_max_concurrency": 3,
@@ -23,6 +23,11 @@
   "late_result_registry_max_entries": 64,
   "trace_max_chars": 12000,
   "trace_max_events": 64,
+  "public_result_max_bytes": 524288,
+  "judge_trace_max_events": 48,
+  "judge_trace_max_chars": 48000,
+  "judge_trace_event_max_chars": 8000,
+  "candidate_summary_max_count": 6,
   "max_claims": 64,
   "max_tool_calls": 24,
   "max_isolated_tool_calls": 12,

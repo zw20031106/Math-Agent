@@ -8,6 +8,7 @@ import pytest
 
 import mathforge.config as config_module
 from mathforge.config import HarnessConfig
+from mathforge.runtime import MathForgeHarness
 from scripts.run_benchmark import build_benchmark_metadata
 from tests.fake_client import FakeClient
 from user_agent import ReasoningAgent
@@ -145,13 +146,28 @@ def test_changing_competition_config_changes_public_behavior(
     disabled = _minimal_config(profile="competition")
     _write_config(config_path, disabled)
     without_tools = ReasoningAgent(FakeClient()).solve("1 + 1", {})
+    without_tools_internal = MathForgeHarness(FakeClient(), disabled).solve(
+        "1 + 1",
+        {},
+    )
 
     enabled = replace(disabled, enable_tools=True)
     _write_config(config_path, enabled)
     with_tools = ReasoningAgent(FakeClient()).solve("1 + 1", {})
+    with_tools_internal = MathForgeHarness(FakeClient(), enabled).solve(
+        "1 + 1",
+        {},
+    )
 
-    assert not any(event["event"] == "tool_checks" for event in without_tools["trace"])
-    assert any(event["event"] == "tool_checks" for event in with_tools["trace"])
+    assert not any(
+        event["event"] == "tool_checks"
+        for event in without_tools_internal["trace"]
+    )
+    assert any(
+        event["event"] == "tool_checks"
+        for event in with_tools_internal["trace"]
+    )
+    assert all(event["event"] != "tool_checks" for event in with_tools["trace"])
     assert without_tools["trace"][0]["config_hash"] != with_tools["trace"][0]["config_hash"]
 
 

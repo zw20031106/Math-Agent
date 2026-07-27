@@ -117,20 +117,30 @@ lifecycle contract therefore belongs to `scripts/run_case_outputs.py` unless
 written permission is granted to change the official baseline.
 
 Public Trace is an ordered audit narrative rather than a framework event dump.
-It keeps complete candidate public steps, final answers, claims, evidence,
-repair/lemma records, arbitration, and terminal cause without a character
-limit. Repeated phase transitions, context-view bookkeeping, and duplicate
-completion telemetry are omitted. Provider failures are exposed only through
-safe reason codes such as `auth_or_permission_failure`, `provider_5xx`,
-`network_read_timeout`, `candidate_json_incomplete`, and
-`candidate_schema_invalid`; credentials and raw exceptions remain private.
+The returned Judge Trace V3 keeps configuration/routing/Skill summaries, only
+the selected Candidate's bounded public steps, evidence and proof-completion
+conclusions, arbitration, terminal category, and budget summary. Rejected
+Candidates retain only identity, role, method family, status, digest, rejection
+category, and evidence counts; their answers, steps, Claims, and full responses
+are excluded. Local JSONL journals use a separate sanitized Debug Trace Schema
+and are never returned by `ReasoningAgent`.
 
-`INTERN_MODEL` is mandatory and must be the exact version ID shown above.
-The legacy `intern-s2-preview` field currently targets a 35B model; aliases,
-case variants, and caller-supplied display labels are rejected. The official
-chat surface returns assistant content but no response model or thinking-mode
-metadata, so provenance records the requested model and marks those
-response-side fields as unobservable instead of inferring them.
+Judge output is bounded by the final indented UTF-8 serialization, total Trace
+characters/events, per-event characters, and rejected-Candidate count. Overflow
+becomes a typed summary with a digest; terminal, selection, arbitration,
+evidence, and proof-completion events are protected. Provider failures expose
+only stable safe reason codes such as `auth_or_permission_failure`,
+`provider_5xx`, `network_read_timeout`, `candidate_json_incomplete`, and
+`candidate_schema_invalid`; credentials, raw exceptions, absolute local paths,
+and private reasoning remain outside the Judge Trace.
+
+The formal injected-client entry does not read or require `INTERN_MODEL`.
+Local benchmark runners require the exact
+`intern-s2-preview-397b` version ID and reject aliases, case variants, and
+caller-supplied display labels. The official chat surface returns assistant
+content but no response model or thinking-mode metadata, so provenance records
+the requested model and marks those response-side fields as unobservable
+instead of inferring them.
 
 Every role call uses one context-budget service and a server-clock-aware role
 policy. Configured limits are upper bounds; effective caps are Router/Finalizer
@@ -186,7 +196,8 @@ wheelhouse; installation and the smoke test are offline.
 
 ## Runtime configuration
 
-- `INTERN_MODEL=intern-s2-preview-397b`: required exact 397B model request; aliases fail closed.
+- `INTERN_MODEL=intern-s2-preview-397b`: required only by local benchmark
+  runners; aliases fail closed.
 - `MATHFORGE_MODEL_MAX_CONCURRENCY`: bounded shared client concurrency (default `4`).
 - `MATHFORGE_INTERN_S2_TOKENIZER_DIR`: optional pinned local tokenizer snapshot;
   a mismatch activates the recorded UTF-8 fallback instead of loading it.

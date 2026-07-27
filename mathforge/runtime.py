@@ -2015,7 +2015,7 @@ class MathForgeHarness:
                 ),
                 None,
             )
-        return terminalizer.build_result(
+        result = terminalizer.build_result(
             final_response=final_response,
             trace_factory=lambda: trace.build(final_response=final_response),
             metrics_factory=lambda: metrics,
@@ -2025,6 +2025,18 @@ class MathForgeHarness:
                 {},
             ),
         )
+        result["_public_output_limits"] = {
+            "public_result_max_bytes": self._config.public_result_max_bytes,
+            "judge_trace_max_events": self._config.judge_trace_max_events,
+            "judge_trace_max_chars": self._config.judge_trace_max_chars,
+            "judge_trace_event_max_chars": (
+                self._config.judge_trace_event_max_chars
+            ),
+            "candidate_summary_max_count": (
+                self._config.candidate_summary_max_count
+            ),
+        }
+        return result
 
     def _validated_final_response(self, text: str):
         try:

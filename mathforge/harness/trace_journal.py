@@ -12,7 +12,7 @@ _SAFE_IDENTIFIER = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class JsonlTraceJournal:
-    """Thread-safe, incremental sink for already-sanitized public events."""
+    """Thread-safe, incremental sink for sanitized debug events."""
 
     def __init__(self, path: Path, *, truncate: bool = True) -> None:
         self._path = path

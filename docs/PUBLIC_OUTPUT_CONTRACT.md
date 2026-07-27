@@ -1,6 +1,6 @@
 # MathForge 公共输出契约
 
-版本：2.4
+版本：3.0
 
 ## 对外字段
 
@@ -28,17 +28,26 @@ Harness、Benchmark artifact 和逐题运行清单中。
 
 ## Trace 内容
 
-公共 Trace 是可审计的解题过程，不是框架日志堆叠：
+公共 `trace` 使用 Judge Trace V3，是面向判分的有界审计叙事，不是内部
+框架日志或 Debug Journal：
 
-- 候选成功时，完整保留每个候选的公开解题步骤、最终答案、假设、定理、
-  Claims、MethodSteps 和未解决义务，不设置字符数上限。
-- 完整保留证据结果、证明义务、Lemma/Repair 记录、候选仲裁、最终选择与
-  终态原因。
-- 删除重复的阶段切换、上下文视图构建和重复完成事件；压缩静态 provenance、
-  skills 和 budget 遥测。
+- 保留会话/配置、路由/Skill、关键 Evidence、proof completion、仲裁、
+  最终选择、预算和终态摘要。
+- 只对选中 Candidate 保留必要公开解题步骤和最终答案，且不在 Trace 中重复
+  `final_response`；二者通过内容摘要绑定并校验一致性。
+- 未选 Candidate 只保留 `candidate_id`、`role`、`method_family`、
+  `status`、`content_digest`、`rejection_category` 和
+  `evidence_summary`，不保留其答案、步骤、Claims 或完整正文。
+- 最终缩进 UTF-8 JSON、Trace 事件数/字符数、单事件字符数和未选 Candidate
+  数量均受命名配置预算约束。超限内容转换为带数量和摘要的结构化记录，不
+  破坏 JSON 或裁掉关键终态事件。
 - 模型调用失败只记录安全原因码（例如 `provider_5xx`、
   `network_read_timeout`、`candidate_json_incomplete`），不公开 API 密钥、
-  绝对路径、原始异常或私有推理草稿。
+  绝对路径、原始异常、raw response 或私有推理草稿。
+
+内部 Harness 的 Trace V2 保留完整交叉引用用于运行时验证；本地增量 journal
+使用独立的脱敏 Debug Trace Schema。两者都不会由 `ReasoningAgent.solve()`
+返回给 judger。
 
 当模型没有返回任何候选内容时，Trace 不会伪造推理链；`status` 为
 `failed`，并明确记录失败发生在模型调用阶段。

@@ -62,16 +62,19 @@ def test_public_status_rejects_conflicting_explicit_value() -> None:
         )
 
 
-def test_public_trace_keeps_solution_content_and_omits_framework_noise() -> None:
+def test_public_trace_keeps_selected_solution_and_omits_framework_noise() -> None:
     result = ReasoningAgent(client=FakeClient()).solve("1 + 1", {"idx": 1})
     names = [event["event"] for event in result["trace"]]
-    candidate = next(
-        event for event in result["trace"] if event["event"] == "candidate_generated"
+    selected = next(
+        event
+        for event in result["trace"]
+        if event["event"] == "final_answer_selected"
     )
 
     assert "phase_transition" not in names
     assert "context_view_built" not in names
-    assert candidate["content"]["public_solution_steps"]
-    assert candidate["content"]["final_answer"]
+    assert "candidate_generated" not in names
+    assert selected["public_solution"]["public_solution_steps"]
+    assert selected["public_solution"]["final_answer"]
     assert result["trace"][-1]["event"] == "run_completed"
     assert build_public_result(result["id"], result) == result

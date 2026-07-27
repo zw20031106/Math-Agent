@@ -10,6 +10,7 @@ from time import monotonic
 from typing import Any, Callable, Iterable
 
 from mathforge.harness.events import (
+    DEBUG_TRACE_SCHEMA_VERSION,
     EVENT_STAGES,
     JUDGE_EVENTS,
     PROTECTED_TRACE_EVENTS,
@@ -98,20 +99,31 @@ class TraceBuilder:
         with self._lock:
             if self._frozen:
                 raise RuntimeError("trace is frozen")
+            elapsed_ms = self._elapsed_ms()
             internal_details = {
                 key: self._sanitize(value)
                 for key, value in details.items()
                 if not _SENSITIVE_KEYS.search(key)
                 and not _PRIVATE_REASONING_KEYS.search(key)
             }
-            self._internal_events.append(
-                {"event": str(event), **internal_details}
-            )
             self._internal_event_count += 1
+            debug_item = {
+                "schema_version": DEBUG_TRACE_SCHEMA_VERSION,
+                "debug_seq": self._internal_event_count,
+                "elapsed_ms": elapsed_ms,
+                "event": str(event),
+                **internal_details,
+            }
+            self._internal_events.append(debug_item)
             if len(self._internal_events) > self._internal_max_events:
                 dropped = len(self._internal_events) - self._internal_max_events
                 del self._internal_events[:dropped]
                 self._internal_events_dropped += dropped
+            if self._event_sink is not None:
+                try:
+                    self._event_sink(deepcopy(debug_item))
+                except Exception:
+                    self._journal_failures += 1
             if event not in JUDGE_EVENTS:
                 return
             supplied_stage = details.pop("stage", None)
@@ -126,16 +138,11 @@ class TraceBuilder:
             item = {
                 "schema_version": TRACE_SCHEMA_VERSION,
                 "seq": len(self._events) + 1,
-                "elapsed_ms": self._elapsed_ms(),
+                "elapsed_ms": elapsed_ms,
                 "event": event,
                 "stage": EVENT_STAGES[event],
                 **sanitized,
             }
-            if self._event_sink is not None:
-                try:
-                    self._event_sink(deepcopy(item))
-                except Exception:
-                    self._journal_failures += 1
             self._append_bounded(item)
 
     def build(self, *, final_response: str | None = None) -> list[dict[str, Any]]:

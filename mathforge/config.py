@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 
-CONFIG_SCHEMA_VERSION = "1.3"
+CONFIG_SCHEMA_VERSION = "1.4"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPETITION_CONFIG_PATH = REPO_ROOT / "config" / "competition.json"
 _METADATA_FIELDS = frozenset({"schema_version", "profile", "status"})
@@ -42,6 +42,11 @@ class HarnessConfig:
     late_result_registry_max_entries: int = 64
     trace_max_chars: int = 0
     trace_max_events: int = 0
+    public_result_max_bytes: int = 4000000
+    judge_trace_max_events: int = 64
+    judge_trace_max_chars: int = 196608
+    judge_trace_event_max_chars: int = 16384
+    candidate_summary_max_count: int = 8
     max_claims: int = 64
     max_tool_calls: int = 32
     max_isolated_tool_calls: int = 16
@@ -124,6 +129,11 @@ class HarnessConfig:
             "context_safety_margin_tokens": (1, 131072),
             "trace_max_chars": (0, 1000000),
             "trace_max_events": (0, 100000),
+            "public_result_max_bytes": (4096, 8000000),
+            "judge_trace_max_events": (8, 256),
+            "judge_trace_max_chars": (4096, 1000000),
+            "judge_trace_event_max_chars": (1024, 65536),
+            "candidate_summary_max_count": (1, 64),
             "max_claims": (1, 64),
             "max_tool_calls": (1, 10000),
             "max_isolated_tool_calls": (1, 10000),
@@ -178,6 +188,14 @@ class HarnessConfig:
         if self.max_background_model_tails < self.model_max_concurrency:
             raise ValueError(
                 "max_background_model_tails must cover model_max_concurrency"
+            )
+        if self.judge_trace_event_max_chars >= self.judge_trace_max_chars:
+            raise ValueError(
+                "judge_trace_event_max_chars must be below judge_trace_max_chars"
+            )
+        if self.public_result_max_bytes <= self.judge_trace_max_chars:
+            raise ValueError(
+                "public_result_max_bytes must exceed judge_trace_max_chars"
             )
         if (
             type(self.model_call_start_margin_seconds) not in {int, float}

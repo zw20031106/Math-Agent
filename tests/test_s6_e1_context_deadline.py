@@ -92,7 +92,7 @@ def _minimal_config(**changes) -> HarnessConfig:
 def test_competition_config_uses_reliable_completion_cap_and_e1_deadlines():
     config = load_competition_config()
 
-    assert config.schema_version == "1.3"
+    assert config.schema_version == "1.4"
     assert config.primary_max_tokens == 65536
     assert config.max_model_tokens == 0
     assert config.model_context_window_tokens == 262144
@@ -337,7 +337,7 @@ def test_runner_timeout_is_terminal_atomic_and_late_result_cannot_overwrite(tmp_
         == "per_case_wall_clock_exceeded"
     )
     assert all(
-        event["schema_version"] == "2.0"
+        event["schema_version"] == "3.0"
         for event in payload["trace"]
     )
     assert records[0].run_metrics.per_case_wall_clock_timeout_count == 1

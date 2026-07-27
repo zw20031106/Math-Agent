@@ -22,7 +22,7 @@
 | `requirements.txt` | 运行时依赖（requests、sympy） | 安装项目运行环境 |
 | `requirements-dev.txt` | 开发和测试依赖（pytest、coverage、ruff、mypy） | 本地质量门 |
 | `requirements-lock.txt` | CPython 3.13 锁定依赖版本 | 离线安装和可复现环境 |
-| `user_agent.py` | 公共 `ReasoningAgent`；校验精确模型身份，构造 Harness，返回四字段公共结果 | 官方/自定义入口导入；调用 `mathforge.runtime`、`output.public_result` |
+| `user_agent.py` | 公共 `ReasoningAgent`；只使用注入 Client，构造 Harness，返回含 Judge Trace V3 的四字段公共结果 | 官方/自定义入口导入；调用 `mathforge.runtime`、`output.public_result` |
 
 ## 2. 配置文件
 
@@ -188,7 +188,8 @@
 | `mathforge/output/__init__.py` | 导出 AnswerValidator、DeterministicFormatter | 包级导入 |
 | `mathforge/output/answer_validator.py` | 按 ProblemIR 检查 choice/integer/fraction/vector/tuple/interval/set/matrix 等形状 | Runtime、Evidence answer_type_check |
 | `mathforge/output/deterministic_formatter.py` | 去重复 Answer 行，拼接公开 solution 和 Final answer | Runtime、Finalizer fallback |
-| `mathforge/output/public_result.py` | 将内部结果投影为 `id/status/final_response/trace`；过滤/压缩公共 Trace | `user_agent.py`、逐题 runner、提交校验 |
+| `mathforge/output/judge_trace.py` | 将内部 Trace V2 投影并校验为有界 Judge Trace V3；未选候选摘要化、关键事件保护、安全过滤和结构化压缩 | `public_result.py`、公共输出对抗测试 |
+| `mathforge/output/public_result.py` | 将内部结果投影为 `id/status/final_response/trace`；执行 Judge Trace V3 与最终 UTF-8 序列化字节预算 | `user_agent.py`、逐题 runner、提交校验 |
 
 ## 12. `mathforge.evaluation` 与 `governance`
 
