@@ -1,0 +1,5 @@
+{"idx":"rel-001","failure_family":"transport","scenario":"connect_failure","injected_client_behavior":"raise ConnectionError('connection refused')","expected_failure_code":"network_connect_failure","expected_status":"failed"}
+{"idx":"rel-002","failure_family":"transport","scenario":"read_timeout","injected_client_behavior":"raise RuntimeError('ReadTimeout')","expected_failure_code":"network_read_timeout","expected_status":"failed"}
+{"idx":"rel-003","failure_family":"transport","scenario":"empty_response","injected_client_behavior":"return ''","expected_failure_code":"empty_response","expected_status":"failed"}
+{"idx":"rel-004","failure_family":"schema","scenario":"invalid_candidate_schema","injected_client_behavior":"return '{}'","expected_failure_code":"candidate_schema_invalid","expected_status":"failed"}
+{"idx":"rel-005","failure_family":"transport","scenario":"valid_response","injected_client_behavior":"return strict Candidate JSON","expected_failure_code":"","expected_status":"success"}

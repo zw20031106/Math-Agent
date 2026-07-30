@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0",
+  "phase": "phase0",
+  "captured_at": "2026-07-30",
+  "purpose": "reproducible stability and accuracy baseline",
+  "datasets": [
+    {
+      "path": "tests/fixtures/phase0_reliability.jsonl",
+      "bytes": 1007,
+      "sha256": "51132ff9abd8be2638f4348b11cfae44625d8dd0bbfa97970a89ee295daffeb9",
+      "name": "reliability",
+      "case_count": 5,
+      "categories": {
+        "schema": 1,
+        "transport": 4
+      }
+    },
+    {
+      "path": "tests/fixtures/phase0_general_high_difficulty.jsonl",
+      "bytes": 2711,
+      "sha256": "dfa4d5f8b85f41fd03a9b01b820fdcf6679afb7c4339ffde8e7c9356b2d5e291",
+      "name": "general_high_difficulty",
+      "case_count": 12,
+      "categories": {
+        "algebra": 1,
+        "analysis": 2,
+        "combinatorics": 1,
+        "differential_equations": 1,
+        "geometry": 1,
+        "linear_algebra": 1,
+        "number_theory": 1,
+        "optimization": 1,
+        "parameter_analysis": 1,
+        "probability": 1,
+        "special_functions": 1
+      }
+    },
+    {
+      "path": "tests/fixtures/phase0_contract_adversarial.jsonl",
+      "bytes": 1784,
+      "sha256": "f461b25bcc3ddf90cf3528d88e23098681b6035e10af79721eecfe3e273d98a4",
+      "name": "contract_adversarial",
+      "case_count": 6,
+      "categories": {
+        "candidate_conflict": 1,
+        "long_conditions": 1,
+        "multi_target": 1,
+        "row_leading_symbol": 1,
+        "structured_output_pressure": 1,
+        "tool_claim": 1
+      }
+    }
+  ],
+  "config": {
+    "path": "config/competition.json",
+    "bytes": 1587,
+    "sha256": "413943489d9dab4bcf0bd60880064fbb6d8aadbf95f95eb2484390f5fe41e03b"
+  },
+  "metrics": {
+    "answer_equivalence_accuracy": "correct symbolic-equivalence canaries / all canaries",
+    "answer_production_rate": "cases with non-empty mathematical final_response / all cases",
+    "primary_success_rate": "primary outcomes / all cases",
+    "degraded_salvage_rate": "degraded_candidate_salvage outcomes / all cases",
+    "model_call_success_rate": "completed dispatched model calls / dispatched model calls",
+    "p50_p95_latency_seconds": "case latency percentiles",
+    "p50_p95_model_calls": "per-case model-call percentiles"
+  },
+  "historical_reliability_snapshot": {
+    "source_dataset": "tests/fixtures/phase0_0729_live_regressions.json",
+    "status_counts": {
+      "failed": 2,
+      "interrupted": 1,
+      "success": 2
+    },
+    "completed_case_count": 4,
+    "success_rate_on_completed": 0.5,
+    "known_failure_classes": [
+      "network_connect_failure"
+    ]
+  },
+  "failure_taxonomy": {
+    "transport": {
+      "fixture": "reliability",
+      "codes": [
+        "network_connect_failure",
+        "network_read_timeout",
+        "empty_response"
+      ]
+    },
+    "schema": {
+      "fixture": "reliability",
+      "codes": [
+        "candidate_schema_invalid"
+      ]
+    },
+    "logic": {
+      "fixture": "contract_adversarial",
+      "categories": [
+        "tool_claim",
+        "candidate_conflict"
+      ]
+    },
+    "verification": {
+      "fixture": "contract_adversarial",
+      "categories": [
+        "candidate_conflict"
+      ]
+    },
+    "formatting": {
+      "fixture": "contract_adversarial",
+      "categories": [
+        "structured_output_pressure"
+      ]
+    }
+  },
+  "privacy": {
+    "contains_credentials": false,
+    "contains_absolute_paths": false,
+    "contains_private_reasoning_transcripts": false
+  }
+}
