@@ -33,20 +33,30 @@
       "path": "prompts",
       "pattern": "contract.md",
       "expected_count": 7,
-      "version": "prompt-contract-3",
-      "engineering_reviewer": "codex-phase3-candidate-v2",
-      "review_date": "2026-07-29",
-      "sha256": "bbe4515617c6b79b9bf1c853538da246b4a58a8631214f07b9e9a6a28fc30458"
+      "version": "prompt-contract-4-public-reasoning",
+      "engineering_reviewer": "codex-phase4-public-state",
+      "review_date": "2026-07-30",
+      "sha256": "8f28cbbfbfe7e9b3d37ea4885558061cdce5976875ba0b3e6bb71922ceb601fb"
     },
     {
       "id": "prompt-compiler",
       "kind": "file",
       "path": "mathforge/agents/prompt_compiler.py",
       "expected_count": 1,
-      "version": "prompt-compiler-5",
-      "engineering_reviewer": "codex-phase3-candidate-v2",
-      "review_date": "2026-07-29",
-      "sha256": "2ff40ee9eb5fb41728a41a0e9bb9b42ca7147a8e9a8ffd584e04ffece2430436"
+      "version": "prompt-compiler-6-public-reasoning",
+      "engineering_reviewer": "codex-phase4-public-state",
+      "review_date": "2026-07-30",
+      "sha256": "a10fe9ebdaa39129970bd329675810f7fee0c2470bee840617d4cc2263e3a5db"
+    },
+    {
+      "id": "reasoning-state",
+      "kind": "file",
+      "path": "mathforge/harness/reasoning_state.py",
+      "expected_count": 1,
+      "version": "reasoning-state-1.0",
+      "engineering_reviewer": "codex-phase4-public-state",
+      "review_date": "2026-07-30",
+      "sha256": "456417881a4774092ae0d1f3011a6dfbf980fae1747c6b442580ecd45ca027f2"
     },
     {
       "id": "proof-obligations",

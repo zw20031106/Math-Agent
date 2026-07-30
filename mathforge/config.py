@@ -68,6 +68,7 @@ class HarnessConfig:
     enable_finalizer: bool = False
     enable_shadow: bool = False
     enable_frozen_lemma_store: bool = False
+    enable_long_horizon: bool = False
 
     def __post_init__(self) -> None:
         self.validate()
@@ -118,6 +119,7 @@ class HarnessConfig:
             "enable_finalizer",
             "enable_shadow",
             "enable_frozen_lemma_store",
+            "enable_long_horizon",
         }
         for name in bool_fields:
             if type(getattr(self, name)) is not bool:

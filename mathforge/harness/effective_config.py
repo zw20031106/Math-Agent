@@ -9,6 +9,7 @@ from mathforge.harness.model_policy import (
     stage_output_cap,
     stage_p95_seconds,
 )
+from mathforge.harness.reasoning_state import REASONING_STATE_MAX_TOKENS
 
 
 _ROLE_DIRECTORIES = {
@@ -90,6 +91,13 @@ def build_effective_config_snapshot(
             ),
         },
         "features": {
+            "long_horizon_reasoning": {
+                "enabled": config.enable_long_horizon,
+                "protocols": ["explore", "continue", "synthesize"],
+                "max_rounds": 3,
+                "state_max_tokens": REASONING_STATE_MAX_TOKENS,
+                "stores_public_state_only": True,
+            },
             "frozen_lemma_store": {
                 "requested": bool(frozen_lemma_store_requested),
                 "effective": bool(frozen_lemma_store_count),

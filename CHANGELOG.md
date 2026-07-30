@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### 0730 stability remediation phases 0-3 (2026-07-30)
+### 0730 stability remediation phases 0-4 (2026-07-30)
 
 - Added reproducible Phase 0 reliability, general high-difficulty, and
   contract-adversarial baselines, a hash manifest builder, symbolic-equivalence
@@ -37,6 +37,17 @@
 - Added Judge Trace 3.2 effective Prompt/Provider/Deadline configuration and
   per-call token/queue-limit explanations. An enabled but empty Frozen Lemma
   Store is now disabled before evaluation work begins.
+- Added versioned public `ReasoningState`, `ProblemFrame`, `SubgoalLedger`,
+  `ClaimLedger`, and `RoundDelta` contracts with dependency validation and
+  token-budgeted compression that preserves the problem frame, Claim graph,
+  and open obligations.
+- Added explicit `explore`, `continue`, and `synthesize` Prompt protocols.
+  High-difficulty cases may use two or three budget-feasible public rounds;
+  simple cases remain single-round, and a failed progress protocol falls back
+  to direct Candidate generation rather than suppressing answer production.
+- Upgraded Judge Trace to 3.3 with bounded round summaries, information gain,
+  cross-round references, stop/degradation reasons, and per-round state token
+  accounting without private reasoning transcripts.
 
 ### 0729 remediation phase 6 (2026-07-29)
 

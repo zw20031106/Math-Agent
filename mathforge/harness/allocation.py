@@ -63,9 +63,12 @@ class CallAllocationPlan:
         lemma_requested: bool,
         finalizer_requested: bool,
         reverification_requested: bool = False,
+        primary_calls: int = 1,
     ) -> "CallAllocationPlan":
         router = max(0, router_calls)
-        primary = 1
+        if type(primary_calls) is not int or primary_calls < 1:
+            raise ValueError("primary call count must be a positive integer")
+        primary = primary_calls
         verifier = int(verifier_required)
         required = router + primary + verifier
         if required > max_calls:

@@ -55,7 +55,7 @@ def _complete_payload(method: str) -> dict:
     }
 
 
-def test_all_prompt_contracts_are_v2_and_solver_contract_is_unambiguous():
+def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
     loader = PromptContractLoader()
     roles = (
         "router_planner",
@@ -68,7 +68,8 @@ def test_all_prompt_contracts_are_v2_and_solver_contract_is_unambiguous():
     )
     for role in roles:
         contract = loader.load(role)
-        assert contract.fields["version"] == "2"
+        expected_version = "3" if role == "primary_solver" else "2"
+        assert contract.fields["version"] == expected_version
         assert "when possible" not in contract.body.lower()
 
     for role in ("primary_solver", "alternative_solver"):

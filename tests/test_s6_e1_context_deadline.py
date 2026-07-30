@@ -365,7 +365,7 @@ def test_runner_timeout_is_terminal_atomic_and_late_result_cannot_overwrite(tmp_
         == "per_case_wall_clock_exceeded"
     )
     assert all(
-        event["schema_version"] == "3.2"
+        event["schema_version"] == "3.3"
         for event in payload["trace"]
     )
     assert records[0].run_metrics.per_case_wall_clock_timeout_count == 1

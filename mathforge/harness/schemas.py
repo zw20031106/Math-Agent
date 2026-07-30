@@ -1010,7 +1010,7 @@ class RoutePlan:
             raise SchemaValidationError("RoutePlan counts must be integers")
         if not 1 <= self.candidate_count <= 3:
             raise SchemaValidationError("invalid route candidate count")
-        if not 1 <= self.max_reasoning_rounds <= 2:
+        if not 1 <= self.max_reasoning_rounds <= 3:
             raise SchemaValidationError("invalid route reasoning rounds")
         for name, value in (
             ("selected_skills", self.selected_skills),
@@ -1358,6 +1358,7 @@ class MathSession:
     budget: CallBudget
     problem_ir: ProblemIR | None = None
     route_plan: RoutePlan | None = None
+    reasoning_state: Any = None
     candidates: list[CandidateSolution] = field(default_factory=list)
     evidence: list[EvidenceRecord] = field(default_factory=list)
     proof_obligations: dict[str, list[ProofObligation]] = field(default_factory=dict)

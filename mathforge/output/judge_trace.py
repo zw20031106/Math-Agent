@@ -13,12 +13,16 @@ from mathforge.output.loop_health import (
 )
 
 
-JUDGE_TRACE_SCHEMA_VERSION = "3.2"
+JUDGE_TRACE_SCHEMA_VERSION = "3.3"
 JUDGE_EVENT_STAGES = {
     "session_started": "session",
     "effective_config_snapshot": "session",
     "problem_parsed": "parsing",
     "route_planned": "routing",
+    "reasoning_state_initialized": "reasoning",
+    "long_horizon_planned": "reasoning",
+    "round_summary": "reasoning",
+    "reasoning_loop_completed": "reasoning",
     "skills_selected": "skill_selection",
     "candidate_summaries": "candidate_generation",
     "evidence_summary": "evidence",
@@ -40,6 +44,7 @@ _PROTECTED_EVENTS = frozenset(
     {
         "session_started",
         "effective_config_snapshot",
+        "round_summary",
         "evidence_summary",
         "proof_completion_summary",
         "decision_summary",
@@ -226,6 +231,84 @@ def project_judge_trace(
                 "selected_tools",
                 "method_families",
                 "routing_reasons",
+            ),
+        ),
+    )
+    state_initialized = _last(by_name, "reasoning_state_initialized")
+    append(
+        "reasoning_state_initialized",
+        state_initialized,
+        _select(
+            state_initialized,
+            (
+                "state_id",
+                "state_version",
+                "reasoning_state_schema_version",
+                "problem_frame_digest",
+                "preserved_invariants",
+            ),
+        ),
+    )
+    long_horizon = _last(by_name, "long_horizon_planned")
+    append(
+        "long_horizon_planned",
+        long_horizon,
+        _select(
+            long_horizon,
+            (
+                "enabled",
+                "planned_rounds",
+                "reason_code",
+                "sequence_reserve_seconds",
+                "remaining_calls",
+                "remaining_seconds",
+            ),
+        ),
+    )
+    for round_event in by_name.get("round_summary", []):
+        append(
+            "round_summary",
+            round_event,
+            _select(
+                round_event,
+                (
+                    "state_id",
+                    "state_version",
+                    "round_index",
+                    "mode",
+                    "added_subgoal_ids",
+                    "updated_subgoal_ids",
+                    "closed_subgoal_ids",
+                    "added_claim_ids",
+                    "claim_dependency_refs",
+                    "evidence_ids",
+                    "opened_obligation_ids",
+                    "closed_obligation_ids",
+                    "information_gain",
+                    "next_step",
+                    "stop_reason",
+                    "degraded_reason",
+                    "state_tokens",
+                    "state_counting_mode",
+                    "state_compressed",
+                    "omitted_rounds",
+                ),
+            ),
+        )
+    reasoning_completed = _last(by_name, "reasoning_loop_completed")
+    append(
+        "reasoning_loop_completed",
+        reasoning_completed,
+        _select(
+            reasoning_completed,
+            (
+                "state_id",
+                "enabled",
+                "completed_rounds",
+                "planned_rounds",
+                "stop_reason",
+                "degraded_reason",
+                "candidate_id",
             ),
         ),
     )

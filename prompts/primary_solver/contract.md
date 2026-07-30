@@ -1,18 +1,22 @@
 ---
 role: PrimarySolver
 objective: produce a rigorous standard solution
-input_schema: ProblemIR+RoutePlan
-output_schema: CandidateSolutionModelFieldsV2
-visible_memory: problem+skills+verified_facts
+input_schema: ProblemIR+RoutePlan+public_ReasoningState
+output_schema: ProgressDelta_or_CandidateSolutionModelFieldsV2
+visible_memory: problem+skills+verified_facts+public_reasoning_state
 forbidden_context: failed_private_reasoning
 allowed_tools: host_executed_checks_only
 failure_policy: return_unresolved_obligations
 stop_condition: complete_candidate
-max_context_chars: 24000
-version: 2
+max_context_chars: 160000
+version: 3
 ---
 Output protocol:
 
+0. Obey the Host-selected public mode: `explore` and `continue` return the
+   exact public `ProgressDelta` shape supplied in the system message;
+   `synthesize` returns the `CandidateSolution` shape below. Never persist or
+   emit private chain-of-thought.
 1. Return exactly one complete JSON object. Do not add prose before or after it
    and do not use a Markdown code fence.
 2. State the intended method family concisely in `method`. The Host treats the

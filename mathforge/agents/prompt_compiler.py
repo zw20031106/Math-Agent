@@ -74,6 +74,34 @@ _CANDIDATE_CORE_PROTOCOL = (
     "context and the Claim states its exact mathematical inputs. Prioritize a "
     "complete valid object over verbosity and finish within 8,192 output tokens."
 )
+_PROGRESS_DELTA_PROTOCOL = (
+    "Public protocol mode is {mode}. Return exactly one bare JSON object with "
+    "these nine fields and no others: public_summary, strategy, subgoals, "
+    "claims, open_obligations, closed_obligation_ids, contradictions, "
+    "next_step, stop_reason. This is a public, auditable ProgressDelta, not a "
+    "private scratchpad or chain-of-thought. public_summary, strategy, "
+    "next_step, and stop_reason are strings. subgoals is an array of objects "
+    "with exactly subgoal_id, statement, depends_on, exit_condition, status; "
+    "status is open, active, closed, or blocked. claims is an array of objects "
+    "with exactly claim_id, statement, depends_on, subgoal_ids, importance; "
+    "importance is critical or supporting. open_obligations is an array of "
+    "objects with exactly obligation_id, statement, depends_on, where "
+    "depends_on references public Claim ids. closed_obligation_ids and "
+    "contradictions are string arrays. Reuse existing ids without rewriting "
+    "their content. Add only atomic, publicly checkable mathematical claims. "
+    "Do not emit a final answer, CandidateSolution, tool call, hidden analysis, "
+    "private reasoning, raw model response, or Host-owned state/version fields. "
+    'Use this exact shape: {"public_summary":"<public progress>",'
+    '"strategy":"<current method>","subgoals":[{"subgoal_id":"g1",'
+    '"statement":"<public target>","depends_on":[],"exit_condition":'
+    '"<observable closure>","status":"open"}],"claims":[{"claim_id":'
+    '"r1-c1","statement":"<atomic public claim>","depends_on":[],'
+    '"subgoal_ids":["g1"],"importance":"supporting"}],'
+    '"open_obligations":[{"obligation_id":"o1","statement":'
+    '"<condition to establish>","depends_on":["r1-c1"]}],'
+    '"closed_obligation_ids":[],"contradictions":[],"next_step":'
+    '"<one bounded action>","stop_reason":""}.'
+)
 _REPAIR_PATCH_PROTOCOL = (
     "Return exactly one bare JSON object containing replacement_claims, "
     "final_answer, public_solution_steps, and unresolved_obligations. "
@@ -172,6 +200,44 @@ class PromptCompiler:
             user_content,
             "\n".join(instructions),
             output_tokens,
+        )
+
+    def compile_solver_progress(
+        self,
+        role_directory: str,
+        *,
+        problem: ProblemIR,
+        route: RoutePlan,
+        user_content: str,
+        mode: str,
+        runtime_instructions: str = "",
+    ) -> PromptCompilation:
+        if role_directory != "primary_solver":
+            raise ValueError("only PrimarySolver may advance ReasoningState")
+        if mode not in {"explore", "continue"}:
+            raise ValueError("progress mode must be explore or continue")
+        profile = self.solver_profile(problem, route)
+        instructions = [_PROGRESS_DELTA_PROTOCOL.replace("{mode}", mode)]
+        if mode == "explore":
+            instructions.append(
+                "Decompose the exact target and establish the first useful "
+                "public Claims. Preserve every stated condition, definition, "
+                "quantifier, and target from ProblemFrame."
+            )
+        else:
+            instructions.append(
+                "Consume only the supplied public ReasoningState. Advance one "
+                "or a small number of open Subgoals; explicitly close or retain "
+                "obligations and do not repeat unchanged state."
+            )
+        if runtime_instructions.strip():
+            instructions.append(runtime_instructions.strip())
+        return self._compile(
+            role_directory,
+            f"{profile}:{mode}",
+            user_content,
+            "\n".join(instructions),
+            8192,
         )
 
     def compile_role(

@@ -48,5 +48,6 @@
   "enable_repair": true,
   "enable_finalizer": false,
   "enable_shadow": true,
-  "enable_frozen_lemma_store": true
+  "enable_frozen_lemma_store": true,
+  "enable_long_horizon": true
 }

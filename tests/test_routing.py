@@ -75,7 +75,7 @@ def test_equal_high_confidence_domains_produce_auxiliary_and_medium_risk():
 def test_final_risk_recomputes_every_derived_route_field():
     policy = derive_route_policy("high", "calculation")
     assert policy.candidate_count == 3
-    assert policy.max_reasoning_rounds == 2
+    assert policy.max_reasoning_rounds == 3
     assert policy.use_rag is True
     assert policy.use_lemma_loop is False
 

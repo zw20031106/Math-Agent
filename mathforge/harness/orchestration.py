@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 from mathforge.agents.solver import (
     AlternativeSolver,
@@ -33,7 +33,10 @@ class BranchFailure:
     details: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
-        payload = {"candidate_id": self.candidate_id, "reason": self.reason}
+        payload: dict[str, Any] = {
+            "candidate_id": self.candidate_id,
+            "reason": self.reason,
+        }
         if self.details:
             payload["details"] = list(self.details)
         return payload
@@ -70,6 +73,7 @@ class CandidateOrchestrator:
             Callable[[CandidateSolution | None, CallBudget], FanoutDecision]
             | None
         ) = None,
+        primary_candidate: CandidateSolution | None = None,
     ) -> FanoutResult:
         views = context_views or {}
         skill_contexts = role_skill_contexts or {}
@@ -171,18 +175,30 @@ class CandidateOrchestrator:
                 role=primary_solver.role,
                 planned_method_family=primary_request.method_family,
             )
-        record_result(
-            primary_index,
-            primary_request.candidate_id,
-            lambda: self._executor.execute(
-                primary_solver,
-                primary_request,
-                budget,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                optional=False,
-            ),
-        )
+        if primary_candidate is None:
+            record_result(
+                primary_index,
+                primary_request.candidate_id,
+                lambda: self._executor.execute(
+                    primary_solver,
+                    primary_request,
+                    budget,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    optional=False,
+                ),
+            )
+        else:
+            if primary_candidate.candidate_id != primary_request.candidate_id:
+                raise ValueError(
+                    "seeded Primary candidate identity does not match the branch"
+                )
+            ordered[primary_index] = primary_candidate
+            if event_callback is not None:
+                event_callback(
+                    "candidate_generated",
+                    **candidate_trace_payload(primary_candidate),
+                )
 
         decision = (
             fanout_decider(ordered.get(0), budget)

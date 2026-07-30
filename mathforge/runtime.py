@@ -17,7 +17,10 @@ from mathforge.harness.errors import (
     classify_failure,
 )
 from mathforge.harness.fallback import FallbackSolver
-from mathforge.harness.fingerprints import request_fingerprint
+from mathforge.harness.fingerprints import (
+    request_fingerprint,
+    semantic_fingerprint,
+)
 from mathforge.harness.context_budget import ModelContextBudget
 from mathforge.harness.metrics import collect_run_metrics
 from mathforge.harness.effective_config import (
@@ -26,6 +29,13 @@ from mathforge.harness.effective_config import (
 from mathforge.harness.model_policy import (
     stage_sequence_feasible,
     stage_sequence_reserve_seconds,
+)
+from mathforge.harness.reasoning_state import (
+    LongHorizonPlan,
+    LongHorizonPolicy,
+    REASONING_STATE_MAX_TOKENS,
+    ReasoningState,
+    ReasoningStateCompressor,
 )
 from mathforge.harness.proof_graph import build_claim_evidence_graph
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
@@ -223,6 +233,10 @@ class MathForgeHarness:
             else None
         )
         self._adaptive_fanout = AdaptiveFanoutPolicy()
+        self._long_horizon_policy = LongHorizonPolicy()
+        self._reasoning_state_compressor = ReasoningStateCompressor(
+            self._context_budget.token_counter
+        )
         self._shadow_executor = (
             ToolExecutor(
                 default_timeout=min(5.0, self._config.max_tool_seconds),
@@ -388,6 +402,13 @@ class MathForgeHarness:
         problem_memo = ProblemMemo()
         shadow_outcome: ShadowOutcome | None = None
         frozen_lemma_hits = ()
+        reasoning_plan = LongHorizonPlan(
+            False,
+            1,
+            "not_planned",
+            0.0,
+        )
+        reasoning_degraded_reason = ""
 
         def remember_safe_candidate(
             candidates: list[Any] | tuple[Any, ...],
@@ -600,6 +621,27 @@ class MathForgeHarness:
                 potential_verifier
                 and session.route_plan.risk_level in {"medium", "high"}
             )
+            session.reasoning_state = ReasoningState.initialize(
+                session.problem_ir,
+                strategy=(
+                    session.route_plan.method_families[0]
+                    if session.route_plan.method_families
+                    else ""
+                ),
+            )
+            pre_allocation_budget = session.budget.snapshot()
+            reasoning_plan = self._long_horizon_policy.decide(
+                session.route_plan,
+                enabled=self._config.enable_long_horizon,
+                remaining_calls=pre_allocation_budget.remaining_calls,
+                remaining_seconds=pre_allocation_budget.remaining_seconds,
+                verifier_required=verifier_required,
+                alternatives_enabled=self._config.enable_alternatives,
+                provider_healthy=self._provider_allows_optional_model_work(),
+                maximum_queue_seconds=(
+                    self._config.model_queue_budget_seconds
+                ),
+            )
             allocation = CallAllocationPlan.build(
                 max_calls=self._config.max_model_calls,
                 router_calls=session.budget.used_calls,
@@ -615,6 +657,7 @@ class MathForgeHarness:
                     self._config.enable_finalizer
                     and session.route_plan.use_llm_finalizer
                 ),
+                primary_calls=reasoning_plan.planned_rounds,
             )
             session.budget.set_allocation_plan(allocation)
             unreachable = list(allocation.unreachable_by_budget)
@@ -733,6 +776,32 @@ class MathForgeHarness:
                     session.route_plan,
                 ),
             )
+            trace.add(
+                "reasoning_state_initialized",
+                state_id=session.reasoning_state.state_id,
+                state_version=session.reasoning_state.version,
+                reasoning_state_schema_version=(
+                    session.reasoning_state.schema_version
+                ),
+                problem_frame_digest=semantic_fingerprint(
+                    session.reasoning_state.problem_frame.to_dict()
+                ),
+                preserved_invariants=[
+                    "original_problem",
+                    "definitions",
+                    "quantifiers",
+                    "constraints",
+                    "target",
+                    "claim_dependencies",
+                    "open_obligations",
+                ],
+            )
+            trace.add(
+                "long_horizon_planned",
+                **reasoning_plan.to_dict(),
+                remaining_calls=pre_allocation_budget.remaining_calls,
+                remaining_seconds=pre_allocation_budget.remaining_seconds,
+            )
             skill_manifest = {
                 item["name"]: item for item in self._skills.manifest
             }
@@ -804,6 +873,22 @@ class MathForgeHarness:
                 RuntimePhase.CONTEXT_READY,
                 "solver_context_ready",
             )
+            primary_seed = None
+            if reasoning_plan.enabled:
+                (
+                    primary_seed,
+                    session.reasoning_state,
+                    reasoning_degraded_reason,
+                ) = self._run_long_horizon_primary(
+                    session,
+                    trace,
+                    reasoning_plan,
+                    skill_context=role_skill_contexts.get(
+                        "PrimarySolver",
+                        "",
+                    ),
+                    context_view=solver_contexts["PrimarySolver"],
+                )
             fanout = self._candidate_orchestrator.fanout(
                 session.problem_ir,
                 session.route_plan,
@@ -827,7 +912,92 @@ class MathForgeHarness:
                          ),
                      )
                  ),
+                primary_candidate=primary_seed,
              )
+            primary_candidate = next(
+                (
+                    item
+                    for item in fanout.candidates
+                    if item.role == "PrimarySolver"
+                ),
+                None,
+            )
+            reasoning_stop_reason = "primary_candidate_unavailable"
+            if primary_candidate is not None:
+                try:
+                    (
+                        session.reasoning_state,
+                        synthesis_summary,
+                    ) = session.reasoning_state.apply_candidate(
+                        primary_candidate
+                    )
+                except ValueError:
+                    reasoning_degraded_reason = (
+                        reasoning_degraded_reason
+                        or "synthesis_state_transition_invalid"
+                    )
+                else:
+                    try:
+                        synthesis_state = self._compress_reasoning_state(
+                            session.reasoning_state,
+                            trace,
+                        )
+                    except ContextBudgetExceeded:
+                        reasoning_degraded_reason = (
+                            reasoning_degraded_reason
+                            or "synthesis_state_budget_infeasible"
+                        )
+                        synthesis_state = None
+                    trace.add(
+                        "round_summary",
+                        **synthesis_summary,
+                        state_tokens=(
+                            synthesis_state.state_tokens
+                            if synthesis_state is not None
+                            else 0
+                        ),
+                        state_counting_mode=(
+                            synthesis_state.counting_mode
+                            if synthesis_state is not None
+                            else "unavailable"
+                        ),
+                        state_compressed=(
+                            synthesis_state.compressed
+                            if synthesis_state is not None
+                            else False
+                        ),
+                        omitted_rounds=(
+                            synthesis_state.omitted_rounds
+                            if synthesis_state is not None
+                            else 0
+                        ),
+                    )
+                    reasoning_stop_reason = "candidate_synthesized"
+            if self._config.enable_memory:
+                blackboard.publish(
+                    "System",
+                    "working",
+                    {
+                        "reasoning_state": (
+                            session.reasoning_state.to_dict()
+                        ),
+                        "projection": "public_read_only",
+                    },
+                )
+            trace.add(
+                "reasoning_loop_completed",
+                state_id=session.reasoning_state.state_id,
+                enabled=reasoning_plan.enabled,
+                completed_rounds=len(session.reasoning_state.rounds),
+                planned_rounds=reasoning_plan.planned_rounds,
+                stop_reason=reasoning_stop_reason,
+                degraded_reason=reasoning_degraded_reason,
+                candidate_id=(
+                    primary_candidate.candidate_id
+                    if primary_candidate is not None
+                    else ""
+                ),
+            )
             shadow_candidate = (
                 shadow_outcome.to_candidate(session.problem_ir.answer_type)
                 if shadow_outcome is not None
@@ -2735,6 +2905,195 @@ class MathForgeHarness:
             ),
         }
         return result
+
+    def _run_long_horizon_primary(
+        self,
+        session,
+        trace: TraceBuilder,
+        plan: LongHorizonPlan,
+        *,
+        skill_context: str,
+        context_view,
+    ):
+        state = session.reasoning_state
+        solver = PrimarySolver(self._contracts)
+        method_families = list(session.route_plan.method_families)
+        method_family = (
+            method_families[0]
+            if method_families
+            else "direct-deduction"
+        )
+        forbidden = tuple(
+            method_families[1 : session.route_plan.candidate_count]
+        )
+        degraded_reason = ""
+
+        for progress_offset in range(plan.planned_rounds - 1):
+            mode = "explore" if progress_offset == 0 else "continue"
+            if progress_offset > 0:
+                remaining_sequence = ["primary"] * (
+                    plan.planned_rounds - progress_offset
+                )
+                if not stage_sequence_feasible(
+                    remaining_sequence,
+                    remaining_seconds=(
+                        session.budget.snapshot().remaining_seconds
+                    ),
+                    maximum_queue_seconds=(
+                        self._config.model_queue_budget_seconds
+                    ),
+                ):
+                    degraded_reason = "continuation_time_reserve_unavailable"
+                    break
+            try:
+                compressed = self._compress_reasoning_state(state, trace)
+            except ContextBudgetExceeded:
+                degraded_reason = "reasoning_state_budget_infeasible"
+                if progress_offset == 0:
+                    return None, state, degraded_reason
+                break
+            request = SolverRequest(
+                "primary-1",
+                session.problem_ir,
+                session.route_plan,
+                skill_context,
+                method_family,
+                forbidden,
+                context_view,
+                compressed.prompt_json,
+            )
+            try:
+                delta = self._solver_executor.execute_progress(
+                    solver,
+                    request,
+                    session.budget,
+                    mode=mode,
+                    temperature=self._config.primary_temperature,
+                    max_tokens=self._config.primary_max_tokens,
+                    optional=mode == "continue",
+                )
+                state, summary = state.apply(delta)
+            except Exception as error:
+                degraded_reason = self._reasoning_failure_code(error)
+                trace.add(
+                    "round_summary",
+                    state_id=state.state_id,
+                    state_version=state.version,
+                    round_index=state.version,
+                    mode=mode,
+                    added_subgoal_ids=[],
+                    updated_subgoal_ids=[],
+                    closed_subgoal_ids=[],
+                    added_claim_ids=[],
+                    claim_dependency_refs={},
+                    evidence_ids=list(state.evidence_refs),
+                    opened_obligation_ids=[],
+                    closed_obligation_ids=[],
+                    information_gain=0,
+                    next_step="fallback_to_synthesize",
+                    stop_reason="progress_round_failed",
+                    degraded_reason=degraded_reason,
+                    state_tokens=compressed.state_tokens,
+                    state_counting_mode=compressed.counting_mode,
+                    state_compressed=compressed.compressed,
+                    omitted_rounds=compressed.omitted_rounds,
+                )
+                if progress_offset == 0:
+                    return None, state, degraded_reason
+                break
+            try:
+                committed_state = self._compress_reasoning_state(
+                    state,
+                    trace,
+                )
+            except ContextBudgetExceeded:
+                committed_state = compressed
+                degraded_reason = "reasoning_state_budget_infeasible"
+            trace.add(
+                "round_summary",
+                **{
+                    **summary,
+                    "stop_reason": (
+                        summary["stop_reason"]
+                        if summary["information_gain"] > 0
+                        else "no_information_gain"
+                    ),
+                },
+                state_tokens=committed_state.state_tokens,
+                state_counting_mode=committed_state.counting_mode,
+                state_compressed=committed_state.compressed,
+                omitted_rounds=committed_state.omitted_rounds,
+            )
+            session.reasoning_state = state
+            if summary["information_gain"] <= 0 or degraded_reason:
+                break
+
+        try:
+            compressed = self._compress_reasoning_state(state, trace)
+        except ContextBudgetExceeded:
+            return None, state, (
+                degraded_reason or "synthesis_state_budget_infeasible"
+            )
+        request = SolverRequest(
+            "primary-1",
+            session.problem_ir,
+            session.route_plan,
+            skill_context,
+            method_family,
+            forbidden,
+            context_view,
+            compressed.prompt_json,
+        )
+        try:
+            candidate = self._solver_executor.execute(
+                solver,
+                request,
+                session.budget,
+                temperature=self._config.primary_temperature,
+                max_tokens=self._config.primary_max_tokens,
+                optional=False,
+            )
+        except Exception as error:
+            return None, state, (
+                degraded_reason or self._reasoning_failure_code(error)
+            )
+        return candidate, state, degraded_reason
+
+    def _compress_reasoning_state(
+        self,
+        state: ReasoningState,
+        trace: TraceBuilder,
+    ):
+        compressed = self._reasoning_state_compressor.compress(
+            state,
+            max_tokens=REASONING_STATE_MAX_TOKENS,
+        )
+        trace.add(
+            "compression_validated",
+            role="PrimarySolver",
+            state_id=state.state_id,
+            state_version=state.version,
+            state_tokens=compressed.state_tokens,
+            counting_mode=compressed.counting_mode,
+            compressed=compressed.compressed,
+            omitted_rounds=compressed.omitted_rounds,
+            preserved_invariants=list(compressed.semantic_invariants),
+        )
+        return compressed
+
+    @staticmethod
+    def _reasoning_failure_code(error: Exception) -> str:
+        code = str(getattr(error, "code", "")).strip()
+        if code and all(
+            character.isalnum() or character in {"_", "-"}
+            for character in code
+        ):
+            return code[:128]
+        if isinstance(error, ContextBudgetExceeded):
+            return "reasoning_context_budget_exceeded"
+        if isinstance(error, BudgetExceeded):
+            return "reasoning_budget_or_deadline_exceeded"
+        return "reasoning_state_transition_invalid"
 
     def _provider_health_state(self) -> str:
         state = str(self._model_gate.health_snapshot().get("state", "healthy"))

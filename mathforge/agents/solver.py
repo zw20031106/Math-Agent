@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 from mathforge.agents.prompt_compiler import PromptCompilation, PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
@@ -12,6 +13,10 @@ from mathforge.harness.errors import (
     ModelTransportError,
 )
 from mathforge.harness.provider import OfficialClientProvider
+from mathforge.harness.reasoning_state import (
+    ProgressDeltaParser,
+    RoundDelta,
+)
 from mathforge.harness.schemas import (
     CandidateSolution,
     ProblemIR,
@@ -36,6 +41,7 @@ class SolverRequest:
     method_family: str
     forbidden_method_families: tuple[str, ...] = ()
     context_view: RoleContextView | None = None
+    reasoning_state_json: str = ""
 
 
 class PrimarySolver:
@@ -60,6 +66,7 @@ class PrimarySolver:
             f"Forbidden method families: {', '.join(request.forbidden_method_families) or 'none'}.\n"
             f"{_problem_structure_prompt(request.problem)}\n"
             f"{request.skill_context}{context}"
+            f"{_reasoning_state_prompt(request.reasoning_state_json)}"
         )
         return self._compiler.compile_solver(
             "primary_solver",
@@ -67,10 +74,34 @@ class PrimarySolver:
             route=request.route,
             user_content=user,
             runtime_instructions=(
-                "Produce a rigorous independently verifiable solution. "
+                "Public protocol mode is synthesize. Produce a rigorous "
+                "independently verifiable solution. "
                 "State the method concisely; the Host treats its wording as a "
-                "diversity signal."
+                "diversity signal. When a public ReasoningState is supplied, "
+                "synthesize from it, preserve its ProblemFrame and Claim "
+                "dependencies, and list any still-open obligation."
             ),
+        )
+
+    def compile_progress_prompt(
+        self,
+        request: SolverRequest,
+        *,
+        mode: str,
+    ) -> PromptCompilation:
+        user = (
+            f"Problem:\n{request.problem.normalized_problem}\n\n"
+            f"Required core method family: {request.method_family}.\n"
+            f"{_problem_structure_prompt(request.problem)}\n"
+            f"{request.skill_context}"
+            f"{_reasoning_state_prompt(request.reasoning_state_json)}"
+        )
+        return self._compiler.compile_solver_progress(
+            "primary_solver",
+            problem=request.problem,
+            route=request.route,
+            user_content=user,
+            mode=mode,
         )
 
 
@@ -104,7 +135,8 @@ class AlternativeSolver:
             route=request.route,
             user_content=user,
             runtime_instructions=(
-                "Solve independently using only the assigned core method family. "
+                "Public protocol mode is synthesize. Solve independently using "
+                "only the assigned core method family. "
                 "State the method concisely; the Host treats its wording as a "
                 "diversity signal."
             ),
@@ -264,6 +296,54 @@ class SolverExecutor:
         candidate.validate()
         return candidate
 
+    def execute_progress(
+        self,
+        solver: PrimarySolver,
+        request: SolverRequest,
+        budget: CallBudget,
+        *,
+        mode: str,
+        temperature: float,
+        max_tokens: int,
+        optional: bool,
+    ) -> RoundDelta:
+        compilation = solver.compile_progress_prompt(request, mode=mode)
+        budget.consume(stage="primary", optional=optional)
+        budget.record_prompt_chars(
+            sum(len(message["content"]) for message in compilation.messages)
+        )
+        response = self._provider.chat(
+            messages=compilation.messages,
+            temperature=temperature,
+            max_tokens=PromptCompiler.bounded_output_tokens(
+                max_tokens,
+                compilation.max_output_tokens,
+            ),
+            budget=budget,
+            stage="primary",
+        )
+        try:
+            delta = ProgressDeltaParser().parse(
+                response,
+                round_index=_reasoning_state_version(
+                    request.reasoning_state_json
+                ),
+                mode=mode,
+            )
+        except (ValueError, TypeError) as error:
+            budget.record_model_response_validation(
+                getattr(response, "model_call_index", None),
+                "progress_delta_invalid",
+                rejected=True,
+            )
+            raise ModelResponseError("progress_delta_invalid") from error
+        budget.record_model_response_validation(
+            getattr(response, "model_call_index", None),
+            "progress_delta_valid",
+            rejected=False,
+        )
+        return delta
+
 
 def _problem_structure_prompt(problem: ProblemIR) -> str:
     fields = (
@@ -285,6 +365,26 @@ def _problem_structure_prompt(problem: ProblemIR) -> str:
         if bounded:
             lines.append(f"- {label}: {'; '.join(bounded)}")
     return "\n".join(lines)
+
+
+def _reasoning_state_prompt(state_json: str) -> str:
+    if not state_json.strip():
+        return ""
+    return (
+        "\nPublic ReasoningState JSON (the only cross-round mathematical "
+        f"state):\n{state_json}"
+    )
+
+
+def _reasoning_state_version(state_json: str) -> int:
+    try:
+        value = json.loads(state_json)
+        version = value.get("version")
+    except (AttributeError, TypeError, ValueError):
+        version = None
+    if type(version) is not int or version < 1:
+        raise ModelResponseError("reasoning_state_version_invalid")
+    return version
 
 
 def _candidate_validation_details(
