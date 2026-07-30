@@ -328,8 +328,10 @@ def test_verifier_programming_error_propagates_to_runtime_fallback(
 
     result = harness.solve("Prove that 1+1=2.", {})
 
-    assert result["run_metrics"]["outcome"] == "fallback"
-    assert any(event["event"] == "fallback_used" for event in result["trace"])
+    assert result["run_metrics"]["outcome"] == "primary"
+    assert result["run_metrics"]["error_code"] == "degraded_candidate_salvage"
+    assert any(event["event"] == "candidate_salvaged" for event in result["trace"])
+    assert not any(event["event"] == "fallback_used" for event in result["trace"])
     assert not any(
         event.get("reason") == "verifier_unavailable"
         for event in result["trace"]

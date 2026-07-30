@@ -26,7 +26,11 @@ class AdaptiveFanoutPolicy:
             reasons.append("route_single_candidate")
             admitted_alternatives = 0
         elif primary is None:
-            reasons.append("primary_unavailable")
+            reasons.append(
+                "reliability_standby"
+                if route.risk_level == "low" and requested == 2
+                else "primary_unavailable"
+            )
             admitted_alternatives = requested_alternatives
         elif shadow_consistency == "conflict":
             reasons.append("shadow_conflict")

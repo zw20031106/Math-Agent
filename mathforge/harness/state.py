@@ -45,7 +45,10 @@ _SUCCESSOR = {
     RuntimePhase.ARBITRATED: RuntimePhase.FORMATTED,
     RuntimePhase.FORMATTED: RuntimePhase.FINALIZED,
     RuntimePhase.FINALIZED: RuntimePhase.COMPLETED,
-    RuntimePhase.FAILED: RuntimePhase.FALLBACK_COMPLETED,
+    RuntimePhase.FAILED: {
+        RuntimePhase.COMPLETED,
+        RuntimePhase.FALLBACK_COMPLETED,
+    },
 }
 
 _FAILABLE = frozenset(RuntimePhase) - {

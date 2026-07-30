@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### 0730 stability remediation phases 0-1 (2026-07-30)
+
+- Added reproducible Phase 0 reliability, general high-difficulty, and
+  contract-adversarial baselines, a hash manifest builder, symbolic-equivalence
+  golden tests, and typed transport/schema injection coverage without storing
+  credentials, local paths, or private reasoning.
+- Made allocation replanning monotonic with respect to consumed stage calls.
+  Added a hard-evidence-aware last-safe-candidate checkpoint and controlled
+  `degraded_candidate_salvage`, so downstream failures preserve a valid
+  mathematical candidate but never resurrect a hard-failed one.
+- Reserved a lazy low-risk standby Alternative without adding a normal-path
+  call. Ordinary provider failures now drive shared health state and suppress
+  optional Router, Verifier, Repair, Lemma, and LLM-finalizer work while the
+  provider is degraded.
+- Added Phase 0 and Phase 1 execution reports and offline regressions for
+  baseline determinism, taxonomy, monotonic budgets, standby recovery,
+  degraded scheduling, candidate salvage, and hard-gate rejection.
+
 ### 0729 remediation phase 6 (2026-07-29)
 
 - Upgraded Judge Trace to V3.1 with one protected `closed_loop_health`

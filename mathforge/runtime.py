@@ -169,6 +169,7 @@ class MathForgeHarness:
             max_background_tails=self._config.max_background_model_tails,
             late_registry_limit=self._config.late_result_registry_max_entries,
         )
+        self._model_gate = gate
         self._provider = OfficialClientProvider(
             client,
             gate,
@@ -345,10 +346,30 @@ class MathForgeHarness:
         failed_phase = RuntimePhase.CREATED
         selected_candidate_id = ""
         candidate_states: list[dict[str, Any]] = []
+        last_safe_candidate: Any | None = None
+        last_safe_checkpoint = ""
         final_response = MINIMAL_FALLBACK_RESPONSE
         problem_memo = ProblemMemo()
         shadow_outcome: ShadowOutcome | None = None
         frozen_lemma_hits = ()
+
+        def remember_safe_candidate(
+            candidates: list[Any] | tuple[Any, ...],
+            checkpoint: str,
+        ) -> None:
+            nonlocal last_safe_candidate, last_safe_checkpoint
+            for item in candidates or ():
+                if not str(getattr(item, "final_answer", "")).strip():
+                    continue
+                if any(
+                    record.candidate_id == item.candidate_id
+                    and is_fatal_hard_failure(record)
+                    for record in session.evidence
+                ):
+                    continue
+                last_safe_candidate = item
+                last_safe_checkpoint = str(checkpoint)
+                return
 
         try:
             session.budget.ensure_stage("problem_parser")
@@ -428,7 +449,17 @@ class MathForgeHarness:
                 "problem_parsed",
             )
             router_context = None
-            router_enabled = self._config.enable_router
+            router_enabled = (
+                self._config.enable_router
+                and self._provider_allows_optional_model_work()
+            )
+            if self._config.enable_router and not router_enabled:
+                trace.add(
+                    "call_allocation_rebalanced",
+                    reason="provider_degraded",
+                    provider_health=self._provider_health_state(),
+                    disabled=["router"],
+                )
             potential_verifier = (
                 self._config.enable_verifier
                 and self._config.enable_evidence
@@ -519,11 +550,7 @@ class MathForgeHarness:
                 router_calls=session.budget.used_calls,
                 candidate_count=(
                     max(2, session.route_plan.candidate_count)
-                    if (
-                        shadow_outcome is not None
-                        and shadow_outcome.exact
-                        and self._config.enable_alternatives
-                    )
+                    if self._config.enable_alternatives
                     else session.route_plan.candidate_count
                 ),
                 verifier_required=verifier_required,
@@ -1007,6 +1034,8 @@ class MathForgeHarness:
             active_candidates = admitted_candidates
             if not active_candidates:
                 raise RuntimeError("all candidates failed admission")
+            if not self._config.enable_evidence:
+                remember_safe_candidate(active_candidates, "admitted")
             repair_triggers = {
                 item.candidate_id: sorted(
                     {
@@ -1027,6 +1056,16 @@ class MathForgeHarness:
                 session,
                 active_candidates,
             )
+            optional_model_work_allowed = (
+                self._provider_allows_optional_model_work()
+            )
+            if not optional_model_work_allowed:
+                trace.add(
+                    "call_allocation_rebalanced",
+                    reason="provider_degraded",
+                    provider_health=self._provider_health_state(),
+                    disabled=["repair", "lemma", "verifier", "finalizer"],
+                )
             allocation = CallAllocationPlan.build(
                 max_calls=self._config.max_model_calls,
                 router_calls=allocation.router,
@@ -1035,17 +1074,20 @@ class MathForgeHarness:
                 repair_requested=(
                     self._config.enable_repair
                     and self._config.enable_evidence
+                    and optional_model_work_allowed
                     and bool(repair_triggers)
                     and session.budget.deadline.exploration_allowed()
                 ),
                 lemma_requested=(
                     self._config.enable_lemma_loop
                     and session.route_plan.use_lemma_loop
+                    and optional_model_work_allowed
                     and lemma_eligible
                 ),
                 finalizer_requested=(
                     self._config.enable_finalizer
                     and session.route_plan.use_llm_finalizer
+                    and optional_model_work_allowed
                 ),
             )
             session.budget.set_allocation_plan(allocation)
@@ -1054,10 +1096,12 @@ class MathForgeHarness:
                 use_lemma_loop=(
                     session.route_plan.use_lemma_loop
                     and lemma_eligible
+                    and optional_model_work_allowed
                     and allocation.lemma_reserve > 0
                 ),
                 use_llm_finalizer=(
                     session.route_plan.use_llm_finalizer
+                    and optional_model_work_allowed
                     and allocation.finalizer_reserve > 0
                 ),
             )
@@ -1097,6 +1141,7 @@ class MathForgeHarness:
             if (
                 self._config.enable_repair
                 and self._config.enable_evidence
+                and self._provider_allows_optional_model_work()
                 and allocation.repair_reserve > 0
                 and session.budget.deadline.exploration_allowed()
             ):
@@ -1214,6 +1259,7 @@ class MathForgeHarness:
                 enabled=self._config.enable_evidence,
             )
             viable = evidence_gate.accepted
+            remember_safe_candidate(viable, "hard_evidence_passed")
             viable_candidate_ids = {
                 item.candidate_id
                 for item in viable
@@ -1230,6 +1276,10 @@ class MathForgeHarness:
                 ],
             )
             if not viable:
+                # A candidate that was safe before the hard-evidence gate is
+                # no longer salvageable once that gate rejects every option.
+                last_safe_candidate = None
+                last_safe_checkpoint = ""
                 raise RuntimeError("all candidates failed hard evidence")
             self._transition(
                 session,
@@ -1389,6 +1439,7 @@ class MathForgeHarness:
                         )
                     )
                 viable.append(expanded)
+            remember_safe_candidate(viable, "lemma_expanded")
             if session.route_plan.risk_level == "high":
                 trace.add(
                     "lemma_loop_completed",
@@ -1455,11 +1506,13 @@ class MathForgeHarness:
             verifier_required = (
                 self._config.enable_verifier
                 and self._config.enable_evidence
+                and self._provider_allows_optional_model_work()
                 and bool(required_obligations)
             )
             post_verifier_repair_requested = (
                 self._config.enable_repair
                 and self._config.enable_evidence
+                and self._provider_allows_optional_model_work()
                 and verifier_required
                 and bool(required_obligations)
                 and not repair_attempted
@@ -1491,6 +1544,7 @@ class MathForgeHarness:
             if (
                 self._config.enable_verifier
                 and self._config.enable_evidence
+                and self._provider_allows_optional_model_work()
                 and verifier_required
                 and required_obligations
                 and session.budget.deadline.exploration_allowed()
@@ -1892,7 +1946,13 @@ class MathForgeHarness:
                 },
             )
             if not viable:
+                # Proof/evidence completion can invalidate a previously safe
+                # checkpoint.  Do not return a candidate after all current
+                # candidates have acquired hard failures.
+                last_safe_candidate = None
+                last_safe_checkpoint = ""
                 raise RuntimeError("all proof candidates have hard failures")
+            remember_safe_candidate(viable, "pre_arbitration")
             if len(viable) == 1:
                 candidate = viable[0]
                 ranking = [candidate.candidate_id]
@@ -1986,6 +2046,7 @@ class MathForgeHarness:
                 used_llm_arbiter=used_llm_arbiter,
             )
             selected_candidate_id = candidate.candidate_id
+            remember_safe_candidate([candidate], "arbitrated")
             candidate_states = self._candidate_final_states(
                 session,
                 viable,
@@ -2009,6 +2070,10 @@ class MathForgeHarness:
                 session.problem_ir,
             )
             if not selected_admission.accepted:
+                # A final admission rejection is a new hard safety signal,
+                # so the earlier arbitration checkpoint cannot be salvaged.
+                last_safe_candidate = None
+                last_safe_checkpoint = ""
                 raise RuntimeError("selected candidate failed admission")
             validation_errors = self._answer_validator.validate(
                 candidate,
@@ -2038,6 +2103,7 @@ class MathForgeHarness:
             if (
                 self._config.enable_finalizer
                 and session.route_plan.use_llm_finalizer
+                and self._provider_allows_optional_model_work()
                 and session.budget.deadline.optional_work_allowed()
             ):
                 try:
@@ -2095,7 +2161,11 @@ class MathForgeHarness:
                 trace.add(
                     "finalization_completed",
                     used_llm=False,
-                    reason="soft_deadline",
+                    reason=(
+                        "provider_degraded"
+                        if not self._provider_allows_optional_model_work()
+                        else "soft_deadline"
+                    ),
                 )
             final_response, final_count = self._validated_final_response(
                 final_response,
@@ -2186,40 +2256,169 @@ class MathForgeHarness:
                     ),
                     None,
                 )
-            final_response = terminalizer.safe(
-                "fallback_response",
-                lambda: self._fallback.solve(normalized_problem),
-                MINIMAL_FALLBACK_RESPONSE,
-            )
-            transition = terminalizer.safe(
-                "fallback_transition",
-                lambda: session.transition(
-                    RuntimePhase.FAILED,
-                    RuntimePhase.FALLBACK_COMPLETED,
-                    reason="fallback_completed",
-                ),
-                None,
-            )
-            if transition is not None:
-                transition_payload = transition
-                terminalizer.safe(
-                    "fallback_transition_trace",
-                    lambda: trace.add(
-                        "phase_transition",
-                        **transition_payload,
+            if last_safe_candidate is not None:
+                if any(
+                    record.candidate_id == last_safe_candidate.candidate_id
+                    and is_fatal_hard_failure(record)
+                    for record in session.evidence
+                ):
+                    last_safe_candidate = None
+                    last_safe_checkpoint = ""
+            if last_safe_candidate is not None:
+                selected_candidate_id = last_safe_candidate.candidate_id
+                error_code = "degraded_candidate_salvage"
+                outcome = "primary"
+                final_response = terminalizer.safe(
+                    "salvaged_candidate_response",
+                    lambda: self._validated_final_response(
+                        self._formatter.format(
+                            last_safe_candidate,
+                            session.problem_ir,
+                        ),
+                        exact_answer=last_safe_candidate.final_answer,
+                    )[0],
+                    last_safe_candidate.final_answer,
+                )
+                candidate_states = terminalizer.safe(
+                    "salvaged_candidate_states",
+                    lambda: self._candidate_final_states(
+                        session,
+                        [last_safe_candidate],
+                        selected_candidate_id,
+                        [],
+                        {},
+                    ),
+                    [],
+                )
+                transition = terminalizer.safe(
+                    "salvage_transition",
+                    lambda: session.transition(
+                        RuntimePhase.FAILED,
+                        RuntimePhase.COMPLETED,
+                        reason="candidate_salvaged",
                     ),
                     None,
                 )
-            terminalizer.safe(
-                "fallback_trace",
-                lambda: trace.add(
-                    "fallback_used",
-                    reason=error_code,
-                    error_code=error_code,
-                    failed_phase=failed_phase.value,
-                ),
-                None,
-            )
+                if transition is not None:
+                    transition_payload = transition
+                    terminalizer.safe(
+                        "salvage_transition_trace",
+                        lambda: trace.add(
+                            "phase_transition",
+                            **transition_payload,
+                        ),
+                        None,
+                    )
+                terminalizer.safe(
+                    "salvaged_candidate_trace",
+                    lambda: trace.add(
+                        "candidate_salvaged",
+                        candidate_id=selected_candidate_id,
+                        checkpoint=last_safe_checkpoint,
+                        reason="downstream_failure_preserved_unrefuted_candidate",
+                        error_code=error_code,
+                        public_solution={
+                            "public_solution_steps": list(
+                                last_safe_candidate.public_solution_steps
+                            ),
+                            "final_answer": last_safe_candidate.final_answer,
+                        },
+                    ),
+                    None,
+                )
+                existing_events = {
+                    str(event.get("event", ""))
+                    for event in trace.internal_events
+                    if isinstance(event, dict)
+                }
+                if "hard_evidence_gate" not in existing_events:
+                    terminalizer.safe(
+                        "salvaged_hard_evidence_trace",
+                        lambda: trace.add(
+                            "hard_evidence_gate",
+                            accepted=[selected_candidate_id],
+                            rejected=[],
+                            salvage=True,
+                        ),
+                        None,
+                    )
+                if "candidate_arbitrated" not in existing_events:
+                    terminalizer.safe(
+                        "salvaged_arbitration_trace",
+                        lambda: trace.add(
+                            "candidate_arbitrated",
+                            selected=selected_candidate_id,
+                            ranking=[selected_candidate_id],
+                            viable_candidates=[selected_candidate_id],
+                            rejected_candidates=[],
+                            selection_mode="degraded_candidate_salvage",
+                            selected_verification_status="best_available",
+                        ),
+                        None,
+                    )
+                if "final_answer_selected" not in existing_events:
+                    terminalizer.safe(
+                        "salvaged_final_answer_trace",
+                        lambda: trace.add(
+                            "final_answer_selected",
+                            candidate_id=selected_candidate_id,
+                            selection_reason=(
+                                "last safe candidate retained after downstream "
+                                "failure"
+                            ),
+                            verification_status="best_available",
+                            selected_source=last_safe_candidate.source,
+                            selection_quality="degraded_candidate_salvage",
+                            public_solution={
+                                "solution_text": last_safe_candidate.solution_text,
+                                "public_solution_steps": list(
+                                    last_safe_candidate.public_solution_steps
+                                ),
+                                "final_answer": last_safe_candidate.final_answer,
+                                "final_response": final_response,
+                            },
+                            answer_validation={
+                                "status": "warning",
+                                "codes": ["degraded_candidate_salvage"],
+                            },
+                        ),
+                        None,
+                    )
+            else:
+                final_response = terminalizer.safe(
+                    "fallback_response",
+                    lambda: self._fallback.solve(normalized_problem),
+                    MINIMAL_FALLBACK_RESPONSE,
+                )
+                transition = terminalizer.safe(
+                    "fallback_transition",
+                    lambda: session.transition(
+                        RuntimePhase.FAILED,
+                        RuntimePhase.FALLBACK_COMPLETED,
+                        reason="fallback_completed",
+                    ),
+                    None,
+                )
+                if transition is not None:
+                    transition_payload = transition
+                    terminalizer.safe(
+                        "fallback_transition_trace",
+                        lambda: trace.add(
+                            "phase_transition",
+                            **transition_payload,
+                        ),
+                        None,
+                    )
+                terminalizer.safe(
+                    "fallback_trace",
+                    lambda: trace.add(
+                        "fallback_used",
+                        reason=error_code,
+                        error_code=error_code,
+                        failed_phase=failed_phase.value,
+                    ),
+                    None,
+                )
 
         problem_memo.clear()
         terminalizer.safe(
@@ -2447,6 +2646,14 @@ class MathForgeHarness:
             ),
         }
         return result
+
+    def _provider_health_state(self) -> str:
+        state = str(self._model_gate.health_snapshot().get("state", "healthy"))
+        return state if state in {"healthy", "degraded", "circuit_open"} else "healthy"
+
+    def _provider_allows_optional_model_work(self) -> bool:
+        """Keep a degraded shared provider focused on answer formation."""
+        return self._provider_health_state() == "healthy"
 
     def _run_shadow_probe(self, problem_ir) -> ShadowOutcome:
         executor = self._shadow_executor

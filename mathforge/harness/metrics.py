@@ -14,6 +14,7 @@ _ERROR_CODES = frozenset(
         "budget",
         "tool",
         "proof_incomplete",
+        "degraded_candidate_salvage",
         "all_candidates_failed",
         "config",
         "per_case_wall_clock_exceeded",
