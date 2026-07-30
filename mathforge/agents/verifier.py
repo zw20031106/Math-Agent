@@ -22,6 +22,10 @@ from mathforge.verification.capabilities import (
     ClaimVerificationState,
     capability_verifies_claim,
 )
+from mathforge.verification.cross_review import (
+    CandidateConflictMatrix,
+    CandidateReviewSummary,
+)
 
 
 @dataclass(frozen=True)
@@ -145,9 +149,19 @@ class VerifierSkepticAgent:
         obligations: dict[str, list[ProofObligation]],
         evidence: list[EvidenceRecord],
     ) -> dict:
+        summaries = [
+            CandidateReviewSummary.from_candidate(candidate)
+            for candidate in candidates
+        ]
         return {
             "problem": problem.normalized_problem,
             "conditions": list(problem.assumptions),
+            "candidate_review_summaries": [
+                summary.to_dict() for summary in summaries
+            ],
+            "candidate_conflict_matrix": CandidateConflictMatrix.build(
+                summaries
+            ).to_dict(),
             "candidates": [
                 {
                     "candidate_id": candidate.candidate_id,

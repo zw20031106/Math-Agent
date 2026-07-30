@@ -29,7 +29,9 @@ _SENSITIVE_KEYS = re.compile(
     r")$",
     re.I,
 )
-_ABSOLUTE_PATH = re.compile(r"(?:[A-Za-z]:\\|/(?:home|Users|root|tmp)/)[^\s]+")
+_ABSOLUTE_PATH = re.compile(
+    r"(?:(?<![A-Za-z0-9_])[A-Za-z]:[\\/]|/(?:home|Users|root|tmp)/)[^\s]+"
+)
 _API_TOKEN_VALUE = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}")
 _AUTHORIZATION_VALUE = re.compile(r"\b(?:authorization\s*:?\s*)?bearer\s+\S+", re.I)
 _TRACEBACK_VALUE = re.compile(r"\btraceback\s*\(most recent call last\)", re.I)
@@ -190,7 +192,13 @@ class TraceBuilder:
 
     def _append_bounded(self, item: dict[str, Any]) -> None:
         event = str(item["event"])
-        if event in {"session_started", "budget_summary", "fallback_used", "run_completed"}:
+        if event in {
+            "session_started",
+            "closed_loop_health",
+            "budget_summary",
+            "fallback_used",
+            "run_completed",
+        }:
             self._events[:] = [
                 existing
                 for existing in self._events

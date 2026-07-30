@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 
 from mathforge.harness.schemas import CandidateSolution, ProblemIR
 from mathforge.output.answer_validator import AnswerValidator
+from mathforge.verification.methods import method_contract_valid
 
 
 class CandidateAdmissionError(ValueError):
@@ -38,8 +39,22 @@ class CandidateAdmissionGate:
             candidate.validate()
         except (TypeError, ValueError):
             rejection_codes.append("candidate_schema_invalid")
+        if (
+            not method_contract_valid(candidate)
+            and any(
+                deviation.startswith("method_steps")
+                for deviation in candidate.contract_deviations
+            )
+        ):
+            rejection_codes.append("candidate_method_contract_invalid")
         if candidate.answer_type != problem.answer_type:
             rejection_codes.append("incompatible_answer_type")
+        if (
+            candidate.parse_tier == "answer_recovered"
+            and answer_shape_status is not None
+            and answer_shape_status != "pass"
+        ):
+            rejection_codes.append("answer_recovery_evidence_gate_failed")
         rejection_codes.extend(self._answer_validator.validate(candidate, problem))
         if (
             answer_shape_status is not None

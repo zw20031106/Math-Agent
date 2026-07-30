@@ -198,7 +198,8 @@ def test_documented_runner_boundaries_match_the_safe_runner_contract():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "formal platform entry is `user_agent.py`" in readme
-    assert "execution queue is therefore bounded at one case" in readme
+    assert "rolling case window with default and maximum" in readme
+    assert "concurrency four" in readme
     assert "immutable legacy baseline fixtures" in readme
 
 

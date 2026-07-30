@@ -6,7 +6,6 @@ from typing import Any
 from mathforge.harness.fingerprints import semantic_fingerprint
 from mathforge.model_identity import (
     EXACT_INTERN_MODEL,
-    MODEL_ENVIRONMENT_VARIABLE,
     ModelIdentity,
 )
 from mathforge.provenance import RunProvenance
@@ -63,8 +62,7 @@ def validate_artifact(artifact: dict[str, Any]) -> list[str]:
             errors.append("artifact dirty state does not match provenance")
         if (
             identity.requested_model != EXACT_INTERN_MODEL
-            or identity.request_source
-            != f"environment:{MODEL_ENVIRONMENT_VARIABLE}"
+            or identity.request_source != "argument:--model"
         ):
             errors.append("artifact requested model is not the exact competition model")
     if not isinstance(artifact.get("records"), list):

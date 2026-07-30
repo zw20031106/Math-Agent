@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from mathforge.config import HarnessConfig
 from mathforge.runtime import MathForgeHarness
@@ -29,6 +30,8 @@ def _candidate_payload(
     final_answer: str,
     solution_text: str,
     claims: list[dict],
+    *,
+    method: str,
 ) -> dict:
     normalized_claims = [
         {
@@ -39,7 +42,7 @@ def _candidate_payload(
         for claim in claims
     ]
     return {
-        "method": "direct",
+        "method": method,
         "method_steps": [
             {
                 "step_id": "s1",
@@ -62,6 +65,7 @@ class RepairRuntimeClient:
     def __init__(self, repaired_answer: str) -> None:
         self.repaired_answer = repaired_answer
         self.calls = []
+        self.primary_method = "direct-deduction"
 
     def chat(self, *, messages, temperature, max_tokens):
         del temperature, max_tokens
@@ -78,8 +82,15 @@ class RepairRuntimeClient:
                             "check_type": "symbolic_equivalence",
                         }
                     ],
+                    method=self.primary_method,
                 )
             )
+        match = re.search(
+            r"Required core method family: ([a-z-]+)\.",
+            messages[-1]["content"],
+        )
+        if match is not None:
+            self.primary_method = match.group(1)
         return json.dumps(
             _candidate_payload(
                 "A",
@@ -96,6 +107,7 @@ class RepairRuntimeClient:
                         "check_type": "reasoning",
                     },
                 ],
+                method=self.primary_method,
             )
         )
 

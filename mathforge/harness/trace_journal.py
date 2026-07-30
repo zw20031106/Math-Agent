@@ -46,10 +46,22 @@ class JsonlTraceJournal:
 
 
 class TraceJournalFactory:
-    """Create one isolated journal per case without exposing its local path."""
+    """Create one isolated journal per case and run attempt."""
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        attempt_id: str | None = None,
+    ) -> None:
         self._directory = directory
+        self._attempt_id = attempt_id or self._allocate_attempt_id(directory)
+        self._journals: dict[str, JsonlTraceJournal] = {}
+        self._lock = Lock()
+
+    @property
+    def attempt_id(self) -> str:
+        return self._attempt_id
 
     def __call__(
         self,
@@ -60,7 +72,26 @@ class TraceJournalFactory:
         safe_identifier = _SAFE_IDENTIFIER.sub("_", str(identifier)).strip("._")
         if not safe_identifier:
             safe_identifier = "case"
-        journal = JsonlTraceJournal(
-            self._directory / f"{safe_identifier}.trace.jsonl"
-        )
-        return journal.record
+        with self._lock:
+            journal = self._journals.get(safe_identifier)
+            if journal is None:
+                journal = JsonlTraceJournal(
+                    self._directory
+                    / self._attempt_id
+                    / f"{safe_identifier}.trace.jsonl"
+                )
+                self._journals[safe_identifier] = journal
+            return journal.record
+
+    @staticmethod
+    def _allocate_attempt_id(directory: Path) -> str:
+        directory.mkdir(parents=True, exist_ok=True)
+        existing = {
+            path.name
+            for path in directory.iterdir()
+            if path.is_dir() and re.fullmatch(r"attempt-\d{4,}", path.name)
+        }
+        number = 1
+        while f"attempt-{number:04d}" in existing:
+            number += 1
+        return f"attempt-{number:04d}"

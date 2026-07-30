@@ -6,8 +6,12 @@ import pytest
 
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.harness.budget import CallBudget
+from mathforge.harness.deadline import DeadlineController
 from mathforge.harness.errors import ModelResponseError, ModelTransportError
 from mathforge.harness.model_policy import (
+    PROVIDER_CALL_TIMEOUT_SECONDS,
+    PROVIDER_HTTP_TIMEOUT_SECONDS,
+    PROVIDER_RESPONSE_LIMIT_SECONDS,
     effective_call_timeout,
     effective_output_tokens,
     stage_call_timeout,
@@ -29,11 +33,11 @@ from scripts.run_case_outputs import run_model_preflight
     ("stage", "expected_tokens", "expected_timeout"),
     [
         ("router", 4096, 60.0),
-        ("primary", 32768, 125.0),
-        ("alternative", 24576, 125.0),
-        ("verifier", 8192, 90.0),
-        ("repair", 12288, 110.0),
-        ("lemma", 16384, 110.0),
+        ("primary", 32768, 165.0),
+        ("alternative", 24576, 165.0),
+        ("verifier", 8192, 165.0),
+        ("repair", 8192, 165.0),
+        ("lemma", 16384, 165.0),
         ("finalizer", 4096, 60.0),
     ],
 )
@@ -49,6 +53,87 @@ def test_role_policy_separates_output_and_call_budgets(
     assert effective_call_timeout(stage, 10.0) == 10.0
 
 
+def test_provider_timeout_layers_leave_transport_and_gate_grace():
+    assert PROVIDER_RESPONSE_LIMIT_SECONDS == 120.0
+    assert PROVIDER_HTTP_TIMEOUT_SECONDS == 150.0
+    assert PROVIDER_CALL_TIMEOUT_SECONDS == 165.0
+
+
+def test_solver_keeps_a_valid_candidate_that_arrives_at_finalize_cutoff():
+    now = [0.0]
+    response = json.dumps(
+        {
+            "method": "direct-deduction",
+            "method_steps": [
+                {
+                    "step_id": "s1",
+                    "kind": "conclusion",
+                    "claim_ids": ["c1"],
+                    "theorem": "",
+                }
+            ],
+            "solution_text": "Adding one and one gives two.",
+            "public_solution_steps": ["Compute 1+1=2."],
+            "final_answer": "2",
+            "assumptions": [],
+            "theorems": [],
+            "claims": [
+                {
+                    "claim_id": "c1",
+                    "statement": "The sum equals 2.",
+                    "depends_on": [],
+                    "check_type": "reasoning",
+                    "importance": "critical",
+                }
+            ],
+            "unresolved_obligations": [],
+        }
+    )
+
+    class CutoffClient:
+        def chat(self, **_kwargs):
+            now[0] = 8.0
+            return response
+
+    budget = CallBudget(1)
+    budget.deadline = DeadlineController(
+        soft_deadline_seconds=5.0,
+        exploration_deadline_seconds=8.0,
+        hard_deadline_seconds=10.0,
+        deterministic_finalize_reserve_seconds=2.0,
+        model_call_start_margin_seconds=0.0,
+        clock=lambda: now[0],
+    )
+    request = SolverRequest(
+        candidate_id="primary-cutoff",
+        problem=ProblemParser().parse("Compute 1+1."),
+        route=RoutePlan(
+            primary_subject="general-math",
+            auxiliary_subject=None,
+            problem_type="calculation",
+            answer_type="integer",
+            risk_level="low",
+            candidate_count=1,
+        ),
+        skill_context="",
+        method_family="direct-deduction",
+    )
+
+    candidate = SolverExecutor(
+        OfficialClientProvider(CutoffClient(), ModelCallGate(1)),
+        SolutionParser(),
+    ).execute(
+        PrimarySolver(),
+        request,
+        budget,
+        temperature=0.0,
+        max_tokens=8192,
+    )
+
+    assert budget.must_finalize()
+    assert candidate.final_answer == "2"
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
@@ -56,6 +141,11 @@ def test_role_policy_separates_output_and_call_budgets(
         (RuntimeError("429 too many requests"), "rate_limited"),
         (RuntimeError("503 server error"), "provider_5xx"),
         (RuntimeError("DNS name resolution failed"), "network_connect_failure"),
+        (
+            RuntimeError("SSLError: UNEXPECTED_EOF_WHILE_READING"),
+            "network_connect_failure",
+        ),
+        (RuntimeError("ProxyError"), "network_connect_failure"),
         (RuntimeError("ReadTimeout"), "network_read_timeout"),
         (RuntimeError("choices missing"), "response_shape_invalid"),
         (RuntimeError("opaque"), "unknown_provider_failure"),
@@ -177,6 +267,225 @@ def test_complete_json_with_missing_candidate_fields_is_schema_invalid():
     )
 
 
+def test_primary_retries_one_contract_rejection_at_zero_temperature():
+    valid = json.dumps(
+        {
+            "method": "direct-deduction",
+            "method_steps": [
+                {
+                    "step_id": "s1",
+                    "kind": "conclusion",
+                    "claim_ids": ["c1"],
+                    "theorem": "",
+                }
+            ],
+            "solution_text": "Adding one and one gives two.",
+            "public_solution_steps": ["Compute 1+1=2."],
+            "final_answer": "2",
+            "assumptions": [],
+            "theorems": [],
+            "claims": [
+                {
+                    "claim_id": "c1",
+                    "statement": "The sum equals 2.",
+                    "depends_on": [],
+                    "check_type": "reasoning",
+                    "importance": "critical",
+                }
+            ],
+            "unresolved_obligations": [],
+        }
+    )
+
+    class SequenceClient:
+        def __init__(self):
+            self.responses = ['{"final_answer":"2"}', valid]
+            self.calls = []
+
+        def chat(self, **kwargs):
+            self.calls.append(kwargs)
+            return self.responses.pop(0)
+
+    client = SequenceClient()
+    budget = CallBudget(2)
+    request = SolverRequest(
+        candidate_id="primary-retry",
+        problem=ProblemParser().parse("Compute 1+1."),
+        route=RoutePlan(
+            primary_subject="general-math",
+            auxiliary_subject=None,
+            problem_type="calculation",
+            answer_type="integer",
+            risk_level="low",
+            candidate_count=1,
+        ),
+        skill_context="",
+        method_family="direct-deduction",
+    )
+
+    candidate = SolverExecutor(
+        OfficialClientProvider(client, ModelCallGate(1)),
+        SolutionParser(),
+    ).execute(
+        PrimarySolver(),
+        request,
+        budget,
+        temperature=0.2,
+        max_tokens=8192,
+    )
+
+    assert candidate.final_answer == "2"
+    assert [call["temperature"] for call in client.calls] == [0.2, 0.0]
+    retry_message = client.calls[1]["messages"][-1]["content"]
+    assert "claims:missing" in retry_message
+    assert "method_steps:missing" not in retry_message
+    assert "Regenerate it from scratch" in retry_message
+    assert budget.used_calls == 2
+    assert budget.model_response_rejection_count == 1
+
+
+def test_primary_retries_nested_schema_validation_failure():
+    invalid = json.dumps(
+        {
+            "method": "direct-deduction",
+            "method_steps": [],
+            "solution_text": "Invalid duplicate Claim identifiers.",
+            "public_solution_steps": ["Invalid duplicate Claim identifiers."],
+            "final_answer": "2",
+            "assumptions": [],
+            "theorems": [],
+            "claims": [
+                {
+                    "claim_id": "c1",
+                    "statement": "First.",
+                    "depends_on": [],
+                    "check_type": "reasoning",
+                    "importance": "supporting",
+                },
+                {
+                    "claim_id": "c1",
+                    "statement": "Duplicate.",
+                    "depends_on": [],
+                    "check_type": "reasoning",
+                    "importance": "critical",
+                },
+            ],
+            "unresolved_obligations": [],
+        }
+    )
+    valid = json.dumps(
+        {
+            "method": "direct-deduction",
+            "method_steps": [
+                {
+                    "step_id": "s1",
+                    "kind": "conclusion",
+                    "claim_ids": ["c1"],
+                    "theorem": "",
+                }
+            ],
+            "solution_text": "Adding one and one gives two.",
+            "public_solution_steps": ["Compute 1+1=2."],
+            "final_answer": "2",
+            "assumptions": [],
+            "theorems": [],
+            "claims": [
+                {
+                    "claim_id": "c1",
+                    "statement": "The sum equals 2.",
+                    "depends_on": [],
+                    "check_type": "reasoning",
+                    "importance": "critical",
+                }
+            ],
+            "unresolved_obligations": [],
+        }
+    )
+
+    class SequenceClient:
+        def __init__(self):
+            self.responses = [invalid, valid]
+            self.calls = []
+
+        def chat(self, **kwargs):
+            self.calls.append(kwargs)
+            return self.responses.pop(0)
+
+    client = SequenceClient()
+    request = SolverRequest(
+        candidate_id="primary-nested-retry",
+        problem=ProblemParser().parse("Compute 1+1."),
+        route=RoutePlan(
+            primary_subject="general-math",
+            auxiliary_subject=None,
+            problem_type="calculation",
+            answer_type="integer",
+            risk_level="low",
+            candidate_count=1,
+        ),
+        skill_context="",
+        method_family="direct-deduction",
+    )
+    candidate = SolverExecutor(
+        OfficialClientProvider(client, ModelCallGate(1)),
+        SolutionParser(),
+    ).execute(
+        PrimarySolver(),
+        request,
+        CallBudget(2),
+        temperature=0.2,
+        max_tokens=8192,
+    )
+
+    assert candidate.final_answer == "2"
+    assert "nested_schema_invariant:invalid" in (
+        client.calls[1]["messages"][-1]["content"]
+    )
+
+
+def test_primary_preserves_schema_details_when_retry_transport_fails():
+    class SequenceClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return '{"final_answer":"2"}'
+            raise RuntimeError("503 private provider detail")
+
+    request = SolverRequest(
+        candidate_id="primary-retry-transport",
+        problem=ProblemParser().parse("Compute 1+1."),
+        route=RoutePlan(
+            primary_subject="general-math",
+            auxiliary_subject=None,
+            problem_type="calculation",
+            answer_type="integer",
+            risk_level="low",
+            candidate_count=1,
+        ),
+        skill_context="",
+        method_family="direct-deduction",
+    )
+    with pytest.raises(ModelResponseError) as captured:
+        SolverExecutor(
+            OfficialClientProvider(SequenceClient(), ModelCallGate(1)),
+            SolutionParser(),
+        ).execute(
+            PrimarySolver(),
+            request,
+            CallBudget(2),
+            temperature=0.2,
+            max_tokens=8192,
+        )
+
+    assert captured.value.code == "candidate_schema_invalid"
+    assert "claims:missing" in captured.value.details
+    assert "retry_transport:provider_5xx" in captured.value.details
+    assert "private provider detail" not in str(captured.value)
+
+
 def test_l0_rejects_wrong_identity_without_calling_provider():
     client = _RecordingClient('{"status":"ok"}')
     report = run_model_preflight(
@@ -217,3 +526,51 @@ def test_preflight_failure_report_never_contains_raw_exception_text():
     assert report["failed_level"] == "L1"
     assert report["levels"][-1]["error_code"] == "auth_or_permission_failure"
     assert "private-provider-detail" not in serialized
+
+
+def test_l2_preflight_uses_the_production_contract_retry():
+    valid = json.dumps(
+        {
+            "method": "direct-deduction",
+            "method_steps": [
+                {
+                    "step_id": "s1",
+                    "kind": "conclusion",
+                    "claim_ids": ["c1"],
+                    "theorem": "",
+                }
+            ],
+            "solution_text": "One plus one equals two.",
+            "public_solution_steps": ["Compute 1+1=2."],
+            "final_answer": "2",
+            "assumptions": [],
+            "theorems": [],
+            "claims": [
+                {
+                    "claim_id": "c1",
+                    "statement": "The sum is 2.",
+                    "depends_on": [],
+                    "check_type": "reasoning",
+                    "importance": "critical",
+                }
+            ],
+            "unresolved_obligations": [],
+        }
+    )
+
+    class PreflightClient:
+        def __init__(self):
+            self.responses = [
+                '{"status":"ok"}',
+                '{"final_answer":"2"}',
+                valid,
+            ]
+
+        def chat(self, **_kwargs):
+            return self.responses.pop(0)
+
+    report = run_model_preflight(PreflightClient())
+
+    assert report["status"] == "passed"
+    assert report["levels"][-1]["level"] == "L2"
+    assert report["levels"][-1]["transport_attempts"] == 2

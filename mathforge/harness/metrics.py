@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any, ClassVar
 
 
@@ -74,6 +74,7 @@ class RunMetrics:
     final_phase: str = ""
     error_code: str = ""
     fallback_used: bool = False
+    terminalizer_failed_steps: list[str] = field(default_factory=list)
     context_view_attempts: int = 0
     context_view_failures: int = 0
     tool_checks: int = 0
@@ -181,6 +182,16 @@ class RunMetrics:
                 raise ValueError(f"RunMetrics.{name} must be a string")
         if not isinstance(self.fallback_used, bool):
             raise ValueError("RunMetrics.fallback_used must be a boolean")
+        if (
+            not isinstance(self.terminalizer_failed_steps, list)
+            or any(
+                not isinstance(step, str) or not step
+                for step in self.terminalizer_failed_steps
+            )
+        ):
+            raise ValueError(
+                "RunMetrics.terminalizer_failed_steps must be a string list"
+            )
         if self.fallback_used != (self.outcome == "fallback"):
             raise ValueError("RunMetrics fallback flag does not match outcome")
         if (

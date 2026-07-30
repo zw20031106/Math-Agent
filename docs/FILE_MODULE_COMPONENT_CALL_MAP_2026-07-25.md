@@ -9,7 +9,7 @@
 
 | 文件 | 作用 | 主要关系 |
 |---|---|---|
-| `.env.example` | 展示本地环境变量名；不保存真实凭证 | 用户/CLI 复制后设置 `INTERN_API_KEY`、`INTERN_MODEL` |
+| `.env.example` | 展示本地 API Key 环境变量名；不保存真实凭证 | 用户/CLI 复制后设置 `INTERN_API_KEY`；模型由 runner 的 `--model` 指定 |
 | `.gitignore` | 忽略虚拟环境、缓存、测试结果、临时数据库和构建物 | Git 工作树；不参与运行时 |
 | `AGENTS.md` | 仓库级开发约束，尤其是不可改官方文件、模型接口和测试门禁 | Codex/开发者工作流；约束全部代码 |
 | `CHANGELOG.md` | 按阶段记录 S0–S6/E0–E7 的设计与实施变更 | README、审查报告和发布判断的历史依据 |
@@ -419,7 +419,7 @@ main.py
 
 scripts/run_case_outputs.py
   ├─ llm_client.InternChatClient(timeout/retry override)
-  ├─ SerializedFastRetryClient
+  ├─ FastRetryClient
   ├─ PerCaseWallClockRunner
   ├─ mathforge.benchmark.run_benchmark
   ├─ MathForgeHarness

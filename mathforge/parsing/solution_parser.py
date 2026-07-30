@@ -8,7 +8,9 @@ from typing import Any
 from mathforge.harness.schemas import (
     MAX_CLAIMS,
     MAX_METHOD_STEPS,
+    CandidateParseTier,
     CandidateSolution,
+    CandidateSource,
     Claim,
     MethodStep,
     MethodStepKind,
@@ -25,7 +27,6 @@ _ANSWER_PATTERNS = (
 _REQUIRED_MODEL_FIELDS = frozenset(
     {
         "method",
-        "method_steps",
         "solution_text",
         "public_solution_steps",
         "final_answer",
@@ -38,7 +39,6 @@ _REQUIRED_MODEL_FIELDS = frozenset(
 _NONEMPTY_MODEL_FIELDS = frozenset(
     {
         "method",
-        "method_steps",
         "solution_text",
         "public_solution_steps",
         "final_answer",
@@ -106,6 +106,11 @@ class SolutionParser:
             )
         answer = self._extract_answer(text)
         parse_status = status or ("regex_answer" if answer != text else "raw_text")
+        parse_tier = (
+            CandidateParseTier.ANSWER_RECOVERED.value
+            if answer and answer != text
+            else CandidateParseTier.REJECTED.value
+        )
         candidate = CandidateSolution(
             candidate_id=candidate_id,
             role=role,
@@ -115,6 +120,8 @@ class SolutionParser:
             public_solution_steps=self._derive_public_steps(text, answer),
             solution_text=text,
             parse_status=parse_status,
+            source=self._candidate_source(candidate_id, role),
+            parse_tier=parse_tier,
         )
         candidate.validate()
         return candidate
@@ -147,14 +154,19 @@ class SolutionParser:
                 flags=re.IGNORECASE,
             ).strip()
         decoder = json.JSONDecoder()
-        if not cleaned.startswith("{"):
-            for match in re.finditer(r"\{", cleaned):
-                try:
-                    value, _ = decoder.raw_decode(cleaned[match.start() :])
-                    if isinstance(value, dict):
-                        return value, "outer_json"
-                except json.JSONDecodeError:
-                    continue
+        for match in reversed(list(re.finditer(r"\{", cleaned))):
+            try:
+                value, _ = decoder.raw_decode(cleaned[match.start() :])
+                if (
+                    isinstance(value, dict)
+                    and (
+                        "final_answer" in value
+                        or len(_REQUIRED_MODEL_FIELDS.intersection(value)) >= 3
+                    )
+                ):
+                    return value, "outer_json"
+            except json.JSONDecodeError:
+                continue
         repaired = re.sub(r",\s*([}\]])", r"\1", cleaned)
         try:
             value = ast.literal_eval(repaired)
@@ -289,6 +301,8 @@ class SolutionParser:
             "planned_method_family",
             "version",
             "schema_version",
+            "source",
+            "parse_tier",
         }
         deviations.extend(
             f"{name}:host_owned" for name in sorted(host_fields.intersection(payload))
@@ -452,6 +466,20 @@ class SolutionParser:
                     ),
                 )
             )
+        if not method_steps and claims:
+            for index, claim in enumerate(claims, start=1):
+                method_steps.append(
+                    MethodStep(
+                        step_id=f"host-s{index}",
+                        kind=(
+                            MethodStepKind.CONCLUSION.value
+                            if claim.importance == "critical"
+                            else MethodStepKind.OTHER.value
+                        ),
+                        claim_ids=[claim.claim_id],
+                        theorem="",
+                    )
+                )
         final_answer = SolutionParser._model_string(
             payload,
             "final_answer",
@@ -511,6 +539,14 @@ class SolutionParser:
             parse_status=status,
             contract_deviations=sorted(set(deviations)),
             method_steps=method_steps,
+            source=SolutionParser._candidate_source(candidate_id, role),
+            parse_tier=SolutionParser._candidate_parse_tier(
+                status,
+                deviations,
+                final_answer,
+                public_solution_steps,
+                claims,
+            ),
         )
         candidate.validate()
         return candidate
@@ -598,6 +634,33 @@ class SolutionParser:
         except (json.JSONDecodeError, TypeError):
             return False
 
+    @staticmethod
+    def _candidate_source(candidate_id: str, role: str) -> str:
+        if candidate_id.startswith("lemma-round-"):
+            return CandidateSource.LEMMA_GUIDED.value
+        return {
+            "PrimarySolver": CandidateSource.LLM_PRIMARY.value,
+            "AlternativeSolver": CandidateSource.LLM_ALTERNATIVE.value,
+            "RepairAgent": CandidateSource.LLM_REPAIR.value,
+            "LLMFinalizer": CandidateSource.LLM_FINALIZER.value,
+        }.get(role, CandidateSource.LLM_PRIMARY.value)
+
+    @staticmethod
+    def _candidate_parse_tier(
+        status: str,
+        deviations: list[str],
+        final_answer: str,
+        public_solution_steps: list[str],
+        claims: list[Claim],
+    ) -> str:
+        if status == "strict_json" and not deviations:
+            return CandidateParseTier.STRICT.value
+        if final_answer and public_solution_steps and claims:
+            return CandidateParseTier.RECOVERED.value
+        if final_answer and public_solution_steps:
+            return CandidateParseTier.ANSWER_RECOVERED.value
+        return CandidateParseTier.REJECTED.value
+
 
 def candidate_response_integrity(candidate: CandidateSolution) -> str:
     status = str(candidate.parse_status)
@@ -626,6 +689,14 @@ def candidate_response_integrity(candidate: CandidateSolution) -> str:
 def candidate_response_validation(
     candidate: CandidateSolution,
 ) -> tuple[str, bool]:
+    if "solution_text:json_wrapper" in candidate.contract_deviations:
+        return "candidate_schema_invalid", True
+    if candidate.parse_tier == CandidateParseTier.STRICT.value:
+        return "strict_candidate_json", False
+    if candidate.parse_tier == CandidateParseTier.RECOVERED.value:
+        return "recovered_candidate_json", False
+    if candidate.parse_tier == CandidateParseTier.ANSWER_RECOVERED.value:
+        return "answer_recovered_candidate", False
     integrity = candidate_response_integrity(candidate)
     if integrity == "empty":
         return "empty_response", True

@@ -62,6 +62,10 @@ class ToolExecutor:
     def registered_tools(self) -> frozenset[str]:
         return frozenset(self._registry.names())
 
+    @property
+    def claimable_tools(self) -> frozenset[str]:
+        return frozenset(self._registry.claimable_names())
+
     def validate_arguments(
         self,
         name: str,
@@ -108,7 +112,7 @@ class ToolExecutor:
             )
         try:
             inspect_tool_arguments(arguments)
-        except ExpressionLimitError:
+        except (ExpressionLimitError, SyntaxError):
             return ToolResult(
                 name,
                 "error",

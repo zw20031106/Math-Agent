@@ -4,7 +4,13 @@ from dataclasses import dataclass
 from typing import Callable
 
 from mathforge.context.claim_graph import ClaimGraph
-from mathforge.harness.schemas import CandidateSolution, Claim, EvidenceRecord
+from mathforge.harness.schemas import (
+    CandidatePatch,
+    CandidateSolution,
+    CandidateSource,
+    Claim,
+    EvidenceRecord,
+)
 from mathforge.verification.repair_scope import (
     claim_impact_closure,
     failed_claim_ids,
@@ -18,7 +24,8 @@ from mathforge.verification.admission import CandidateAdmissionError
 
 
 RepairCallable = Callable[
-    [CandidateSolution, list[str], list[EvidenceRecord]], CandidateSolution
+    [CandidateSolution, list[str], list[EvidenceRecord]],
+    CandidatePatch | CandidateSolution,
 ]
 ReverifyCallable = Callable[[CandidateSolution, list[str]], list[EvidenceRecord]]
 AcceptanceCallable = Callable[
@@ -448,10 +455,25 @@ class ClaimRepairService:
     @staticmethod
     def _merge_local_patch(
         original: CandidateSolution,
-        patch: CandidateSolution,
+        patch: CandidatePatch | CandidateSolution,
         affected: list[str],
     ) -> tuple[CandidateSolution, list[str]]:
-        patch_by_id = {claim.claim_id: claim for claim in patch.claims}
+        if isinstance(patch, CandidatePatch):
+            patch.validate()
+            patch_claims = patch.replacement_claims
+            patch_final_answer = patch.final_answer
+            patch_status = patch.parse_status
+            patch_deviations = patch.contract_deviations
+            patch_public_steps = patch.public_solution_steps
+            patch_unresolved = patch.unresolved_obligations
+        else:
+            patch_claims = patch.claims
+            patch_final_answer = patch.final_answer
+            patch_status = patch.parse_status
+            patch_deviations = patch.contract_deviations
+            patch_public_steps = patch.public_solution_steps
+            patch_unresolved = patch.unresolved_obligations
+        patch_by_id = {claim.claim_id: claim for claim in patch_claims}
         changed: list[str] = []
         merged_claims: list[Claim] = []
         for claim in original.claims:
@@ -489,31 +511,43 @@ class ClaimRepairService:
                 )
         rebuilt_solution = ClaimRepairService._rebuild_solution(
             merged_claims,
-            patch.final_answer or original.final_answer,
+            patch_final_answer or original.final_answer,
         )
         proposed = CandidateSolution(
             candidate_id=f"{original.candidate_id}-v{original.version + 1}",
             role=original.role,
             method=original.method,
-            final_answer=patch.final_answer or original.final_answer,
+            final_answer=patch_final_answer or original.final_answer,
             answer_type=original.answer_type,
             assumptions=list(original.assumptions),
             theorems=list(original.theorems),
             claims=merged_claims,
-            public_solution_steps=[
-                claim.statement for claim in merged_claims if claim.statement.strip()
-            ],
+            public_solution_steps=(
+                list(patch_public_steps)
+                if patch_public_steps
+                else [
+                    claim.statement
+                    for claim in merged_claims
+                    if claim.statement.strip()
+                ]
+            ),
             solution_text=rebuilt_solution,
-            unresolved_obligations=list(original.unresolved_obligations),
-            parse_status=patch.parse_status,
+            unresolved_obligations=(
+                list(patch_unresolved)
+                if patch_unresolved
+                else list(original.unresolved_obligations)
+            ),
+            parse_status=patch_status,
             version=original.version + 1,
             planned_method_family=original.planned_method_family,
             is_method_duplicate=original.is_method_duplicate,
             contract_deviations=sorted(
                 set(original.contract_deviations)
-                | {f"repair:{item}" for item in patch.contract_deviations}
+                | {f"repair:{item}" for item in patch_deviations}
             ),
             method_steps=list(original.method_steps),
+            source=CandidateSource.LLM_REPAIR.value,
+            parse_tier=original.parse_tier,
         )
         proposed.validate()
         return proposed, changed

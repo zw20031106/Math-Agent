@@ -1,6 +1,6 @@
 # MathForge 公共输出契约
 
-版本：3.0
+版本：3.1
 
 ## 对外字段
 
@@ -18,8 +18,8 @@
 - `id`：优先读取 `metadata.id`，否则读取 `metadata.idx`；两者都缺失时为
   `null`。
 - `status`：仅允许 `success`、`failed`、`timeout`。只有主求解流程成功才是
-  `success`；Fallback、候选生成失败和内部执行失败均为 `failed`；单题
-  1,200 秒 watchdog 到期为 `timeout`。
+  `success`；Fallback、候选生成失败和内部执行失败均为 `failed`；竞赛配置的
+  单题 900 秒边界到期为 `timeout`。
 - `final_response`：非空字符串。
 - `trace`：有序事件列表，以 `run_completed` 结束。
 
@@ -28,16 +28,22 @@ Harness、Benchmark artifact 和逐题运行清单中。
 
 ## Trace 内容
 
-公共 `trace` 使用 Judge Trace V3，是面向判分的有界审计叙事，不是内部
+公共 `trace` 使用 Judge Trace V3.1，是面向判分的有界审计叙事，不是内部
 框架日志或 Debug Journal：
 
 - 保留会话/配置、路由/Skill、关键 Evidence、proof completion、仲裁、
   最终选择、预算和终态摘要。
-- 只对选中 Candidate 保留必要公开解题步骤和最终答案，且不在 Trace 中重复
+- 选中 Candidate 保留必要公开解题步骤和最终答案，且不在 Trace 中重复
   `final_response`；二者通过内容摘要绑定并校验一致性。
-- 未选 Candidate 只保留 `candidate_id`、`role`、`method_family`、
-  `status`、`content_digest`、`rejection_category` 和
-  `evidence_summary`，不保留其答案、步骤、Claims 或完整正文。
+- `viable_not_selected` Candidate 额外保留受限的 `public_final_answer`、
+  `public_solution_steps`、`proof_status` 和 `selection_reason`，用于审计候选
+  对比；被硬门禁拒绝或生成失败的 Candidate 这些字段为空，不暴露 Claims、
+  完整响应或私有推理。
+- 每题恰有一个受保护的 `closed_loop_health`，汇总模型派发、Primary/Shadow、
+  Candidate 数量、Evidence、Proof、Cross-review、Repair、最终选择及具体降级
+  原因。该健康度只表示闭环完整性，不代表数学答案必然正确。
+- `decision_summary` 以安全聚合形式记录 Frozen Lemma Cache、确定性 Shadow、
+  自适应 fanout 和 Candidate Cross-review 决策。
 - 最终缩进 UTF-8 JSON、Trace 事件数/字符数、单事件字符数和未选 Candidate
   数量均受命名配置预算约束。超限内容转换为带数量和摘要的结构化记录，不
   破坏 JSON 或裁掉关键终态事件。
@@ -68,14 +74,17 @@ Formatter、Trace 和公共输出契约完整验证。只有三级全部通过�
 启动；“返回了非空文本”不再构成通过。每级状态、耗时、输出上限和 Transport
 尝试数写入 Manifest。
 
-正式请求的本地 HTTP 窗口为 125 秒，对齐官方约 120 秒服务端边界并只保留
-少量传输裕量。只有在 10 秒内明确返回的限流、5xx 或连接错误才允许重试
-一次；空响应、读超时、不完整 JSON 和 Schema 违约不重复发送同一大 Prompt。
+官方约 120 秒服务端生成边界、正式请求的 150 秒本地 HTTP 回传窗口和
+165 秒 Harness 外层调用窗口相互独立。额外窗口只容纳代理、TLS、缓冲和响应
+回传，不扩展服务端生成时间。只有在 10 秒内明确返回的限流、5xx 或连接错误
+才允许重试一次；空响应、读超时、不完整 JSON 和 Schema 违约不重复发送同一
+大 Prompt。
 官方 Client 的内部尝试数固定为 1，外层每次尝试均进入结构化 Metrics。
-竞赛配置的模型调用 Gate 并发数为 1；多候选仍会生成，但按截止时间感知的
-顺序进入模型服务，避免并发请求造成服务拒绝。
-运行时必须使用官方精确版本字段
-`INTERN_MODEL=intern-s2-preview-397b`；Legacy `intern-s2-preview`
+竞赛配置的模型调用 Gate 并发数为 4；`ReasoningAgent` 同时把活跃题目限制
+为 4，每题先调度 Primary，再启动可选 Alternative。本地逐题 runner 使用
+滚动 4 题窗口，不会一次性提交完整数据集。
+本地运行通过显式参数
+`--model intern-s2-preview-397b` 使用官方精确版本字段；Legacy `intern-s2-preview`
 当前指向 35B，不能作为 397B 验收结果。角色输出上限分别为
 Router/Finalizer 4,096、Verifier 8,192、Repair 12,288、Lemma 16,384、
 Alternative 24,576、Primary 32,768 Token；总上下文仍为 262,144 Token，
@@ -90,8 +99,8 @@ Alternative 24,576、Primary 32,768 Token；总上下文仍为 262,144 Token，
 4. 原子更新 `case-outputs/run_manifest.json`；
 5. 输出并刷新 `CASE_COMPLETED` 行。
 
-成功、失败和超时都会形成非空、可解析、带终态 Trace 的逐题 JSON。单题
-watchdog 为 1,200 秒，其中 Harness 最迟在 1,150 秒交还控制权，预留 50 秒
+成功、失败和超时都会形成非空、可解析、带终态 Trace 的逐题 JSON。竞赛配置
+watchdog 为 900 秒，其中 Harness 最迟在 850 秒交还控制权，预留 50 秒
 完成序列化和写盘。每次模型排队最多使用 15 秒，角色调用超时从排队开始计算。
 模型调用超时后，Python daemon thread 不会被伪称为已取消；它进入有上限的
 provider background tail，达到上限后 circuit-open，后续调用快速失败。迟到线程
@@ -103,17 +112,23 @@ provider background tail，达到上限后 circuit-open，后续调用快速失�
 中断后使用同一命令并增加 `--resume`。恢复前会校验：
 
 - 输入 JSONL 与配置文件的 SHA-256；
-- case ID 集合、数量与随机种子；
+- case ID 集合、数量、随机种子与并发数；
+- 内部指定的模型请求策略、代码 commit/dirty/source 指纹；
+- Manifest/Judge Trace Schema 和四字段输出契约版本；
 - 已有逐题 JSON 的精确四字段 Schema、ID、状态、非空回答和终态 Trace；
 - 逐题文件与运行清单绑定的 SHA-256。
 
 默认只跳过校验成功且状态为 `success` 的题目；`failed` 和 `timeout`
-题目会重新执行并原子替换原结果。可以使用 `--rerun-status` 显式调整
-重跑集合。未知文件、损坏文件、哈希变化或不兼容清单会在题目模型调用前
+题目会重新执行并原子替换 canonical 结果。可以使用 `--rerun-status` 显式
+调整重跑集合。Manifest 1.3 使用 `attempts` 数组，每个题目记录
+`attempt_id`；Debug Journal 写入
+`.trace-journal/attempt-000N/<id>.trace.jsonl`，因此旧 attempt 的失败证据
+不会被重跑覆盖。恢复时，上一条仍为 `running` 的 attempt 会先收尾为
+`interrupted`。未知文件、损坏文件、哈希变化或不兼容清单会在题目模型调用前
 失败。
 
-Runner 默认且强制 `concurrency=1`，因此未启动题目的 1,200 秒期限不会在
-队列等待期间消耗。Manifest 依次进入 `created`、`preflight_passed`、
+Runner 默认并最多允许 `concurrency=4`，滚动调度只为实际启动的题目创建
+执行期限。Manifest 依次进入 `created`、`preflight_passed`、
 `running`，并以 `completed`、`degraded`、`aborted` 或 `failed` 结束。
 SIGINT/SIGTERM 会等待当前题安全写盘、阻止启动下一题并记录 `aborted`。
 `--max-cases` 和 `--stop-after-case` 会在目标题写盘后以 `degraded`

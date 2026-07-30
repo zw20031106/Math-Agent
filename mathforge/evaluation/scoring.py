@@ -469,11 +469,18 @@ def _normalize_expression(value: str) -> str:
     normalized = (
         _unwrap_answer(value)
         .replace("−", "-")
+        .replace("π", "pi")
+        .replace("ζ", "zeta")
+        .replace("λ", "lam")
+        .replace("α", "alpha")
+        .replace("β", "beta")
+        .replace("−", "-")
         .replace("×", "*")
         .replace("÷", "/")
         .replace(r"\left", "")
         .replace(r"\right", "")
     )
+    normalized = _expand_latex_fractions(normalized)
     previous = ""
     while previous != normalized:
         previous = normalized
@@ -512,6 +519,49 @@ def _normalize_expression(value: str) -> str:
     normalized = normalized.replace("I(", "I*(")
     normalized = re.sub(r"(?<=\))(?=[A-Za-z0-9(])", "*", normalized)
     return normalized.strip()
+
+
+def _expand_latex_fractions(value: str) -> str:
+    """Expand braced LaTeX fractions while respecting nested exponent braces."""
+    result = value
+    search_from = 0
+    while True:
+        start = result.find(r"\frac", search_from)
+        if start < 0:
+            return result
+        cursor = start + len(r"\frac")
+        while cursor < len(result) and result[cursor].isspace():
+            cursor += 1
+        numerator = _take_braced_group(result, cursor)
+        if numerator is None:
+            search_from = cursor
+            continue
+        numerator_text, cursor = numerator
+        while cursor < len(result) and result[cursor].isspace():
+            cursor += 1
+        denominator = _take_braced_group(result, cursor)
+        if denominator is None:
+            search_from = cursor
+            continue
+        denominator_text, end = denominator
+        replacement = f"(({numerator_text})/({denominator_text}))"
+        result = result[:start] + replacement + result[end:]
+        search_from = start
+
+
+def _take_braced_group(value: str, start: int) -> tuple[str, int] | None:
+    if start >= len(value) or value[start] != "{":
+        return None
+    depth = 0
+    for index in range(start, len(value)):
+        character = value[index]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return value[start + 1 : index], index + 1
+    return None
 
 
 def _normalize_math_structure(value: str) -> str:

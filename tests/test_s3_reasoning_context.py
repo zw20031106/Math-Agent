@@ -586,6 +586,14 @@ def test_expanded_candidate_without_skeptic_completion_cannot_enter_arbitration(
         if event["event"] == "expanded_candidates_reverified"
     )
     assert reverified["rejected"] == ["lemma-round-2"]
+    proof_gate = next(
+        event
+        for event in result["trace"]
+        if event["event"] == "proof_completion_gate"
+    )
+    assert proof_gate["rejected"][0]["gate_reason"] == (
+        "expanded_candidate_not_skeptic_reviewed"
+    )
     arbitration = next(
         event for event in result["trace"] if event["event"] == "candidate_arbitrated"
     )

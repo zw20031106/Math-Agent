@@ -13,7 +13,10 @@ from mathforge.harness.schemas import CandidateSolution, Claim, ProblemIR
 from mathforge.harness.trace import TraceBuilder
 from mathforge.output.public_result import build_public_result
 from mathforge.runtime import MathForgeHarness
-from mathforge.verification.admission import CandidateAdmissionGate
+from mathforge.verification.admission import (
+    CandidateAdmissionDecision,
+    CandidateAdmissionGate,
+)
 from scripts.formal_smoke_fixture import FormalSmokeClient
 
 
@@ -133,6 +136,29 @@ def test_candidate_admission_rejects_fatal_answer_contract_errors():
     assert "invalid_integer" in decision.rejection_codes
 
 
+def test_candidate_admission_treats_method_text_deviation_as_diversity_signal():
+    problem = ProblemIR(
+        raw_problem="Return an integer.",
+        normalized_problem="Return an integer.",
+        problem_type="calculation",
+        answer_type="integer",
+    )
+    candidate = CandidateSolution(
+        "candidate",
+        "PrimarySolver",
+        "wrong-method",
+        "2",
+        "integer",
+        claims=[Claim("c1", "2 is the answer")],
+        contract_deviations=["method:planned_method_family"],
+    )
+
+    decision = CandidateAdmissionGate().evaluate(candidate, problem)
+
+    assert decision.accepted is True
+    assert decision.rejection_codes == []
+
+
 class _InvalidIntegerClient(FormalSmokeClient):
     def chat(self, *, messages, temperature, max_tokens) -> str:
         payload = json.loads(super().chat(
@@ -192,17 +218,25 @@ def test_post_arbitration_admission_failure_forces_fallback(monkeypatch):
         enable_finalizer=False,
     )
     harness = MathForgeHarness(FormalSmokeClient(), config)
-    original_select = harness._arbitration.select
+    original_evaluate = harness._candidate_stage.evaluate
+    evaluations = 0
 
-    def corrupt_selected_candidate(*args, **kwargs):
-        result = original_select(*args, **kwargs)
-        result.selected.final_answer = ""
-        return result
+    def reject_post_selection(*args, **kwargs):
+        nonlocal evaluations
+        evaluations += 1
+        decision = original_evaluate(*args, **kwargs)
+        if evaluations == 2:
+            return CandidateAdmissionDecision(
+                decision.candidate_id,
+                False,
+                ["post_selection_contract_failure"],
+            )
+        return decision
 
     monkeypatch.setattr(
-        harness._arbitration,
-        "select",
-        corrupt_selected_candidate,
+        harness._candidate_stage,
+        "evaluate",
+        reject_post_selection,
     )
 
     result = harness.solve("Calculate 1+1.", {})
@@ -510,4 +544,4 @@ def test_post_verifier_repair_rolls_back_without_strict_improvement():
     assert repair["rolled_back"] is True
     assert repair["reason"] == "post_repair_proof_incomplete"
     assert client.roles.count("RepairAgent") == 1
-    assert result["run_metrics"]["outcome"] == "fallback"
+    assert result["run_metrics"]["outcome"] == "primary"

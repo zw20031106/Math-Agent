@@ -11,6 +11,7 @@ from mathforge.harness.fingerprints import (
 from mathforge.tools.formatting import answer_type_check, latex_syntax_check
 from mathforge.tools.linear_algebra import matrix_shape_check
 from mathforge.tools.numerical import density_normalization, numerical_residual, small_case_enumeration
+from mathforge.tools.shadow_solver import run_shadow_probe
 from mathforge.tools.symbolic import safe_parse_expression, simplify_expression, symbolic_equivalence
 from mathforge.verification.capabilities import (
     ClaimVerificationState,
@@ -62,9 +63,21 @@ class ToolDefinition:
     version: str = "1"
     capability: str = VerificationCapability.NONE.value
     claim_state: str = ClaimVerificationState.UNKNOWN.value
+    model_claimable: bool = True
 
 
 _DEFINITIONS = (
+    ToolDefinition(
+        "deterministic_shadow_probe",
+        run_shadow_probe,
+        True,
+        "an exact answer for an allowlisted deterministic problem shape",
+        "unsupported shapes return unknown and never form a candidate",
+        "1",
+        capability=VerificationCapability.EQUALITY_SYMBOLIC_UNDER_DOMAIN.value,
+        claim_state=ClaimVerificationState.SEMANTICALLY_VERIFIED.value,
+        model_claimable=False,
+    ),
     ToolDefinition(
         "safe_parse_expression",
         safe_parse_expression,
@@ -153,6 +166,10 @@ _DEFINITIONS = (
 )
 
 _INPUT_SCHEMAS: dict[str, dict[str, dict[str, Any]]] = {
+    "deterministic_shadow_probe": {
+        "problem_ir": {"type": "object", "additionalProperties": {}},
+        "time_budget_seconds": {"type": "number"},
+    },
     "safe_parse_expression": {
         "expression": {"type": "string"},
     },
@@ -214,6 +231,7 @@ _INPUT_SCHEMAS: dict[str, dict[str, dict[str, Any]]] = {
 }
 
 _OPTIONAL_ARGUMENTS: dict[str, set[str]] = {
+    "deterministic_shadow_probe": {"time_budget_seconds"},
     "symbolic_equivalence": {"assumptions", "domains"},
     "numerical_residual": {
         "right",
@@ -231,6 +249,16 @@ class ToolRegistry:
 
     def names(self) -> list[str]:
         return sorted(self._definitions)
+
+    def claimable_names(self) -> list[str]:
+        return sorted(
+            name
+            for name, definition in self._definitions.items()
+            if definition.model_claimable
+        )
+
+    def is_model_claimable(self, name: str) -> bool:
+        return self.get(name).model_claimable
 
     @property
     def fingerprint(self) -> str:
@@ -252,6 +280,11 @@ class ToolRegistry:
                 "version": definition.version,
                 "capability": definition.capability,
                 "claim_state": definition.claim_state,
+                "exposure": (
+                    "model_claimable"
+                    if definition.model_claimable
+                    else "host_only"
+                ),
                 "limitations_sha256": semantic_fingerprint(
                     {
                         "proves": definition.proves,
@@ -306,11 +339,22 @@ class ToolRegistry:
     ) -> list[dict[str, Any]]:
         from mathforge.tool_prompt_examples import claim_prompt_examples
 
-        return claim_prompt_examples(names, limit=limit)
+        allowed = set(self.claimable_names())
+        return claim_prompt_examples(
+            (name for name in names if name in allowed),
+            limit=limit,
+        )
 
     def mcp_schemas(self) -> list[dict[str, Any]]:
         schemas: list[dict[str, Any]] = []
-        for definition in sorted(self._definitions.values(), key=lambda item: item.name):
+        for definition in sorted(
+            (
+                item
+                for item in self._definitions.values()
+                if item.model_claimable
+            ),
+            key=lambda item: item.name,
+        ):
             properties = _INPUT_SCHEMAS[definition.name]
             required = [
                 name

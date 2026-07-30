@@ -55,9 +55,10 @@ def test_runtime_trace_exposes_transport_proof_graph_and_case_summary():
     assert transport["calls"] == [
         {
             "call_index": 1,
-            "role": "PrimarySolver",
-            "stage": "primary",
-            "status": "completed",
+                "role": "PrimarySolver",
+                "stage": "primary",
+                "dispatched": True,
+                "status": "completed",
             "attempts": 1,
             "failure_code": "",
             "response_validation": "strict_candidate_json",
@@ -147,7 +148,8 @@ def test_provider_failure_is_safe_and_locatable_without_raw_exception():
 
 
 def test_trace_journal_writes_each_sanitized_event_immediately(tmp_path):
-    sink = TraceJournalFactory(tmp_path)("session", {"idx": 7})
+    factory = TraceJournalFactory(tmp_path)
+    sink = factory("session", {"idx": 7})
     trace = TraceBuilder([], event_sink=sink)
     trace.add(
         "route_planned",
@@ -156,7 +158,7 @@ def test_trace_journal_writes_each_sanitized_event_immediately(tmp_path):
         path=r"C:\private\answer.txt",
     )
 
-    path = tmp_path / "7.trace.jsonl"
+    path = tmp_path / factory.attempt_id / "7.trace.jsonl"
     lines = path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     payload = json.loads(lines[0])
@@ -167,13 +169,14 @@ def test_trace_journal_writes_each_sanitized_event_immediately(tmp_path):
 
 
 def test_runtime_uses_one_incremental_journal_per_case(tmp_path):
+    factory = TraceJournalFactory(tmp_path)
     result = MathForgeHarness(
         FakeClient(),
         _minimal_config(),
-        trace_sink_factory=TraceJournalFactory(tmp_path),
+        trace_sink_factory=factory,
     ).solve("Compute 1 + 1.", {"idx": "case-9"})
 
-    path = tmp_path / "case-9.trace.jsonl"
+    path = tmp_path / factory.attempt_id / "case-9.trace.jsonl"
     records = [
         json.loads(line)
         for line in path.read_text(encoding="utf-8").splitlines()

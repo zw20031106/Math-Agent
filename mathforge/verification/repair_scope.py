@@ -5,6 +5,33 @@ from mathforge.harness.schemas import CandidateSolution, EvidenceRecord
 from mathforge.verification.evidence import is_fatal_hard_failure
 
 
+def actionable_verifier_failures(findings) -> dict[str, list[str]]:
+    triggers: dict[str, list[str]] = {}
+    for finding in findings:
+        claim_id = getattr(finding, "claim_id", None)
+        if (
+            getattr(finding, "status", "") != "fail"
+            or claim_id is None
+            or not (
+                str(getattr(finding, "missing_condition", "")).strip()
+                or str(
+                    getattr(finding, "counterexample_summary", "")
+                ).strip()
+                or str(getattr(finding, "description", "")).strip()
+            )
+        ):
+            continue
+        triggers.setdefault(
+            str(getattr(finding, "candidate_id", "")),
+            [],
+        ).append(str(claim_id))
+    return {
+        candidate_id: sorted(set(claim_ids))
+        for candidate_id, claim_ids in triggers.items()
+        if candidate_id and claim_ids
+    }
+
+
 def failed_claim_ids(candidate_id: str, evidence: list[EvidenceRecord]) -> list[str]:
     return sorted(
         {

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
@@ -243,6 +243,7 @@ def run_benchmark(
     pollution_probe: PollutionProbe | None = None,
     late_mutation_grace_seconds: float = 0.0,
     on_record_completed: Callable[[BenchmarkRecord], None] | None = None,
+    should_stop_scheduling: Callable[[], bool] | None = None,
 ) -> tuple[list[BenchmarkRecord], dict]:
     validate_unique_case_ids(cases)
     if repetitions < 1:
@@ -322,16 +323,47 @@ def run_benchmark(
         )
 
     ordered: dict[int, BenchmarkRecord] = {}
-    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
-        future_by_index = {
-            pool.submit(run_case, ordinal, repeat_index, case_index, case): ordinal
-            for ordinal, repeat_index, case_index, case in tasks
-        }
-        for future in as_completed(future_by_index):
-            record = future.result()
-            ordered[future_by_index[future]] = record
-            if on_record_completed is not None:
-                on_record_completed(record)
+    max_workers = max(1, concurrency)
+    task_iterator = iter(tasks)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_by_index = {}
+
+        def submit_next() -> bool:
+            try:
+                ordinal, repeat_index, case_index, case = next(task_iterator)
+            except StopIteration:
+                return False
+            future = pool.submit(
+                run_case,
+                ordinal,
+                repeat_index,
+                case_index,
+                case,
+            )
+            future_by_index[future] = ordinal
+            return True
+
+        for _ in range(max_workers):
+            if not submit_next():
+                break
+        while future_by_index:
+            completed, _ = wait(
+                tuple(future_by_index),
+                return_when=FIRST_COMPLETED,
+            )
+            for future in sorted(
+                completed,
+                key=lambda item: future_by_index[item],
+            ):
+                ordinal = future_by_index.pop(future)
+                record = future.result()
+                ordered[ordinal] = record
+                if on_record_completed is not None:
+                    on_record_completed(record)
+            if should_stop_scheduling is not None and should_stop_scheduling():
+                continue
+            while len(future_by_index) < max_workers and submit_next():
+                pass
     records = [ordered[index] for index in sorted(ordered)]
 
     if late_mutation_grace_seconds:

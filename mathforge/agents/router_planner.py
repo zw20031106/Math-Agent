@@ -577,9 +577,12 @@ class RouterRuleEngine:
             mixed_domain=len(ranked) > 1 and ambiguity_margin <= 0.12,
             missing_dedicated_skill=ranked[0][0] == "general-math",
         )
-        if "long_reasoning" in problem.risk_flags or len(complexity_flags) >= 3:
+        long_reasoning = "long_reasoning" in problem.risk_flags
+        if len(complexity_flags) >= 4 or (
+            long_reasoning and len(complexity_flags) >= 2
+        ):
             risk = "high"
-        elif complexity_flags or confidence < 0.75:
+        elif long_reasoning or complexity_flags or confidence < 0.75:
             risk = "medium"
         else:
             risk = "low"

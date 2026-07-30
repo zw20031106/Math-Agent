@@ -45,10 +45,15 @@ class DeadlineController:
         return max(0.0, self.hard_deadline_seconds - self.elapsed_seconds())
 
     def remaining_for_model_call(self) -> float:
-        return max(0.0, self.remaining_seconds() - self.finalize_reserve_seconds)
+        return max(
+            0.0,
+            self.remaining_seconds()
+            - self.finalize_reserve_seconds
+            - self.model_call_start_margin_seconds,
+        )
 
     def remaining_for_stage(self) -> float:
-        return max(0.0, self.remaining_seconds() - self.finalize_reserve_seconds)
+        return self.remaining_seconds()
 
     def optional_work_allowed(self) -> bool:
         return self.elapsed_seconds() < self.soft_deadline_seconds
@@ -56,8 +61,7 @@ class DeadlineController:
     def exploration_allowed(self) -> bool:
         return (
             self.elapsed_seconds() < self.exploration_deadline_seconds
-            and self.remaining_for_model_call()
-            > self.model_call_start_margin_seconds
+            and self.remaining_for_model_call() > 0
         )
 
     def can_start_model_call(self, *, optional: bool = False) -> bool:
@@ -71,7 +75,7 @@ class DeadlineController:
         return self.remaining_for_stage() > 0
 
     def must_finalize(self) -> bool:
-        return self.remaining_for_model_call() <= 0
+        return self.remaining_seconds() <= self.finalize_reserve_seconds
 
     def hard_expired(self) -> bool:
         return self.remaining_seconds() <= 0

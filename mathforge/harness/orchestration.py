@@ -12,6 +12,7 @@ from mathforge.agents.solver import (
 )
 from mathforge.agents.router_planner import method_families_for
 from mathforge.agents.registry import PromptContractLoader
+from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import (
@@ -19,6 +20,7 @@ from mathforge.harness.errors import (
     ModelResponseError,
     ModelTransportError,
 )
+from mathforge.harness.allocation import FanoutDecision
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
 from mathforge.harness.fingerprints import semantic_fingerprint
 from mathforge.verification.methods import candidate_method_signature
@@ -28,9 +30,13 @@ from mathforge.verification.methods import candidate_method_signature
 class BranchFailure:
     candidate_id: str
     reason: str
+    details: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
-        return {"candidate_id": self.candidate_id, "reason": self.reason}
+        payload = {"candidate_id": self.candidate_id, "reason": self.reason}
+        if self.details:
+            payload["details"] = list(self.details)
+        return payload
 
 
 @dataclass
@@ -60,6 +66,10 @@ class CandidateOrchestrator:
         context_views: dict[str, RoleContextView] | None = None,
         role_skill_contexts: dict[str, str] | None = None,
         event_callback: Callable[..., None] | None = None,
+        fanout_decider: (
+            Callable[[CandidateSolution | None, CallBudget], FanoutDecision]
+            | None
+        ) = None,
     ) -> FanoutResult:
         views = context_views or {}
         skill_contexts = role_skill_contexts or {}
@@ -114,28 +124,102 @@ class CandidateOrchestrator:
                 )
             )
 
+        ordered: dict[int, CandidateSolution] = {}
+        failures: list[BranchFailure] = []
+
+        def record_result(index: int, candidate_id: str, get_result) -> None:
+            try:
+                candidate = get_result()
+            except BudgetExceeded as error:
+                reason = (
+                    "model_response_deadline_exceeded"
+                    if "response exceeded" in str(error)
+                    else "deadline_cutoff"
+                )
+                failures.append(BranchFailure(candidate_id, reason))
+                if event_callback is not None:
+                    event_callback(
+                        "candidate_generation_failed",
+                        **candidate_failure_trace_payload(candidate_id, reason),
+                    )
+            except Exception as error:
+                reason = _branch_failure_reason(error)
+                details = _branch_failure_details(error)
+                failures.append(BranchFailure(candidate_id, reason, details))
+                if event_callback is not None:
+                    event_callback(
+                        "candidate_generation_failed",
+                        **candidate_failure_trace_payload(
+                            candidate_id,
+                            reason,
+                            details=details,
+                        ),
+                    )
+            else:
+                ordered[index] = candidate
+                if event_callback is not None:
+                    event_callback(
+                        "candidate_generated",
+                        **candidate_trace_payload(candidate),
+                    )
+
+        primary_index, primary_solver, primary_request = branches[0]
         if event_callback is not None:
-            for _, solver, request in branches:
+            event_callback(
+                "candidate_generation_started",
+                candidate_id=primary_request.candidate_id,
+                role=primary_solver.role,
+                planned_method_family=primary_request.method_family,
+            )
+        record_result(
+            primary_index,
+            primary_request.candidate_id,
+            lambda: self._executor.execute(
+                primary_solver,
+                primary_request,
+                budget,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                optional=False,
+            ),
+        )
+
+        decision = (
+            fanout_decider(ordered.get(0), budget)
+            if fanout_decider is not None
+            else None
+        )
+        alternative_limit = (
+            max(0, decision.admitted_candidates - 1)
+            if decision is not None
+            else len(branches) - 1
+        )
+        alternative_branches = branches[1 : 1 + alternative_limit]
+        if decision is not None and event_callback is not None:
+            event_callback("adaptive_fanout_decided", **decision.to_dict())
+        if event_callback is not None:
+            for _, solver, request in alternative_branches:
                 event_callback(
                     "candidate_generation_started",
                     candidate_id=request.candidate_id,
                     role=solver.role,
                     planned_method_family=request.method_family,
                 )
-        ordered: dict[int, CandidateSolution] = {}
-        failures: list[BranchFailure] = []
-        pool = ThreadPoolExecutor(max_workers=count, thread_name_prefix="mathforge-solver")
+        pool = ThreadPoolExecutor(
+            max_workers=max(1, len(alternative_branches)),
+            thread_name_prefix="mathforge-solver",
+        )
         futures = {
             pool.submit(
                 self._executor.execute,
                 solver,
                 request,
                 budget,
-                temperature=temperature if index == 0 else max(temperature, 0.35),
+                temperature=max(temperature, 0.35),
                 max_tokens=max_tokens,
-                optional=index > 0,
+                optional=True,
             ): (index, request.candidate_id)
-            for index, solver, request in branches
+            for index, solver, request in alternative_branches
         }
         pending = set(futures)
         try:
@@ -152,41 +236,7 @@ class CandidateOrchestrator:
                     break
                 for future in completed:
                     index, candidate_id = futures[future]
-                    try:
-                        candidate = future.result()
-                    except BudgetExceeded as error:
-                        reason = (
-                            "model_response_deadline_exceeded"
-                            if "response exceeded" in str(error)
-                            else "deadline_cutoff"
-                        )
-                        failures.append(BranchFailure(candidate_id, reason))
-                        if event_callback is not None:
-                            event_callback(
-                                "candidate_generation_failed",
-                                **candidate_failure_trace_payload(
-                                    candidate_id,
-                                    reason,
-                                ),
-                            )
-                    except Exception as error:
-                        reason = _branch_failure_reason(error)
-                        failures.append(BranchFailure(candidate_id, reason))
-                        if event_callback is not None:
-                            event_callback(
-                                "candidate_generation_failed",
-                                **candidate_failure_trace_payload(
-                                    candidate_id,
-                                    reason,
-                                ),
-                            )
-                    else:
-                        ordered[index] = candidate
-                        if event_callback is not None:
-                            event_callback(
-                                "candidate_generated",
-                                **candidate_trace_payload(candidate),
-                            )
+                    record_result(index, candidate_id, future.result)
             for future in pending:
                 _, candidate_id = futures[future]
                 future.cancel()
@@ -236,6 +286,8 @@ def candidate_trace_payload(candidate: CandidateSolution) -> dict:
         "method": candidate.method,
         "planned_method_family": candidate.planned_method_family,
         "parse_status": candidate.parse_status,
+        "parse_tier": candidate.parse_tier,
+        "source": candidate.source,
         "contract_deviations": list(candidate.contract_deviations),
         "content": public_candidate_content(candidate),
         "content_digest": semantic_fingerprint(candidate.to_dict()),
@@ -245,8 +297,10 @@ def candidate_trace_payload(candidate: CandidateSolution) -> dict:
 def candidate_failure_trace_payload(
     candidate_id: str,
     reason: str,
+    *,
+    details: tuple[str, ...] = (),
 ) -> dict:
-    return {
+    payload = {
         "candidate_id": candidate_id,
         "status": "failed",
         "method": "unavailable",
@@ -257,9 +311,14 @@ def candidate_failure_trace_payload(
             "claims": [],
         },
     }
+    if details:
+        payload["details"] = list(details)
+    return payload
 
 
 def _branch_failure_reason(error: Exception) -> str:
+    if isinstance(error, ContextBudgetExceeded):
+        return "context_budget_exceeded"
     if isinstance(error, (ModelTransportError, ModelResponseError)):
         return error.code
     if isinstance(error, RuntimeError):
@@ -267,3 +326,9 @@ def _branch_failure_reason(error: Exception) -> str:
     if isinstance(error, (TypeError, ValueError)):
         return "model_response_invalid"
     return "solver_branch_failed"
+
+
+def _branch_failure_details(error: Exception) -> tuple[str, ...]:
+    if isinstance(error, ModelResponseError):
+        return error.details
+    return ()

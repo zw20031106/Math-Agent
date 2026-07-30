@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "record_count": 0,
+  "store_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+  "source": "offline_reviewed_staging",
+  "build_mode": "offline_reviewed_only"
+}

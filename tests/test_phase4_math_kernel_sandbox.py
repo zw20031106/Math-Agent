@@ -202,6 +202,21 @@ def test_worker_failure_payload_is_small_structured_json():
     assert "Traceback" not in serialized
 
 
+def test_natural_language_tool_expression_fails_closed_without_escaping():
+    result = ToolExecutor().execute(
+        "simplify_expression",
+        {
+            "expression": (
+                "For integer n≥2, substituting x=1/n gives the expansion."
+            )
+        },
+    )
+
+    assert result.status == "error"
+    assert result.strength == "soft"
+    assert result.summary == "tool input rejected by resource limits"
+
+
 @pytest.mark.parametrize(
     ("left", "right"),
     [
@@ -375,6 +390,11 @@ def test_formal_entry_and_terminalizer_coverage_boundaries():
 
     assert result["final_response"]
     assert result["run_metrics"]["fallback_used"] is True
+    assert result["run_metrics"]["outcome"] == "fallback"
+    assert result["run_metrics"]["terminalizer_failed_steps"] == [
+        "metrics_contract",
+        "provenance_contract",
+    ]
     assert result["provenance"] == {}
     assert minimal["trace"][-1]["event"] == "run_completed"
 

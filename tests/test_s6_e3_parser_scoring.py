@@ -224,6 +224,45 @@ def test_invalid_actual_answers_have_stable_specific_reasons():
     assert all(result.error is False for result in (syntax, unsafe, vector))
 
 
+@pytest.mark.parametrize(
+    ("expected", "response"),
+    [
+        (
+            r"-6+\pi^2/3+2\zeta(3)",
+            r"Final answer: \frac{\pi^{2}}{3}+2\zeta(3)-6",
+        ),
+        (
+            r"8\pi^6/63",
+            "Final answer: 8π^6/63",
+        ),
+        (
+            r"\lambda^3-2\lambda^2-\lambda-4",
+            "Final answer: λ^3 - 2 λ^2 - λ - 4",
+        ),
+        (
+            r"-\frac{\pi^2}{8}\ln2+\frac7{16}\zeta(3)",
+            (
+                r"Final answer: \frac{7}{16}\zeta(3)"
+                r"-\frac{\pi^{2}}{8}\ln 2"
+            ),
+        ),
+    ],
+)
+def test_live_model_latex_and_unicode_forms_score_symbolically(
+    expected,
+    response,
+):
+    result = score_response(
+        expected,
+        response,
+        answer_type="expression",
+        scorer="symbolic",
+    )
+
+    assert result.correct is True
+    assert result.reason == "symbolic_equivalent"
+
+
 def test_runtime_trace_records_parser_target_and_confidence():
     config = HarnessConfig(
         profile="test",

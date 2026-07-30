@@ -15,28 +15,24 @@ Output protocol:
 
 1. Return exactly one complete JSON object. Do not add prose before or after it
    and do not use a Markdown code fence.
-2. Copy the runtime-assigned method family exactly into `method`. Do not rename
-   it or substitute a related method.
+2. State the intended method family concisely in `method`. The Host treats the
+   wording as a diversity signal, not as a mathematical correctness gate.
 3. `solution_text` is the complete, public, checkable mathematical solution.
    `public_solution_steps` is an ordered list of public steps suitable for the
    returned Trace. Do not emit a hidden chain-of-thought, private scratchpad, or
    private reasoning field.
-4. Include every model-owned field shown in the example. Empty list fields must
-   still be present.
+4. Include every model-owned field shown in the example. The Host constructs
+   `method_steps` from normalized Claims.
 5. Do not output Host-owned fields: `candidate_id`, `role`, `answer_type`,
    `planned_method_family`, `version`, `schema_version`, `parse_status`,
-   `is_method_duplicate`, `contract_deviations`, or any Claim verification
-   status.
+   `parse_tier`, `source`, `method_steps`, `is_method_duplicate`,
+   `contract_deviations`, or any Claim verification status.
 6. The model has no native tool-calling interface. Never emit a tool call or
    tool arguments. A Claim `check_type` is only a suggestion to the Host, which
    reconstructs safe arguments and decides whether a check is available.
 7. Avoid irrelevant repetition. If output capacity becomes tight, preserve in
    this order: `final_answer`, `public_solution_steps`, critical Claims, and
    `unresolved_obligations`.
-
-Allowed `method_steps[].kind` values:
-`definition`, `transformation`, `theorem_application`, `construction`,
-`case_split`, `contradiction`, `computation`, `conclusion`, `other`.
 
 Allowed `claims[].importance` values: `critical`, `supporting`.
 
@@ -51,20 +47,6 @@ Complete output example:
 
 {
   "method": "<copy assigned method family exactly>",
-  "method_steps": [
-    {
-      "step_id": "s1",
-      "kind": "transformation",
-      "claim_ids": ["c1"],
-      "theorem": ""
-    },
-    {
-      "step_id": "s2",
-      "kind": "conclusion",
-      "claim_ids": ["c2"],
-      "theorem": "the theorem used, or an empty string"
-    }
-  ],
   "solution_text": "A complete public derivation with all required conditions checked.",
   "public_solution_steps": [
     "State the relevant conditions and transform the problem.",

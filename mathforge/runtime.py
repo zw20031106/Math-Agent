@@ -8,6 +8,7 @@ from mathforge.agents.registry import PromptContractLoader, SkillRegistry
 from mathforge.agents.router_planner import RouterPlanner
 from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.harness.allocation import CallAllocationPlan
+from mathforge.harness.adaptive_fanout import AdaptiveFanoutPolicy
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.debug import DebugSink, sanitized_failure_record
 from mathforge.harness.errors import (
@@ -48,7 +49,14 @@ from mathforge.harness.terminalizer import (
     minimal_fallback_metrics,
 )
 from mathforge.output.answer_validator import AnswerValidator
-from mathforge.output.deterministic_formatter import DeterministicFormatter
+from mathforge.output.deterministic_formatter import (
+    DeterministicFormatter,
+    bound_final_response,
+)
+from mathforge.output.loop_health import (
+    build_closed_loop_health,
+    minimal_closed_loop_health,
+)
 from mathforge.parsing.problem_parser import ProblemParser
 from mathforge.parsing.solution_parser import SolutionParser
 from mathforge.tools.executor import ToolExecutor
@@ -61,19 +69,31 @@ from mathforge.verification.arbitration import ArbitrationPolicy
 from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.context.role_views import RoleContextFactory
 from mathforge.memory.blackboard import MemoryBlackboard
+from mathforge.memory.frozen_lemma_store import FrozenLemmaStore
+from mathforge.memory.problem_memo import ProblemMemo
 from mathforge.harness.lemma_loop import VerifiedLemmaLoop
 from mathforge.model_identity import ModelIdentity
 from mathforge.retrieval.retriever import Retriever
+from mathforge.resources import resource_path
 from mathforge.provenance import build_run_provenance
 from mathforge.agents.repair import RepairAgent
 from mathforge.harness.repair import ClaimRepairService
-from mathforge.verification.repair_scope import claim_impact_closure
+from mathforge.verification.repair_scope import (
+    actionable_verifier_failures,
+    claim_impact_closure,
+)
 from mathforge.agents.finalizer import LLMFinalizer
 from mathforge.agents.verifier import VerifierSkepticAgent
 from mathforge.verification.admission import (
     CandidateAdmissionError,
     CandidateAdmissionGate,
 )
+from mathforge.verification.cross_review import (
+    CandidateConflictMatrix,
+    CandidateReviewSummary,
+)
+from mathforge.tools.shadow_solver import ShadowOutcome
+from mathforge.verification.answer_normalization import canonical_answer
 
 
 _ROLE_CONTRACT_DIRECTORIES = {
@@ -194,6 +214,23 @@ class MathForgeHarness:
             if self._config.enable_finalizer
             else None
         )
+        self._adaptive_fanout = AdaptiveFanoutPolicy()
+        self._shadow_executor = (
+            ToolExecutor(
+                default_timeout=min(5.0, self._config.max_tool_seconds),
+                use_mcp=False,
+            )
+            if self._config.enable_shadow
+            else None
+        )
+        self._frozen_lemma_store = (
+            FrozenLemmaStore(
+                resource_path("data", "frozen_lemmas.jsonl"),
+                resource_path("data", "frozen_lemmas_manifest.json"),
+            )
+            if self._config.enable_frozen_lemma_store
+            else None
+        )
         self._verifier_agent = VerifierSkepticAgent(self._provider, self._contracts)
         self._run_provenance = build_run_provenance(
             self._config,
@@ -309,18 +346,70 @@ class MathForgeHarness:
         selected_candidate_id = ""
         candidate_states: list[dict[str, Any]] = []
         final_response = MINIMAL_FALLBACK_RESPONSE
+        problem_memo = ProblemMemo()
+        shadow_outcome: ShadowOutcome | None = None
+        frozen_lemma_hits = ()
 
         try:
             session.budget.ensure_stage("problem_parser")
             session.problem_ir = self._problem_parser.parse(normalized_problem)
             session.problem_ir.validate()
             blackboard = MemoryBlackboard(session.working_memory)
+            if self._shadow_executor is not None:
+                shadow_outcome = problem_memo.get_or_compute(
+                    "l0:deterministic_shadow",
+                    lambda: self._run_shadow_probe(session.problem_ir),
+                )
+            if self._frozen_lemma_store is not None:
+                frozen_store = self._frozen_lemma_store
+                frozen_lemma_hits = problem_memo.get_or_compute(
+                    "l1:frozen_lemma_retrieval",
+                    lambda: frozen_store.retrieve(session.problem_ir),
+                )
             if self._config.enable_memory:
                 blackboard.publish(
                     "System",
                     "raw",
                     {"metadata": safe_metadata},
                 )
+                if frozen_lemma_hits:
+                    blackboard.publish(
+                        "System",
+                        "lemma",
+                        {
+                            "source": "frozen_lemma_store",
+                            "store_hash": self._frozen_lemma_store.store_hash,
+                            "lemmas": [
+                                {
+                                    "lemma_id": hit.lemma.lemma_id,
+                                    "statement": hit.lemma.statement,
+                                    "domain": hit.lemma.domain,
+                                    "assumptions": list(hit.lemma.assumptions),
+                                    "preconditions": list(hit.lemma.preconditions),
+                                    "conclusion": hit.lemma.conclusion,
+                                    "proof_outline_public": list(
+                                        hit.lemma.proof_outline_public
+                                    ),
+                                    "content_hash": hit.lemma.content_hash,
+                                }
+                                for hit in frozen_lemma_hits
+                            ],
+                        },
+                    )
+            trace.add(
+                "frozen_lemma_cache",
+                enabled=self._frozen_lemma_store is not None,
+                store_hash=(
+                    self._frozen_lemma_store.store_hash
+                    if self._frozen_lemma_store is not None
+                    else ""
+                ),
+                hits=[
+                    hit.to_trace_dict()
+                    for hit in frozen_lemma_hits
+                ],
+                runtime_write_count=0,
+            )
             trace.add(
                 "problem_parsed",
                 problem_type=session.problem_ir.problem_type,
@@ -347,7 +436,7 @@ class MathForgeHarness:
             )
             router_unreachable = (
                 router_enabled
-                and self._config.max_model_calls - session.budget.used_calls
+                and self._config.max_model_calls
                 <= 1 + int(potential_verifier)
             )
             if router_unreachable:
@@ -428,7 +517,15 @@ class MathForgeHarness:
             allocation = CallAllocationPlan.build(
                 max_calls=self._config.max_model_calls,
                 router_calls=session.budget.used_calls,
-                candidate_count=session.route_plan.candidate_count,
+                candidate_count=(
+                    max(2, session.route_plan.candidate_count)
+                    if (
+                        shadow_outcome is not None
+                        and shadow_outcome.exact
+                        and self._config.enable_alternatives
+                    )
+                    else session.route_plan.candidate_count
+                ),
                 verifier_required=verifier_required,
                 repair_requested=False,
                 lemma_requested=False,
@@ -635,7 +732,57 @@ class MathForgeHarness:
                 context_views=solver_contexts,
                 role_skill_contexts=role_skill_contexts,
                 event_callback=trace.add,
+                fanout_decider=(
+                    lambda primary, budget: self._adaptive_fanout.decide(
+                        session.route_plan,
+                         primary,
+                         budget,
+                         required_stage_reserve=allocation.verifier,
+                         shadow_consistency=self._shadow_consistency(
+                             primary,
+                             shadow_outcome,
+                             session.problem_ir.answer_type,
+                         ),
+                     )
+                 ),
+             )
+            shadow_candidate = (
+                shadow_outcome.to_candidate(session.problem_ir.answer_type)
+                if shadow_outcome is not None
+                else None
             )
+            trace.add(
+                "shadow_probe_completed",
+                enabled=self._shadow_executor is not None,
+                **(
+                    shadow_outcome.to_trace_dict(include_answer=True)
+                    if shadow_outcome is not None
+                    else {
+                        "status": "disabled",
+                        "capability": "",
+                        "normalized_input": "",
+                        "final_answer": "",
+                        "public_solution_steps": [],
+                        "assumptions": [],
+                        "limitations": [],
+                        "elapsed_seconds": 0.0,
+                    }
+                ),
+                disclosed_after_primary=True,
+                model_calls_added=0,
+            )
+            if shadow_candidate is not None:
+                fanout.candidates.append(shadow_candidate)
+                trace.add(
+                    "candidate_generation_started",
+                    candidate_id=shadow_candidate.candidate_id,
+                    role=shadow_candidate.role,
+                    planned_method_family="deterministic-shadow",
+                )
+                trace.add(
+                    "candidate_generated",
+                    **candidate_trace_payload(shadow_candidate),
+                )
             bounded_candidates = []
             for candidate in fanout.candidates:
                 try:
@@ -662,6 +809,16 @@ class MathForgeHarness:
                 else:
                     bounded_candidates.append(candidate)
             fanout.candidates = bounded_candidates
+            session.route_plan = replace(
+                session.route_plan,
+                candidate_count=max(
+                    1,
+                    sum(
+                        candidate.source.startswith("llm_")
+                        for candidate in fanout.candidates
+                    ),
+                ),
+            )
             fanout.failures.sort(key=lambda item: item.candidate_id)
             session.candidates.extend(fanout.candidates)
             trace.add(
@@ -678,16 +835,20 @@ class MathForgeHarness:
             if not fanout.candidates:
                 raise RuntimeError("all solver branches failed")
             if session.budget.must_finalize():
-                for candidate in fanout.candidates:
-                    self._trace_candidate_evidence(
-                        trace,
-                        candidate,
-                        [],
-                        status="skipped",
-                        reason="deadline_finalize",
-                    )
-                trace.add("deadline_finalize", stage="after_fanout")
-                raise RuntimeError("deterministic finalize reserve reached")
+                trace.add(
+                    "deadline_finalize",
+                    stage="after_fanout",
+                    retained_candidates=[
+                        candidate.candidate_id
+                        for candidate in fanout.candidates
+                    ],
+                    disabled=[
+                        "additional_model_calls",
+                        "lemma",
+                        "repair",
+                        "finalizer",
+                    ],
+                )
             self._transition(
                 session,
                 trace,
@@ -700,10 +861,37 @@ class MathForgeHarness:
                 session.budget,
                 fanout.candidates,
             )
+            if shadow_candidate is not None:
+                ledger.record_tool_result(
+                    candidate_id=shadow_candidate.candidate_id,
+                    claim_id=shadow_candidate.claims[0].claim_id,
+                    result=shadow_outcome.to_tool_result(),
+                    arguments={
+                        "capability": shadow_outcome.capability,
+                        "normalized_input": shadow_outcome.normalized_input,
+                    },
+                    assumptions=list(shadow_outcome.assumptions),
+                    domains=session.problem_ir.domains,
+                    duration_ms=shadow_outcome.elapsed_seconds * 1000.0,
+                    timeout_seconds=min(5.0, self._config.max_tool_seconds),
+                    claim_kind="equality",
+                    input_complete=True,
+                    context_complete=True,
+                    request_status="ready",
+                    schema_valid=True,
+                )
             tool_results = []
             admission_rejections: dict[str, list[str]] = {}
             admitted_candidates = []
             for item in fanout.candidates:
+                if (
+                    item.parse_tier == "answer_recovered"
+                    and not self._config.enable_tools
+                ):
+                    admission_rejections[item.candidate_id] = [
+                        "answer_recovery_evidence_unavailable"
+                    ]
+                    continue
                 admission = self._candidate_stage.evaluate(
                     item,
                     session.problem_ir,
@@ -905,6 +1093,7 @@ class MathForgeHarness:
                 )
             repair_service = ClaimRepairService(max_total_repairs=1)
             repair_attempted = False
+            replaced_source_candidate_ids: set[str] = set()
             if (
                 self._config.enable_repair
                 and self._config.enable_evidence
@@ -1013,6 +1202,11 @@ class MathForgeHarness:
                             reason=repair_result.reason,
                         )
                     repaired_candidates.append(repair_result.selected)
+                    if (
+                        repair_result.selected.candidate_id
+                        != item.candidate_id
+                    ):
+                        replaced_source_candidate_ids.add(item.candidate_id)
                 active_candidates = repaired_candidates
             evidence_gate = self._evidence_stage.hard_gate(
                 active_candidates,
@@ -1020,11 +1214,19 @@ class MathForgeHarness:
                 enabled=self._config.enable_evidence,
             )
             viable = evidence_gate.accepted
+            viable_candidate_ids = {
+                item.candidate_id
+                for item in viable
+            }
             trace.add(
                 "hard_evidence_gate",
                 accepted=[item.candidate_id for item in viable],
                 rejected=[
-                    item.candidate_id for item in fanout.candidates if item not in viable
+                    item.candidate_id
+                    for item in fanout.candidates
+                    if item.candidate_id not in viable_candidate_ids
+                    and item.candidate_id
+                    not in replaced_source_candidate_ids
                 ],
             )
             if not viable:
@@ -1236,30 +1438,51 @@ class MathForgeHarness:
                 )
                 if obligation.required
             ]
+            review_summaries = [
+                CandidateReviewSummary.from_candidate(item)
+                for item in viable
+            ]
+            conflict_matrix = CandidateConflictMatrix.build(
+                review_summaries
+            )
+            trace.add(
+                "candidate_conflict_matrix",
+                summaries=[
+                    summary.to_dict() for summary in review_summaries
+                ],
+                matrix=conflict_matrix.to_dict(),
+            )
+            verifier_required = (
+                self._config.enable_verifier
+                and self._config.enable_evidence
+                and bool(required_obligations)
+            )
             post_verifier_repair_requested = (
                 self._config.enable_repair
                 and self._config.enable_evidence
-                and self._config.enable_verifier
+                and verifier_required
                 and bool(required_obligations)
                 and not repair_attempted
                 and session.budget.deadline.exploration_allowed()
             )
-            if post_verifier_repair_requested:
+            if verifier_required:
                 allocation = CallAllocationPlan.build(
                     max_calls=self._config.max_model_calls,
                     router_calls=allocation.router,
                     candidate_count=session.route_plan.candidate_count,
                     verifier_required=verifier_required,
-                    repair_requested=True,
+                    repair_requested=post_verifier_repair_requested,
                     lemma_requested=allocation.lemma_reserve > 0,
                     finalizer_requested=allocation.finalizer_reserve > 0,
-                    reverification_requested=True,
+                    reverification_requested=post_verifier_repair_requested,
                 )
                 session.budget.set_allocation_plan(allocation)
                 trace.add(
                     "call_allocation_rebalanced",
                     evidence_repair_triggers={},
-                    post_verifier_repair_requested=True,
+                    post_verifier_repair_requested=(
+                        post_verifier_repair_requested
+                    ),
                     **allocation.to_dict(),
                 )
             skeptic_reviewed: set[str] = set()
@@ -1268,7 +1491,7 @@ class MathForgeHarness:
             if (
                 self._config.enable_verifier
                 and self._config.enable_evidence
-                and session.route_plan.risk_level in {"medium", "high"}
+                and verifier_required
                 and required_obligations
                 and session.budget.deadline.exploration_allowed()
             ):
@@ -1289,20 +1512,28 @@ class MathForgeHarness:
             post_repair_revalidated = False
             verifier_triggers: dict[str, list[str]] = {}
             if verifier_result is not None:
-                for finding in verifier_result.findings:
-                    if (
-                        finding.status in {"fail", "unknown"}
-                        and finding.claim_id is not None
-                    ):
-                        verifier_triggers.setdefault(
-                            finding.candidate_id,
-                            [],
-                        ).append(finding.claim_id)
+                verifier_triggers = actionable_verifier_failures(
+                    verifier_result.findings
+                )
+            atomic_repair_budget = session.budget.snapshot()
+            repair_pair_available = (
+                atomic_repair_budget.remaining_calls >= 2
+                and atomic_repair_budget.stage_remaining.get("repair", 0) >= 1
+                and atomic_repair_budget.stage_remaining.get("verifier", 0) >= 1
+                and atomic_repair_budget.exploration_open
+            )
+            trace.add(
+                "repair_actionability_gate",
+                actionable_claims=verifier_triggers,
+                atomic_budget_pair_available=repair_pair_available,
+                budget=atomic_repair_budget.to_dict(),
+            )
             if (
                 post_verifier_repair_requested
                 and allocation.repair_reserve > 0
                 and allocation.verifier > 1
                 and verifier_triggers
+                and repair_pair_available
                 and session.budget.deadline.exploration_allowed()
             ):
                 problem_ir = session.problem_ir
@@ -1505,6 +1736,10 @@ class MathForgeHarness:
                         for candidate in viable
                     ]
                     break
+            completion_status_by_id = {
+                item.candidate_id: "not_required"
+                for item in viable
+            }
             if (
                 self._config.enable_proof_obligations
                 and required_obligations
@@ -1522,10 +1757,36 @@ class MathForgeHarness:
                     for decision in completion_decisions
                     if decision.status == "complete"
                 }
+                hard_failed_ids = {
+                    decision.candidate_id
+                    for decision in completion_decisions
+                    if decision.status == "failed"
+                }
+                unreviewed_expanded_ids = (
+                    expanded_ids - skeptic_reviewed
+                    if verifier_required
+                    else set()
+                )
+                retained_ids = {
+                    decision.candidate_id
+                    for decision in completion_decisions
+                    if (
+                        decision.status != "failed"
+                        and decision.candidate_id not in unreviewed_expanded_ids
+                    )
+                }
+                completion_status_by_id = {
+                    decision.candidate_id: decision.status
+                    for decision in completion_decisions
+                }
                 trace.add(
                     "proof_completion_gate",
-                    accepted=sorted(completed_ids),
-                    mode="strict",
+                    accepted=sorted(retained_ids),
+                    fully_verified=sorted(completed_ids),
+                    degraded_accepted=sorted(
+                        retained_ids - completed_ids
+                    ),
+                    mode="best_available",
                     verifier_reason=verifier_reason,
                     decisions=[
                         {
@@ -1544,16 +1805,27 @@ class MathForgeHarness:
                         {
                             "candidate_id": decision.candidate_id,
                             "status": decision.status,
+                            "gate_reason": (
+                                "hard_failure"
+                                if decision.candidate_id in hard_failed_ids
+                                else "expanded_candidate_not_skeptic_reviewed"
+                            ),
                             "unresolved_obligation_ids": decision.unresolved_obligation_ids,
                             "failed_obligation_ids": decision.failed_obligation_ids,
                             "failed_claim_ids": decision.failed_claim_ids,
                         }
                         for decision in completion_decisions
-                        if decision.status != "complete"
-                        and decision.candidate_id not in completed_ids
+                        if (
+                            decision.candidate_id in hard_failed_ids
+                            or decision.candidate_id in unreviewed_expanded_ids
+                        )
                     ],
                 )
-                viable = [item for item in viable if item.candidate_id in completed_ids]
+                viable = [
+                    item
+                    for item in viable
+                    if item.candidate_id in retained_ids
+                ]
             self._transition(
                 session,
                 trace,
@@ -1620,20 +1892,67 @@ class MathForgeHarness:
                 },
             )
             if not viable:
-                raise RuntimeError("no proof candidate passed completion gate")
-            arbitration = self._arbitration.select(
-                viable,
-                session.evidence,
-                session.proof_obligations,
-                budget=session.budget,
-                problem=session.problem_ir,
-            )
-            candidate = arbitration.selected
-            rank_details = [rank.to_dict() for rank in arbitration.ranks]
+                raise RuntimeError("all proof candidates have hard failures")
+            if len(viable) == 1:
+                candidate = viable[0]
+                ranking = [candidate.candidate_id]
+                single_coverage = (
+                    1.0
+                    if completion_status_by_id.get(
+                        candidate.candidate_id,
+                        "not_required",
+                    )
+                    in {"complete", "not_required"}
+                    else 0.0
+                )
+                rank_details = [
+                    {
+                        "candidate_id": candidate.candidate_id,
+                        "hard_fail_count": 0,
+                        "required_coverage": single_coverage,
+                        "answer_consistency": 1,
+                        "independent_agreement": 0,
+                        "soft_score": 0,
+                        "lexicographic_key": [
+                            0,
+                            -single_coverage,
+                            -1,
+                            0,
+                            0,
+                        ],
+                    }
+                ]
+                equivalence_clusters = [[candidate.candidate_id]]
+                equivalence_unknown_pairs = []
+                equivalence_disagreement_pairs = []
+                used_llm_arbiter = False
+                selection_mode = "single_candidate_deterministic"
+            else:
+                arbitration = self._arbitration.select(
+                    viable,
+                    session.evidence,
+                    session.proof_obligations,
+                    budget=session.budget,
+                    problem=session.problem_ir,
+                )
+                candidate = arbitration.selected
+                ranking = [
+                    rank.candidate_id for rank in arbitration.ranks
+                ]
+                rank_details = [
+                    rank.to_dict() for rank in arbitration.ranks
+                ]
+                equivalence_clusters = arbitration.clusters
+                equivalence_unknown_pairs = arbitration.unknown_pairs
+                equivalence_disagreement_pairs = (
+                    arbitration.disagreement_pairs
+                )
+                used_llm_arbiter = arbitration.used_llm_arbiter
+                selection_mode = "multi_candidate_arbitration"
             trace.add(
                 "candidate_arbitrated",
                 selected=candidate.candidate_id,
-                ranking=[rank.candidate_id for rank in arbitration.ranks],
+                ranking=ranking,
                 rank_details=rank_details,
                 viable_candidates=[item.candidate_id for item in viable],
                 rejected_candidates=self._arbitration_rejections(
@@ -1642,13 +1961,29 @@ class MathForgeHarness:
                     candidate_precheck_rejections,
                 ),
                 selection_reason=(
+                    "prefer complete candidates when available, then select the "
                     "lowest lexicographic evidence rank; stable generation order "
                     "breaks exact ties"
                 ),
-                equivalence_clusters=arbitration.clusters,
-                equivalence_unknown_pairs=arbitration.unknown_pairs,
-                equivalence_disagreement_pairs=arbitration.disagreement_pairs,
-                used_llm_arbiter=arbitration.used_llm_arbiter,
+                selected_verification_status=completion_status_by_id.get(
+                    candidate.candidate_id,
+                    "not_required",
+                ),
+                selected_source=candidate.source,
+                selection_quality=(
+                    "degraded_shadow_only"
+                    if candidate.source == "deterministic_shadow"
+                    and not any(
+                        item.source.startswith("llm_")
+                        for item in viable
+                    )
+                    else "standard"
+                ),
+                selection_mode=selection_mode,
+                equivalence_clusters=equivalence_clusters,
+                equivalence_unknown_pairs=equivalence_unknown_pairs,
+                equivalence_disagreement_pairs=equivalence_disagreement_pairs,
+                used_llm_arbiter=used_llm_arbiter,
             )
             selected_candidate_id = candidate.candidate_id
             candidate_states = self._candidate_final_states(
@@ -1686,9 +2021,13 @@ class MathForgeHarness:
             )
             if validation_errors:
                 trace.add("answer_validation_warning", codes=validation_errors)
-            final_response = self._formatter.format(candidate, session.problem_ir)
-            if not final_response.strip():
+            deterministic_response = self._formatter.format(
+                candidate,
+                session.problem_ir,
+            )
+            if not deterministic_response.strip():
                 raise ValueError("empty formatted response")
+            final_response = deterministic_response
             self._transition(
                 session,
                 trace,
@@ -1732,11 +2071,22 @@ class MathForgeHarness:
                             "",
                         ),
                     )
-                    final_response = finalization.text
+                    final_response = (
+                        finalization.text
+                        if finalization.text.strip()
+                        else deterministic_response
+                    )
                     trace.add(
                         "finalization_completed",
-                        used_llm=finalization.used_llm,
-                        reason=finalization.reason,
+                        used_llm=(
+                            finalization.used_llm
+                            and bool(finalization.text.strip())
+                        ),
+                        reason=(
+                            finalization.reason
+                            if finalization.text.strip()
+                            else "finalizer_empty"
+                        ),
                     )
             elif (
                 self._config.enable_finalizer
@@ -1748,13 +2098,29 @@ class MathForgeHarness:
                     reason="soft_deadline",
                 )
             final_response, final_count = self._validated_final_response(
-                final_response
+                final_response,
+                exact_answer=candidate.final_answer,
             )
             trace.add(
                 "final_answer_selected",
                 candidate_id=candidate.candidate_id,
                 selection_reason=(
-                    "selected by hard-evidence gate and lexicographic arbitration"
+                    "selected as the best available non-disproved candidate by "
+                    "verification status and lexicographic evidence arbitration"
+                ),
+                verification_status=completion_status_by_id.get(
+                    candidate.candidate_id,
+                    "not_required",
+                ),
+                selected_source=candidate.source,
+                selection_quality=(
+                    "degraded_shadow_only"
+                    if candidate.source == "deterministic_shadow"
+                    and not any(
+                        item.source.startswith("llm_")
+                        for item in viable
+                    )
+                    else "standard"
                 ),
                 public_solution={
                     "solution_text": candidate.solution_text,
@@ -1855,6 +2221,7 @@ class MathForgeHarness:
                 None,
             )
 
+        problem_memo.clear()
         terminalizer.safe(
             "session_freeze",
             session.freeze,
@@ -1972,6 +2339,31 @@ class MathForgeHarness:
             lambda: session.budget.to_dict(),
             empty_budget_summary,
         )
+        health_summary = terminalizer.safe(
+            "closed_loop_health",
+            lambda: build_closed_loop_health(
+                trace.internal_events,
+                budget=budget_summary,
+                selected_candidate_id=selected_candidate_id,
+                outcome=outcome,
+                error_code=error_code,
+            ),
+            minimal_closed_loop_health(
+                health=(
+                    "timeout"
+                    if outcome == "timeout"
+                    else "failed"
+                    if outcome != "primary"
+                    else "degraded"
+                ),
+                root_failure_code=error_code,
+            ),
+        )
+        terminalizer.safe(
+            "closed_loop_health_trace",
+            lambda: trace.add("closed_loop_health", **health_summary),
+            None,
+        )
         terminalizer.safe(
             "budget_summary_trace",
             lambda: trace.add(
@@ -2038,8 +2430,12 @@ class MathForgeHarness:
                 lambda: self._run_provenance.to_dict(),
                 {},
             ),
+            outcome=outcome,
+            final_phase=session.phase.value,
+            error_code=error_code,
         )
         result["_public_output_limits"] = {
+            "final_response_max_chars": self._config.final_response_max_chars,
             "public_result_max_bytes": self._config.public_result_max_bytes,
             "judge_trace_max_events": self._config.judge_trace_max_events,
             "judge_trace_max_chars": self._config.judge_trace_max_chars,
@@ -2052,7 +2448,59 @@ class MathForgeHarness:
         }
         return result
 
-    def _validated_final_response(self, text: str):
+    def _run_shadow_probe(self, problem_ir) -> ShadowOutcome:
+        executor = self._shadow_executor
+        if executor is None:
+            return ShadowOutcome("unsupported", "", "")
+        timeout = min(5.0, self._config.max_tool_seconds)
+        started = perf_counter()
+        result = executor.execute(
+            "deterministic_shadow_probe",
+            {
+                "problem_ir": problem_ir.to_dict(),
+                "time_budget_seconds": timeout,
+            },
+            timeout=timeout,
+        )
+        payload = result.payload.get("outcome")
+        if isinstance(payload, dict):
+            try:
+                return ShadowOutcome.from_dict(payload)
+            except (TypeError, ValueError):
+                pass
+        return ShadowOutcome(
+            "failed",
+            "",
+            problem_ir.normalized_problem,
+            limitations=(
+                "shadow_time_budget_exhausted"
+                if "timed out" in result.summary
+                else "isolated_shadow_probe_failed",
+            ),
+            elapsed_seconds=round(perf_counter() - started, 6),
+        )
+
+    @staticmethod
+    def _shadow_consistency(
+        primary,
+        shadow: ShadowOutcome | None,
+        answer_type: str,
+    ) -> str:
+        if primary is None or shadow is None or not shadow.exact:
+            return "not_available"
+        return (
+            "consistent"
+            if canonical_answer(primary.final_answer, answer_type)
+            == canonical_answer(shadow.final_answer, answer_type)
+            else "conflict"
+        )
+
+    def _validated_final_response(self, text: str, *, exact_answer: str):
+        text = bound_final_response(
+            text,
+            exact_answer=exact_answer,
+            max_chars=self._config.final_response_max_chars,
+        )
         try:
             return text, self._context_budget.ensure_text_within_window(text)
         except ContextBudgetExceeded:
@@ -2305,6 +2753,30 @@ class MathForgeHarness:
             if verifier_result is not None
             else "verifier_unavailable"
         )
+        if (
+            verifier_result is None
+            or (
+                not verifier_result.used_llm
+                and verifier_reason
+                in {"verifier_unavailable", "finalize_cutoff"}
+            )
+        ):
+            verifier_status = "unavailable"
+        elif any(
+            item.status.strip().lower() == "fail"
+            for item in verifier_result.findings
+        ):
+            verifier_status = "fail"
+        elif (
+            not verifier_result.findings
+            or any(
+                item.status.strip().lower() == "unknown"
+                for item in verifier_result.findings
+            )
+        ):
+            verifier_status = "unknown"
+        else:
+            verifier_status = "pass"
         reviewed: set[str] = set()
         records = []
         for finding in (
@@ -2338,6 +2810,7 @@ class MathForgeHarness:
             ),
             reviewed_candidates=sorted(reviewed),
             reason=verifier_reason,
+            status=verifier_status,
             round=round_name,
         )
         return verifier_result, verifier_reason, reviewed, records

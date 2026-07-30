@@ -4,6 +4,42 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class CallBudgetSnapshot:
+    max_calls: int
+    used_calls: int
+    remaining_calls: int
+    remaining_seconds: float
+    exploration_open: bool
+    stage_remaining: dict[str, int]
+
+    def to_dict(self) -> dict:
+        return {
+            "max_calls": self.max_calls,
+            "used_calls": self.used_calls,
+            "remaining_calls": self.remaining_calls,
+            "remaining_seconds": self.remaining_seconds,
+            "exploration_open": self.exploration_open,
+            "stage_remaining": dict(self.stage_remaining),
+        }
+
+
+@dataclass(frozen=True)
+class FanoutDecision:
+    requested_candidates: int
+    admitted_candidates: int
+    reason_codes: tuple[str, ...]
+    budget: CallBudgetSnapshot
+
+    def to_dict(self) -> dict:
+        return {
+            "requested_candidates": self.requested_candidates,
+            "admitted_candidates": self.admitted_candidates,
+            "reason_codes": list(self.reason_codes),
+            "budget": self.budget.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
 class CallAllocationPlan:
     max_calls: int
     router: int
@@ -70,6 +106,7 @@ class CallAllocationPlan:
             remaining -= allocated[stage]
             if allocated[stage] < count:
                 unreachable.append(stage)
+        primary += min(1, remaining)
 
         return cls(
             max_calls=max_calls,
@@ -94,6 +131,38 @@ class CallAllocationPlan:
             "finalizer": self.finalizer_reserve,
         }
         return limits.get(stage, 0)
+
+    def with_stage_floors(
+        self,
+        used_by_stage: dict[str, int],
+    ) -> "CallAllocationPlan":
+        """Return a plan that never retracts already-consumed stage calls.
+
+        A re-plan is allowed to reduce *future* optional work, but it must not
+        make a previously legal call illegal.  The global ``max_calls`` quota
+        remains the authoritative cap for future consumption; stage limits are
+        cumulative limits and may therefore include calls that have already
+        been spent.
+        """
+
+        floors = {
+            str(stage): max(0, int(count))
+            for stage, count in (used_by_stage or {}).items()
+        }
+        return CallAllocationPlan(
+            max_calls=self.max_calls,
+            router=max(self.router, floors.get("router", 0)),
+            primary=max(self.primary, floors.get("primary", 0)),
+            alternatives=max(self.alternatives, floors.get("alternative", 0)),
+            verifier=max(self.verifier, floors.get("verifier", 0)),
+            repair_reserve=max(self.repair_reserve, floors.get("repair", 0)),
+            lemma_reserve=max(self.lemma_reserve, floors.get("lemma", 0)),
+            finalizer_reserve=max(
+                self.finalizer_reserve,
+                floors.get("finalizer", 0),
+            ),
+            unreachable_by_budget=self.unreachable_by_budget,
+        )
 
     def to_dict(self) -> dict:
         return {

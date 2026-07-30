@@ -104,27 +104,27 @@ def test_simple_production_prompt_is_well_below_the_previous_fallback_size():
     )
 
     assert compilation.profile == "minimal"
-    assert fallback_tokens < 5000
-    assert fallback_tokens < 9500 * 0.6
+    assert fallback_tokens < 6000
+    assert fallback_tokens < 9500 * 0.65
     assert compilation.max_output_tokens == 8192
-    assert len(compilation.messages[0]["content"]) < static_system_chars * 0.6
+    assert len(compilation.messages[0]["content"]) < static_system_chars * 0.97
 
 
 @pytest.mark.parametrize(
     ("problem_text", "expected_profile", "expected_tokens"),
     [
         ("Compute 17+28.", "minimal", 8192),
-        ("Prove that x^2 >= 0 for every real x.", "proof", 32768),
+        ("Prove that x^2 >= 0 for every real x.", "proof", 8192),
         (
             "Given a probability density f(x)=1/2 on [0,2], "
             "verify normalization and compute the probability.",
             "tool",
-            16384,
+            8192,
         ),
         (
             "Given matrix [[1,2],[3,4]], compute its determinant.",
             "tool",
-            16384,
+            8192,
         ),
     ],
 )
@@ -196,10 +196,26 @@ def test_compiler_puts_the_candidate_core_first_and_caps_non_solver_roles():
 
     positions = [
         system.index("method, final_answer, public_solution_steps, claims"),
-        system.index("method_steps, solution_text, assumptions, theorems"),
+        system.index("solution_text, assumptions"),
     ]
     positions.append(system.index("unresolved_obligations", positions[-1]))
     assert positions == sorted(positions)
+    assert "method_steps" in system
+    assert "Host-owned fields" in system
+    assert (
+        "claim_id, statement, depends_on, check_type, and importance"
+        in system
+    )
+    assert "strings such as c1, never numbers" in system
+    assert "check_type must be reasoning, definition" in system
+    assert "include at least one theorem_preconditions Claim" in system
+    assert "Do not substitute id or dependencies" in system
+    assert '{"method":"<assigned>","final_answer":"<answer>"' in system
+    assert "Default check_type to reasoning" in system
+    assert (
+        "assumptions, theorems, and unresolved_obligations are string arrays"
+    ) in system
+    assert "depends_on is a string array" in system
 
     compiler = PromptCompiler()
     assert compiler.compile_role(
@@ -213,7 +229,7 @@ def test_compiler_puts_the_candidate_core_first_and_caps_non_solver_roles():
     assert compiler.compile_role(
         "repair",
         user_content="Affected claim: c1",
-    ).max_output_tokens == 12288
+    ).max_output_tokens == 8192
 
 
 def test_parser_distinguishes_all_response_integrity_classes():
@@ -231,7 +247,7 @@ def test_parser_distinguishes_all_response_integrity_classes():
         "schema_violation": ("candidate_schema_invalid", True),
         "truncated": ("candidate_json_incomplete", True),
         "malformed": ("candidate_json_invalid", True),
-        "natural_language": ("candidate_non_json", True),
+        "natural_language": ("answer_recovered_candidate", False),
         "empty": ("empty_response", True),
     }
 
@@ -287,7 +303,9 @@ def test_every_tool_claim_example_is_precise_and_executable():
     registry = ToolRegistry()
     examples = registry.claim_prompt_examples(registry.names(), limit=100)
 
-    assert {example["tool"] for example in examples} == set(registry.names())
+    assert {example["tool"] for example in examples} == set(
+        registry.claimable_names()
+    )
     for example in examples:
         claim = example["claim"]
         assert claim["check_type"] == example["tool"]

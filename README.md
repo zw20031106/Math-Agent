@@ -26,6 +26,12 @@ StdIO MCP adapter is also disabled.
 The injected official client is the only model interface. No API keys, alternate
 model clients, native function calling, or network retrieval are used.
 
+The frozen official entry defaults to eight submitted cases. `ReasoningAgent`
+owns the effective case-admission boundary and permits at most four active
+solves; the competition model-call gate is also four. Candidate generation
+dispatches Primary before optional alternatives, so outer-runner settings are
+not required for first-call fairness.
+
 A Host-side Prompt Compiler selects a concise `minimal`, `standard`, `tool`,
 or `proof` contract from the parsed problem and deterministic route. Durable
 Candidate fields (`method`, `final_answer`, public steps, and Claims) are
@@ -76,14 +82,13 @@ mapping:
 `MathForgeHarness` results retain metrics and provenance for evaluation, but
 those fields are not exposed by the public agent. `status` is `success` only
 for a primary solution, `failed` for fallback or execution failure, and
-`timeout` for the 1,200-second per-case deadline.
+`timeout` for the competition profile's 900-second per-case boundary.
 
 For one atomic JSON file per input case, written immediately when that case
 finishes, use:
 
 ```bash
-export INTERN_MODEL=intern-s2-preview-397b
-python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json
+python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --model intern-s2-preview-397b --concurrency 4
 ```
 
 Files are named `<id>.json` and contain exactly `id`, `status`,
@@ -96,19 +101,18 @@ and its safe failure code are stored in `run_manifest.json`. Each terminal
 success, failure, or timeout is atomically persisted before `CASE_COMPLETED`
 is printed.
 
-The runner gives the frozen official client a 125-second HTTP window, matching
-the documented approximately 120-second provider response boundary plus a
-small transport allowance. It permits one retry only for an explicitly
+The runner derives a 150-second HTTP delivery window from the competition
+deadline profile. It permits one retry only for an explicitly
 classified, quickly returned rate-limit, 5xx, or connection failure; empty,
 invalid, incomplete, and timed-out responses are not replayed. The runner
 constructs the official client with one internal attempt, so all outer
 transport attempts remain observable. The competition model-call gate remains
-fixed at one concurrent request.
+fixed at four concurrent physical requests.
 
-The custom runner is strictly single-case: its default concurrency is one and
-other values are rejected, so a queued case never consumes its 1,200-second
-deadline before dispatch. Its execution queue is therefore bounded at one case;
-each result is atomically written before the next case begins. `run_manifest.json`
+The custom runner uses a rolling case window with default and maximum
+concurrency four; a queued case does not consume its 900-second deadline before
+dispatch. Each result is atomically written as soon as it finishes.
+`run_manifest.json`
 moves through `created`,
 `preflight_passed`, and `running`, then ends as `completed`, `degraded`,
 `aborted`, or `failed`. SIGINT/SIGTERM lets the active case finish its atomic
@@ -116,8 +120,11 @@ write, prevents another case from starting, and records `aborted`.
 
 To continue an interrupted or degraded run, repeat the command with
 `--resume`. The runner validates the input/config hashes, rejects duplicate or
-unknown case IDs, and validates every existing four-field JSON file and its
-manifest-bound hash. It skips only `success` by default and reruns
+unknown case IDs, checks model policy, concurrency, code identity, Schema and
+output-contract versions, and validates every existing four-field JSON file
+and its manifest-bound hash. Manifest 1.3 retains an `attempts` array; a
+superseded running attempt becomes `interrupted`, and reruns use a new
+`.trace-journal/attempt-000N/` directory. It skips only `success` by default and reruns
 `failed,timeout`; use `--rerun-status` to override that set. `--max-cases N`
 and `--stop-after-case ID` provide deterministic, resumable stopping points.
 
@@ -131,13 +138,16 @@ lifecycle contract therefore belongs to `scripts/run_case_outputs.py` unless
 written permission is granted to change the official baseline.
 
 Public Trace is an ordered audit narrative rather than a framework event dump.
-The returned Judge Trace V3 keeps configuration/routing/Skill summaries, only
-the selected Candidate's bounded public steps, evidence and proof-completion
-conclusions, arbitration, terminal category, and budget summary. Rejected
-Candidates retain only identity, role, method family, status, digest, rejection
-category, and evidence counts; their answers, steps, Claims, and full responses
-are excluded. Local JSONL journals use a separate sanitized Debug Trace Schema
-and are never returned by `ReasoningAgent`.
+The returned Judge Trace V3.1 keeps configuration/routing/Skill summaries,
+selected-Candidate public steps, evidence and proof-completion conclusions,
+arbitration, one closed-loop health summary, terminal category, and budget.
+Viable non-selected Candidates may expose bounded public answers and public
+steps for comparison; hard-rejected/failed Candidates never expose those
+fields. Claims, full model responses, and private reasoning remain excluded.
+Frozen-cache, deterministic-Shadow, adaptive-fanout, and cross-review decisions
+enter a safe aggregate event. Local JSONL journals use a separate sanitized
+Debug Trace Schema under `.trace-journal/attempt-000N/` and are never returned
+by `ReasoningAgent`.
 
 Judge output is bounded by the final indented UTF-8 serialization, total Trace
 characters/events, per-event characters, and rejected-Candidate count. Overflow
@@ -148,13 +158,15 @@ only stable safe reason codes such as `auth_or_permission_failure`,
 `candidate_schema_invalid`; credentials, raw exceptions, absolute local paths,
 and private reasoning remain outside the Judge Trace.
 
-The formal injected-client entry does not read or require `INTERN_MODEL`.
-Local benchmark runners require the exact
+The formal injected-client entry does not read or require `INTERN_MODEL` and
+records its model identity as unreported because the documented chat surface
+does not expose it.
+Local benchmark runners use an explicit `--model` argument whose default is the exact
 `intern-s2-preview-397b` version ID and reject aliases, case variants, and
 caller-supplied display labels. The official chat surface returns assistant
 content but no response model or thinking-mode metadata, so provenance records
-the requested model and marks those response-side fields as unobservable
-instead of inferring them.
+the locally validated requested model only in benchmark runs and marks formal
+response-side identity fields as unobservable instead of inferring them.
 
 Every role call uses one context-budget service and a server-clock-aware role
 policy. Configured limits are upper bounds; effective caps are Router/Finalizer
@@ -169,8 +181,9 @@ complete response inside the provider clock. The preferred counter is the pinned
 `internlm/Intern-S2-Preview-397B@35eba5f142353d180472cdad2d70b09d0a383113`;
 set `MATHFORGE_INTERN_S2_TOKENIZER_DIR` to a local snapshot containing the
 hash-verified tokenizer config, tokenizer JSON, and chat template. If it is
-absent or mismatched, the harness fails over to a conservative UTF-8 byte
-upper-bound and records the actual counting mode.
+absent or mismatched, the harness uses a recorded multilingual character
+estimator instead of counting every UTF-8 byte as one token. The configured
+context safety margin remains in force.
 
 ## Verification
 
@@ -210,10 +223,12 @@ wheelhouse; installation and the smoke test are offline.
 
 ## Runtime configuration
 
-- `INTERN_MODEL=intern-s2-preview-397b`: required only by local benchmark
-  runners; aliases fail closed.
+- `--model intern-s2-preview-397b`: explicit local-runner model selection;
+  aliases fail closed. This is not an environment-variable requirement.
+- `--concurrency 4`: local runner case concurrency; four is the default and
+  maximum.
 - `MATHFORGE_INTERN_S2_TOKENIZER_DIR`: optional pinned local tokenizer snapshot;
-  a mismatch activates the recorded UTF-8 fallback instead of loading it.
+  a mismatch activates the recorded multilingual estimator instead of loading it.
 
 The formal entry loads exactly `config/competition.json`. Harness feature and
 concurrency settings have no environment-variable override. Programmatic

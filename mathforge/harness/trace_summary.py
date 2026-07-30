@@ -34,6 +34,7 @@ def build_transport_summary(
                 "call_index": call_index,
                 "role": _ROLE_BY_STAGE.get(stage, stage),
                 "stage": stage,
+                "dispatched": bool(record.get("dispatched", False)),
                 "status": str(record.get("status", "unknown")),
                 "attempts": max(
                     0,
@@ -64,6 +65,7 @@ def build_transport_summary(
         "calls": calls,
         "summary": {
             "calls": len(calls),
+            "actual_dispatches": sum(call["dispatched"] for call in calls),
             "completed": sum(call["status"] == "completed" for call in calls),
             "failed": sum(call["status"] == "failed" for call in calls),
             "timeout": sum(call["status"] == "timeout" for call in calls),
@@ -112,6 +114,8 @@ def build_case_trace_summary(
                 "role": candidate.role,
                 "method": candidate.method,
                 "version": candidate.version,
+                "source": candidate.source,
+                "parse_tier": candidate.parse_tier,
                 "complete": bool(
                     candidate.final_answer.strip()
                     and candidate.public_solution_steps

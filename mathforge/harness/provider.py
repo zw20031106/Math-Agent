@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from threading import BoundedSemaphore, Event, Lock, Thread
+from collections import deque
+from threading import Event, Lock, Thread
 from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from mathforge.harness.model_policy import (
     stage_call_timeout,
     stage_output_cap,
 )
+from mathforge.harness.priority_scheduler import PriorityCallScheduler
 from mathforge.harness.transport import (
     ObservedModelResponse,
     classify_transport_failure,
@@ -49,7 +51,7 @@ class ModelCallGate:
             )
         if late_registry_limit < 1:
             raise ValueError("late_registry_limit must be positive")
-        self._semaphore = BoundedSemaphore(max_concurrency)
+        self._scheduler = PriorityCallScheduler(max_concurrency)
         self._max_background_tails = tail_limit
         self._late_registry_limit = int(late_registry_limit)
         self._health_lock = Lock()
@@ -58,6 +60,10 @@ class ModelCallGate:
         self._peak_tails = 0
         self._circuit_trips = 0
         self._fast_failures = 0
+        self._health_window: deque[bool] = deque(maxlen=8)
+        self._ordinary_failure_count = 0
+        self._ordinary_success_count = 0
+        self._consecutive_failures = 0
         self._next_call_index = 0
         self._late_registry: list[dict[str, Any]] = []
 
@@ -72,12 +78,18 @@ class ModelCallGate:
         queue_budget_seconds: float | None = None,
         stage_timeout_seconds: float | None = None,
         timing_callback=None,
+        dispatch_callback=None,
         **kwargs,
     ):
         if deadline is None:
             self._reject_open_circuit(timing_callback)
-            with self._semaphore:
+            self._scheduler.acquire(stage)
+            try:
+                if dispatch_callback is not None:
+                    dispatch_callback()
                 return function(**kwargs)
+            finally:
+                self._scheduler.release()
 
         self._reject_open_circuit(timing_callback)
         started = perf_counter()
@@ -99,8 +111,9 @@ class ModelCallGate:
                 deadline.remaining_for_model_call(),
             ),
         )
-        if acquire_timeout <= 0 or not self._semaphore.acquire(
-            timeout=acquire_timeout
+        if acquire_timeout <= 0 or not self._scheduler.acquire(
+            stage,
+            acquire_timeout,
         ):
             queue_elapsed = perf_counter() - started
             self._emit_timing(
@@ -114,10 +127,10 @@ class ModelCallGate:
         try:
             self._reject_open_circuit(timing_callback, queue_elapsed)
         except ModelCallRejected:
-            self._semaphore.release()
+            self._scheduler.release()
             raise
         if not deadline.can_start_model_call():
-            self._semaphore.release()
+            self._scheduler.release()
             self._emit_timing(
                 timing_callback,
                 queue_elapsed_seconds=queue_elapsed,
@@ -134,7 +147,7 @@ class ModelCallGate:
             ),
         )
         if execution_timeout <= 0:
-            self._semaphore.release()
+            self._scheduler.release()
             self._emit_timing(
                 timing_callback,
                 queue_elapsed_seconds=queue_elapsed,
@@ -149,6 +162,12 @@ class ModelCallGate:
         state = {"completed": False, "timed_out": False}
         execution_started = perf_counter()
         call_index = self._allocate_call_index()
+        if dispatch_callback is not None:
+            try:
+                dispatch_callback()
+            except Exception:
+                self._scheduler.release()
+                raise
 
         def invoke() -> None:
             try:
@@ -159,7 +178,7 @@ class ModelCallGate:
                 with state_lock:
                     state["completed"] = True
                     is_background_tail = state["timed_out"]
-                self._semaphore.release()
+                self._scheduler.release()
                 done.set()
                 if is_background_tail:
                     self._complete_tail(
@@ -169,6 +188,11 @@ class ModelCallGate:
                         ),
                         elapsed_seconds=perf_counter() - execution_started,
                     )
+                    if background_tail_callback is not None:
+                        try:
+                            background_tail_callback("completed")
+                        except Exception:
+                            pass
 
         Thread(
             target=invoke,
@@ -191,7 +215,10 @@ class ModelCallGate:
                     execution_elapsed_seconds=execution_elapsed,
                     total_elapsed_seconds=perf_counter() - started,
                 )
-                raise ModelCallRejected("model_response_deadline_exceeded")
+                raise ModelCallRejected(
+                    "model_response_deadline_exceeded",
+                    dispatched=True,
+                )
         execution_elapsed = perf_counter() - execution_started
         self._emit_timing(
             timing_callback,
@@ -211,8 +238,42 @@ class ModelCallGate:
                 "peak_tails": self._peak_tails,
                 "circuit_trips": self._circuit_trips,
                 "fast_failures": self._fast_failures,
+                "ordinary_failure_count": self._ordinary_failure_count,
+                "ordinary_success_count": self._ordinary_success_count,
+                "consecutive_failures": self._consecutive_failures,
+                "health_window_failures": sum(
+                    not outcome for outcome in self._health_window
+                ),
+                "health_window_size": len(self._health_window),
                 "late_registry": deepcopy(self._late_registry),
+                "scheduler": self._scheduler.snapshot(),
             }
+
+    def record_provider_result(
+        self,
+        *,
+        success: bool,
+        failure_code: str = "",
+    ) -> None:
+        """Record a provider result that was actually dispatched.
+
+        Queue rejection and deadline admission are scheduler events, not
+        provider health signals.  This method is called by the provider only
+        after the injected client's ``chat`` call has been dispatched or after
+        its response shape has been checked.
+        """
+
+        del failure_code
+        with self._health_lock:
+            outcome = bool(success)
+            self._health_window.append(outcome)
+            if outcome:
+                self._ordinary_success_count += 1
+                self._consecutive_failures = 0
+            else:
+                self._ordinary_failure_count += 1
+                self._consecutive_failures += 1
+            self._recompute_health_locked()
 
     def _reject_open_circuit(
         self,
@@ -246,7 +307,7 @@ class ModelCallGate:
                     self._circuit_trips += 1
                 self._health_state = "circuit_open"
             else:
-                self._health_state = "degraded"
+                self._recompute_health_locked()
 
     def _complete_tail(
         self,
@@ -271,9 +332,23 @@ class ModelCallGate:
                 del self._late_registry[
                     : len(self._late_registry) - self._late_registry_limit
                 ]
-            self._health_state = (
-                "healthy" if self._active_tails == 0 else "degraded"
-            )
+            self._recompute_health_locked()
+
+    def _recompute_health_locked(self) -> None:
+        if self._active_tails >= self._max_background_tails:
+            self._health_state = "circuit_open"
+            return
+        if self._active_tails:
+            self._health_state = "degraded"
+            return
+        failures = sum(not outcome for outcome in self._health_window)
+        window_size = len(self._health_window)
+        if self._consecutive_failures >= 2 or (
+            window_size >= 4 and failures >= 3 and failures * 2 >= window_size
+        ):
+            self._health_state = "degraded"
+        else:
+            self._health_state = "healthy"
 
     @staticmethod
     def _emit_timing(
@@ -373,12 +448,21 @@ class OfficialClientProvider:
                     if budget is not None and call_index is not None
                     else None
                 ),
+                dispatch_callback=(
+                    (
+                        lambda: budget.record_model_call_dispatched(call_index)
+                    )
+                    if budget is not None and call_index is not None
+                    else None
+                ),
                 messages=messages,
                 temperature=temperature,
                 max_tokens=allocation.max_output_tokens,
             )
         except ModelCallRejected as error:
             if budget is not None and call_index is not None:
+                if not error.dispatched:
+                    budget.refund(stage=stage)
                 if error.code != "model_response_deadline_exceeded":
                     budget.record_model_admission_rejection(error.code)
                 if error.code == "model_response_deadline_exceeded":
@@ -399,6 +483,10 @@ class OfficialClientProvider:
         except Exception as error:
             failure_code = classify_transport_failure(error)
             attempts = transport_attempts(error)
+            self._gate.record_provider_result(
+                success=False,
+                failure_code=failure_code,
+            )
             if budget is not None and call_index is not None:
                 budget.record_model_call_failed(
                     call_index,
@@ -414,6 +502,12 @@ class OfficialClientProvider:
             if budget is not None:
                 budget.record_provider_health(self._gate.health_snapshot())
         if not isinstance(response, str):
+            self._gate.record_provider_result(
+                success=False,
+                failure_code="response_shape_invalid",
+            )
+            if budget is not None:
+                budget.record_provider_health(self._gate.health_snapshot())
             if budget is not None and call_index is not None:
                 budget.record_model_call_failed(
                     call_index,
@@ -423,6 +517,12 @@ class OfficialClientProvider:
             raise ModelTransportError("response_shape_invalid")
         attempts = transport_attempts(response)
         if not response.strip():
+            self._gate.record_provider_result(
+                success=False,
+                failure_code="empty_response",
+            )
+            if budget is not None:
+                budget.record_provider_health(self._gate.health_snapshot())
             if budget is not None and call_index is not None:
                 budget.record_model_call_failed(
                     call_index,
@@ -431,7 +531,11 @@ class OfficialClientProvider:
                     transport_attempts=attempts,
                 )
             raise ModelTransportError("empty_response", attempts=attempts)
+        self._gate.record_provider_result(success=True)
+        if budget is not None:
+            budget.record_provider_health(self._gate.health_snapshot())
         output = self._context_budget.count_text(response)
+        output_budget_exceeded = output.tokens > allocation.max_output_tokens
         if budget is not None and call_index is not None:
             budget.record_model_call_completed(
                 call_index,
@@ -440,14 +544,21 @@ class OfficialClientProvider:
                 output_chars=len(response),
                 elapsed_seconds=perf_counter() - started,
                 transport_attempts=attempts,
+                output_budget_exceeded=output_budget_exceeded,
             )
             budget.record_tokens(output.tokens)
-        if output.tokens > allocation.max_output_tokens:
+        if (
+            allocation.prompt_tokens
+            + output.tokens
+            + allocation.safety_margin_tokens
+            > allocation.context_window_tokens
+        ):
             raise ContextBudgetExceeded(
-                "model response exceeds its dynamically allocated output budget"
+                "model response exceeds the configured context window"
             )
         return ObservedModelResponse(
             response,
             transport_attempts=attempts,
             model_call_index=call_index,
+            output_budget_exceeded=output_budget_exceeded,
         )

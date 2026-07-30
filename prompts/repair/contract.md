@@ -23,11 +23,8 @@ suggestion.
 
 Do not output Host-owned fields: `candidate_id`, `role`, `answer_type`,
 `planned_method_family`, `version`, `schema_version`, `parse_status`,
-`is_method_duplicate`, `contract_deviations`, or Claim verification status.
-
-Allowed `method_steps[].kind` values:
-`definition`, `transformation`, `theorem_application`, `construction`,
-`case_split`, `contradiction`, `computation`, `conclusion`, `other`.
+`parse_tier`, `source`, `method_steps`, `is_method_duplicate`,
+`contract_deviations`, or Claim verification status.
 
 Allowed `claims[].importance` values: `critical`, `supporting`.
 
@@ -41,23 +38,7 @@ Allowed `claims[].check_type` suggestions:
 Complete local-patch output example:
 
 {
-  "method": "<copy the supplied candidate method exactly>",
-  "method_steps": [
-    {
-      "step_id": "repair-s1",
-      "kind": "theorem_application",
-      "claim_ids": ["failed-claim"],
-      "theorem": "corrected theorem name or an empty string"
-    }
-  ],
-  "solution_text": "Public explanation of the corrected local derivation only.",
-  "public_solution_steps": [
-    "Replace the failed local step and explicitly verify its missing condition."
-  ],
-  "final_answer": "<corrected exact answer, or the unchanged exact answer>",
-  "assumptions": [],
-  "theorems": [],
-  "claims": [
+  "replacement_claims": [
     {
       "claim_id": "failed-claim",
       "statement": "Corrected replacement for the failed Claim.",
@@ -66,5 +47,9 @@ Complete local-patch output example:
       "importance": "critical"
     }
   ],
+  "public_solution_steps": [
+    "Replace the failed local step and explicitly verify its missing condition."
+  ],
+  "final_answer": "<corrected exact answer, or the unchanged exact answer>",
   "unresolved_obligations": []
 }

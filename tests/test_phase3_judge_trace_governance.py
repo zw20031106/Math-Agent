@@ -92,10 +92,11 @@ def test_formal_output_uses_judge_v3_while_local_journal_keeps_debug_events(
     tmp_path,
 ):
     config = _minimal_config()
+    journal_factory = TraceJournalFactory(tmp_path)
     harness = MathForgeHarness(
         FakeClient(),
         config,
-        trace_sink_factory=TraceJournalFactory(tmp_path),
+        trace_sink_factory=journal_factory,
     )
     internal = harness.solve("Compute 1+1.", {"idx": "judge-debug"})
     public = build_public_result("judge-debug", internal)
@@ -125,7 +126,11 @@ def test_formal_output_uses_judge_v3_while_local_journal_keeps_debug_events(
 
     records = [
         json.loads(line)
-        for line in (tmp_path / "judge-debug.trace.jsonl")
+        for line in (
+            tmp_path
+            / journal_factory.attempt_id
+            / "judge-debug.trace.jsonl"
+        )
         .read_text(encoding="utf-8")
         .splitlines()
     ]
@@ -139,7 +144,7 @@ def test_formal_output_uses_judge_v3_while_local_journal_keeps_debug_events(
     )
 
 
-def test_rejected_candidate_answer_and_solution_never_enter_judge_trace():
+def test_viable_candidate_public_answer_and_steps_enter_judge_trace():
     config = _minimal_config(
         max_model_calls=3,
         enable_alternatives=True,
@@ -164,7 +169,7 @@ def test_rejected_candidate_answer_and_solution_never_enter_judge_trace():
     assert result["status"] == "success"
     assert selected["public_solution"]["final_answer"] == "2"
     assert "SELECTED_ANSWER_MARKER" in result["final_response"]
-    assert "REJECTED_ANSWER_MARKER" not in serialized
+    assert "REJECTED_ANSWER_MARKER" in serialized
     assert all(
         set(item)
         == {
@@ -175,10 +180,19 @@ def test_rejected_candidate_answer_and_solution_never_enter_judge_trace():
             "content_digest",
             "rejection_category",
             "evidence_summary",
+            "public_final_answer",
+            "public_solution_steps",
+            "proof_status",
+            "selection_reason",
         }
         for item in summaries["candidates"]
     )
-    assert all("final_answer" not in item for item in summaries["candidates"])
+    assert any(
+        item["status"] == "viable_not_selected"
+        and item["public_final_answer"] == "3"
+        and item["public_solution_steps"]
+        for item in summaries["candidates"]
+    )
 
 
 def test_long_proof_and_sixty_four_claims_have_bounded_structured_judge_output():
@@ -288,6 +302,7 @@ def test_secret_path_traceback_and_private_payload_keys_are_absent():
 
 def test_competition_output_limits_are_explicit_and_public_projection_is_idempotent():
     config = load_competition_config()
+    assert config.final_response_max_chars == 20000
     assert config.public_result_max_bytes > config.judge_trace_max_chars
     assert config.judge_trace_max_events >= 8
     assert config.judge_trace_event_max_chars < config.judge_trace_max_chars
@@ -307,6 +322,8 @@ def test_judge_trace_rejects_a_final_response_changed_after_projection():
 
 
 def test_invalid_judge_output_limits_fail_configuration_validation():
+    with pytest.raises(ValueError, match="final_response_max_chars"):
+        _minimal_config(final_response_max_chars=100)
     with pytest.raises(ValueError, match="public_result_max_bytes"):
         _minimal_config(public_result_max_bytes=100)
     with pytest.raises(ValueError, match="judge_trace_event_max_chars"):

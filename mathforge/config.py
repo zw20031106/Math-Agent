@@ -9,7 +9,7 @@ from typing import ClassVar
 from mathforge.resources import resource_path
 
 
-CONFIG_SCHEMA_VERSION = "1.4"
+CONFIG_SCHEMA_VERSION = "1.5"
 COMPETITION_CONFIG_PATH = resource_path("config", "competition.json")
 _METADATA_FIELDS = frozenset({"schema_version", "profile", "status"})
 
@@ -42,6 +42,7 @@ class HarnessConfig:
     late_result_registry_max_entries: int = 64
     trace_max_chars: int = 0
     trace_max_events: int = 0
+    final_response_max_chars: int = 20000
     public_result_max_bytes: int = 4000000
     judge_trace_max_events: int = 64
     judge_trace_max_chars: int = 196608
@@ -65,6 +66,8 @@ class HarnessConfig:
     enable_rag: bool = True
     enable_repair: bool = True
     enable_finalizer: bool = False
+    enable_shadow: bool = False
+    enable_frozen_lemma_store: bool = False
 
     def __post_init__(self) -> None:
         self.validate()
@@ -113,6 +116,8 @@ class HarnessConfig:
             "enable_rag",
             "enable_repair",
             "enable_finalizer",
+            "enable_shadow",
+            "enable_frozen_lemma_store",
         }
         for name in bool_fields:
             if type(getattr(self, name)) is not bool:
@@ -129,6 +134,7 @@ class HarnessConfig:
             "context_safety_margin_tokens": (1, 131072),
             "trace_max_chars": (0, 1000000),
             "trace_max_events": (0, 100000),
+            "final_response_max_chars": (4096, 200000),
             "public_result_max_bytes": (4096, 8000000),
             "judge_trace_max_events": (8, 256),
             "judge_trace_max_chars": (4096, 1000000),

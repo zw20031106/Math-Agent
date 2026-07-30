@@ -2,6 +2,169 @@
 
 ## Unreleased
 
+### 0729 remediation phase 6 (2026-07-29)
+
+- Upgraded Judge Trace to V3.1 with one protected `closed_loop_health`
+  event per case, deterministic status/outcome/proof consistency checks, and
+  preservation of specific model transport failure codes.
+- Added safe decision summaries for Frozen Lemma Cache, deterministic Shadow,
+  adaptive fanout, and Candidate cross-review; viable non-selected Candidates
+  now expose only bounded public answers and public solution steps.
+- Fixed proof summaries without a selected Candidate and prevented Windows
+  path redaction from corrupting LaTeX commands such as `\int`, `\in`, and
+  `\lim`.
+- Added attempt-scoped `.trace-journal/attempt-000N/` directories and
+  Manifest 1.3 attempt history. Resume marks a superseded running attempt as
+  interrupted and validates model policy, concurrency, code identity,
+  configuration, schemas, and the four-field output contract.
+- Isolated console write failures from already-persisted case results and
+  added Phase 6 regression coverage for health, root-cause retention,
+  compression, attempt recovery, and resume compatibility.
+
+### 0729 remediation phases 4-5 (2026-07-29)
+
+- Added budget-aware adaptive fanout after Primary, capped optional
+  Alternatives at two, protected required-stage reserves, and suppressed
+  no-benefit branches for complete low-risk candidates.
+- Added public Candidate conflict matrices and one joint cross-review,
+  operation-derived proof obligations, explicit four-state verifier reporting,
+  actionable-failure repair gates, atomic Repair/Reverify reservation, and
+  deterministic single-Candidate finalization.
+- Added a Host-owned deterministic Shadow capability registry for restricted
+  algebra, systems, matrices, limits, integrals, and sums. Shadow answers remain
+  hidden from Primary, enter Candidate v2 with independent provenance and hard
+  evidence, and provide a concrete degraded-quality result when model branches
+  fail.
+- Added solve-local L0/L1 memoization and a hash-checked, runtime-read-only
+  Frozen Lemma Store with strict assumption revalidation and a separate
+  offline human-review-to-freeze builder.
+- Changed the candidate competition timing profile to a 900-second outer
+  boundary, 850-second Harness hard deadline, 600-second soft cutoff,
+  720-second exploration cutoff, and 50-second terminal reserve while
+  preserving the 20,000-character final response and unbounded internal trace
+  settings.
+- Added Phase 4 and Phase 5 execution reports plus deterministic regressions
+  for fanout, proof closure, Shadow isolation/fallback/conflict, Frozen Store
+  immutability, and deadline contracts.
+
+### 0729 remediation phases 2-3 (2026-07-29)
+
+- Added one bounded Primary recovery envelope for retryable transport failures
+  or Candidate contract correction, while local transport remains single-shot.
+- Added stage-priority physical-call scheduling, actual-dispatch accounting,
+  background-tail permit retention, budget snapshots, and deterministic Router
+  defaults for the competition profile.
+- Extended Candidate v2 with Host-owned source and parse tiers, accepted safe
+  recovered/answer-recovered responses behind deterministic gates, and made
+  method-label differences a diversity signal instead of an admission failure.
+- Added complete-Candidate tail extraction, Host-generated MethodSteps,
+  claim-local `CandidatePatch` repair, public cross-review summaries, and a
+  deterministic conflict matrix.
+- Added Phase 2 and Phase 3 execution reports and offline transport, scheduling,
+  parsing, Host-ownership, Repair Patch, and cross-review regressions.
+
+### 0729 remediation phases 0-1 (2026-07-29)
+
+- Added sanitized live-response replay fixtures and strict regression
+  characterizations for all defects assigned to later phases.
+- Added a four-case admission boundary to `ReasoningAgent`, aligned the
+  competition model-call gate at four, and made Candidate generation dispatch
+  Primary before optional alternatives.
+- Replaced eager full-dataset submission with a rolling four-case scheduler;
+  each completed case is still persisted immediately and resume compatibility
+  now includes case concurrency.
+- Removed the local retry client's network-wide lock. Local runners select the
+  exact `intern-s2-preview-397b` model through `--model` and no longer require
+  `INTERN_MODEL` or `LOCAL_MAX_CONCURRENCY`.
+- Added Phase 0 and Phase 1 execution reports plus offline concurrency,
+  scheduling, manifest, model-selection, and Primary-first regression tests.
+
+### 0728 audit remediation phases 0-4 (2026-07-29)
+
+- Added regression characterization for deadline-bound Candidate retention and
+  response/context-budget handling, and refreshed prompt-content provenance.
+- Raised formal Harness model concurrency to three, separated timed-out calls
+  into a bounded background-tail pool, and opened the circuit only after the
+  configured tail threshold instead of after one slow call.
+- Preserved valid responses that arrive before their provider timeout even
+  when deterministic finalization has begun.
+- Refunded call allocations for requests rejected before dispatch and retained
+  completed responses that exceed a role's soft output budget while remaining
+  inside the 256K context boundary.
+- Replaced UTF-8-byte token estimation with a conservative multilingual
+  estimator and separated model-start, deterministic-finalization, and local
+  stage deadline semantics.
+- Replaced the false fixed formal-model identity with an explicit
+  `unreported` identity for the injected official client; local validation
+  continues to require an exact configured model ID.
+- Changed proof completion to best-available arbitration: incomplete original
+  Candidates remain eligible, hard-failed Candidates are rejected, and
+  unreviewed lemma-expanded Candidates remain barred from arbitration.
+- Added empty-LLM-finalizer rollback, terminalization failure metrics,
+  candidate-ID-based rejection bookkeeping, and less aggressive high-risk
+  routing.
+- Removed the ignored generated `build/` source duplicate and refreshed build
+  provenance hashes. Added a stage execution report for every remediation
+  phase.
+
+### Phase 6 live-model validation (2026-07-28)
+
+- Raised the L1 structured preflight output budget from 256 to 4,096 tokens
+  after the official Intern-S2 397B client returned a response truncated at
+  `{"` while spending the small budget on reasoning. The exact
+  `{"status":"ok"}` semantic gate remains unchanged.
+- Added the exact model-owned Claim and MethodStep key sets to the compact
+  runtime solver protocol after the live L2 probe improvised common but
+  non-contract `id`, `step_number`, `description`, and `justification` fields.
+- Required string Claim/MethodStep identifiers and enumerated the allowed
+  `check_type` values after the next live probe emitted numeric step IDs and an
+  unsupported check suggestion.
+- Reserved one otherwise-unused Primary call and retry a rejected Primary
+  candidate contract once at temperature zero. The retry remains inside the
+  existing call allocation, deadline, context, parser, and evidence gates.
+- Require theorem-using candidates to emit a theorem-preconditions Claim, and
+  dynamically allocate Verifier review whenever required obligations exist.
+  Low-risk routing no longer makes strict proof completion impossible.
+- Convert malformed or natural-language symbolic tool inputs into bounded soft
+  tool errors at the resource boundary instead of allowing `SyntaxError` to
+  terminate the entire Harness run.
+- Set the public `final_response` budget to 20,000 characters as a versioned
+  configuration value. Limit handling preserves the complete exact-answer
+  block, while Judge Trace remains governed by its separate evidence budgets.
+- Added a compact exact Candidate JSON skeleton to the production prompt and
+  feed safe field-level parser deviations into the bounded zero-temperature
+  Primary retry. Nested Candidate schema failures now enter the same retry
+  path, and final branch failures retain only safe validation codes.
+- Treat an assigned method-family mismatch as a retryable model response error
+  and enforce the same method contract again at deterministic Candidate
+  admission instead of merely reducing its arbitration score.
+- Make L2 model preflight use the production `SolverExecutor`, Parser, method
+  contract, and one bounded feedback retry. A single stochastic schema miss no
+  longer aborts a run under a stricter path than the real case path.
+- Preserve safe first-attempt Candidate deviation codes when the bounded
+  corrective retry encounters a transport failure; raw provider errors and
+  failed Candidate text remain excluded.
+- Normalize nested-brace LaTeX fractions and common Unicode mathematical
+  constants/operators in strict benchmark scoring after live outputs exposed
+  false `invalid_actual_syntax` results for equivalent answers.
+- Raise VerifierSkeptic's request window from 90 to the existing 125-second
+  provider boundary after a valid live Candidate was discarded when its
+  required Verifier timed out early and tripped the background-tail circuit.
+- Separate the official 120-second generation boundary, a 150-second HTTP
+  delivery window, and a 165-second Harness gate window after live validation
+  showed that a local system proxy could consume the former five-second grace.
+  Apply the same reasoning-call window to repair and lemma roles.
+- Classify proxy/TLS EOF and connection-reset signatures as retryable network
+  connection failures, and bound Candidate/repair output to 8,192 tokens.
+  This still exceeds the 20,000-character public answer budget while making a
+  complete Candidate realistically returnable inside the provider generation
+  window.
+- Specify scalar and list-item types for every model-owned Candidate field after
+  a live 397B response used an object-valued `theorems[0]` despite otherwise
+  valid strict JSON.
+- Normalize Unicode lambda, alpha, and beta in symbolic scoring after a correct
+  live characteristic polynomial was misreported as invalid syntax.
+
 ### Phase 5 architecture and engineering governance (2026-07-27)
 
 - Added typed Candidate, Evidence, and Proof Stage boundaries without changing

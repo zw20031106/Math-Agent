@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import main as official_main
+from user_agent import CASE_MAX_CONCURRENCY
 
 
 class _StubAgent:
@@ -30,5 +31,6 @@ def test_frozen_official_entry_preserves_agent_content_but_not_public_status():
     assert "id" not in output
 
 
-def test_frozen_official_entry_default_concurrency_is_documented_boundary():
+def test_agent_bounds_the_frozen_outer_dispatch_to_four_active_cases():
     assert official_main.LOCAL_MAX_CONCURRENCY == 8
+    assert CASE_MAX_CONCURRENCY == 4

@@ -6,13 +6,25 @@ from mathforge.agents.prompt_compiler import PromptCompilation, PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
-from mathforge.harness.errors import BudgetExceeded, ModelResponseError
+from mathforge.harness.errors import (
+    BudgetExceeded,
+    ModelResponseError,
+    ModelTransportError,
+)
 from mathforge.harness.provider import OfficialClientProvider
-from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
+from mathforge.harness.schemas import (
+    CandidateSolution,
+    ProblemIR,
+    RoutePlan,
+    SchemaValidationError,
+)
+from mathforge.harness.transport import RETRYABLE_TRANSPORT_FAILURE_CODES
 from mathforge.parsing.solution_parser import (
     SolutionParser,
     candidate_response_validation,
 )
+
+_PRIMARY_CONTRACT_ATTEMPTS = 2
 
 
 @dataclass(frozen=True)
@@ -55,7 +67,8 @@ class PrimarySolver:
             user_content=user,
             runtime_instructions=(
                 "Produce a rigorous independently verifiable solution. "
-                "Copy method exactly from the assigned method family."
+                "State the method concisely; the Host treats its wording as a "
+                "diversity signal."
             ),
         )
 
@@ -89,7 +102,8 @@ class AlternativeSolver:
             user_content=user,
             runtime_instructions=(
                 "Solve independently using only the assigned core method family. "
-                "Copy method exactly from the assigned method family."
+                "State the method concisely; the Host treats its wording as a "
+                "diversity signal."
             ),
         )
 
@@ -115,44 +129,152 @@ class SolverExecutor:
             stage = "primary"
         else:
             stage = "alternative"
-        budget.consume(stage=stage, optional=optional)
         compilation = solver.compile_prompt(request)
         messages = compilation.messages
-        budget.record_prompt_chars(
-            sum(len(message["content"]) for message in messages)
+        max_attempts = (
+            _PRIMARY_CONTRACT_ATTEMPTS
+            if solver.role == "PrimarySolver"
+            else 1
         )
-        response = self._provider.chat(
-            messages=messages,
-            temperature=temperature,
-            max_tokens=PromptCompiler.bounded_output_tokens(
-                max_tokens,
-                compilation.max_output_tokens,
-            ),
-            budget=budget,
-            stage=stage,
-        )
-        if not response.strip():
-            raise ValueError("empty solver response")
-        if budget.deadline.must_finalize():
-            raise BudgetExceeded("solver response arrived after finalize cutoff")
-        budget.ensure_stage("solution_parser")
-        candidate = self._parser.parse(
-            response,
-            candidate_id=request.candidate_id,
-            role=solver.role,
-            answer_type=request.problem.answer_type,
-        )
-        validation_code, rejected = candidate_response_validation(candidate)
-        budget.record_model_response_validation(
-            getattr(response, "model_call_index", None),
-            validation_code,
-            rejected=rejected,
-        )
-        if rejected:
-            raise ModelResponseError(validation_code)
+        last_response_error: ModelResponseError | None = None
+        last_transport_error: ModelTransportError | None = None
+        retry_details: tuple[str, ...] = ()
+        for attempt in range(max_attempts):
+            try:
+                budget.consume(
+                    stage=stage,
+                    optional=optional or attempt > 0,
+                )
+            except BudgetExceeded:
+                if last_response_error is not None:
+                    raise last_response_error
+                if last_transport_error is not None:
+                    raise last_transport_error
+                raise
+            attempt_messages = (
+                messages
+                if attempt == 0 or last_response_error is None
+                else [
+                    *messages,
+                    {
+                        "role": "user",
+                        "content": _candidate_contract_retry_feedback(
+                            retry_details
+                        ),
+                    },
+                ]
+            )
+            budget.record_prompt_chars(
+                sum(len(message["content"]) for message in attempt_messages)
+            )
+            try:
+                response = self._provider.chat(
+                    messages=attempt_messages,
+                    temperature=(
+                        temperature
+                        if attempt == 0 or last_response_error is None
+                        else 0.0
+                    ),
+                    max_tokens=PromptCompiler.bounded_output_tokens(
+                        max_tokens,
+                        compilation.max_output_tokens,
+                    ),
+                    budget=budget,
+                    stage=stage,
+                )
+            except ModelTransportError as error:
+                if last_response_error is not None:
+                    transport_code = getattr(
+                        error,
+                        "code",
+                        "retry_provider_failure",
+                    )
+                    raise ModelResponseError(
+                        last_response_error.code,
+                        details=(
+                            *last_response_error.details,
+                            f"retry_transport:{transport_code}",
+                        ),
+                    ) from error
+                if (
+                    solver.role == "PrimarySolver"
+                    and attempt + 1 < max_attempts
+                    and error.code in RETRYABLE_TRANSPORT_FAILURE_CODES
+                ):
+                    last_transport_error = error
+                    continue
+                raise
+            budget.ensure_stage("solution_parser")
+            try:
+                candidate = self._parser.parse(
+                    response,
+                    candidate_id=request.candidate_id,
+                    role=solver.role,
+                    answer_type=request.problem.answer_type,
+                )
+            except SchemaValidationError:
+                validation_code = "candidate_schema_invalid"
+                retry_details = ("nested_schema_invariant:invalid",)
+                budget.record_model_response_validation(
+                    getattr(response, "model_call_index", None),
+                    validation_code,
+                    rejected=True,
+                )
+                last_response_error = ModelResponseError(
+                    validation_code,
+                    details=retry_details,
+                )
+                continue
+            validation_code, rejected = candidate_response_validation(candidate)
+            if (
+                not rejected
+                and candidate.method.strip().lower()
+                != request.method_family.strip().lower()
+            ):
+                candidate.parse_status = (
+                    f"{candidate.parse_status}:method_contract_deviation"
+                )
+                candidate.contract_deviations.append(
+                    "method:planned_method_family"
+                )
+                validation_code = "candidate_method_deviation"
+            budget.record_model_response_validation(
+                getattr(response, "model_call_index", None),
+                validation_code,
+                rejected=rejected,
+            )
+            if not rejected:
+                break
+            last_transport_error = None
+            retry_details = _candidate_validation_details(candidate)
+            last_response_error = ModelResponseError(
+                validation_code,
+                details=retry_details,
+            )
+        else:
+            if last_response_error is not None:
+                raise last_response_error
+            if last_transport_error is not None:
+                raise last_transport_error
+            raise RuntimeError("unreachable candidate response state")
         candidate.planned_method_family = request.method_family
-        if candidate.method.strip().lower() != request.method_family.strip().lower():
-            candidate.parse_status = f"{candidate.parse_status}:method_contract_deviation"
-            candidate.contract_deviations.append("method:planned_method_family")
         candidate.validate()
         return candidate
+
+
+def _candidate_validation_details(
+    candidate: CandidateSolution,
+) -> tuple[str, ...]:
+    details = [f"parse_status:{candidate.parse_status}"]
+    details.extend(candidate.contract_deviations)
+    return tuple(dict.fromkeys(details))[:32]
+
+
+def _candidate_contract_retry_feedback(details: tuple[str, ...]) -> str:
+    feedback = ", ".join(details) if details else "candidate_contract_invalid"
+    return (
+        "The previous Candidate was rejected by the Host contract. Regenerate it "
+        "from scratch as one bare strict JSON object using the exact structural "
+        "shape and exact nested key names in the system message. Do not add a "
+        f"Markdown fence, aliases, or extra fields. Validation codes: {feedback}."
+    )

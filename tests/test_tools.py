@@ -17,9 +17,10 @@ def test_all_first_batch_tools_are_registered():
             "density_normalization",
             "small_case_enumeration",
             "latex_syntax_check",
-            "answer_type_check",
-        ]
-    )
+                "answer_type_check",
+                "deterministic_shadow_probe",
+            ]
+        )
 
 
 def test_symbolic_equivalence_passes_and_non_equivalence_hard_fails():

@@ -176,9 +176,13 @@ class _VerifierUnavailableProofClient:
         role = messages[0]["content"]
         if role.startswith("You are VerifierSkeptic"):
             raise TimeoutError("private provider detail")
+        method = messages[-1]["content"].split(
+            "Required core method family: ",
+            1,
+        )[1].split(".", 1)[0]
         return json.dumps(
             {
-                "method": "direct",
+                "method": method,
                 "method_steps": [
                     {
                         "step_id": "s1",
@@ -235,10 +239,14 @@ def test_verifier_unavailability_does_not_complete_unresolved_proof_obligations(
     )
 
     assert verifier["reason"] == "verifier_unavailable"
-    assert gate["mode"] == "strict"
-    assert gate["accepted"] == []
-    assert result["run_metrics"]["outcome"] == "fallback"
-    assert any(event["event"] == "fallback_used" for event in result["trace"])
+    assert verifier["status"] == "unavailable"
+    assert gate["mode"] == "best_available"
+    assert gate["accepted"] == ["primary-1"]
+    assert gate["fully_verified"] == []
+    assert gate["degraded_accepted"] == ["primary-1"]
+    assert gate["rejected"] == []
+    assert result["run_metrics"]["outcome"] == "primary"
+    assert not any(event["event"] == "fallback_used" for event in result["trace"])
 
 
 def test_method_independence_uses_claim_topology_even_with_model_step_labels():

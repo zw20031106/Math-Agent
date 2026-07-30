@@ -223,8 +223,8 @@ def test_model_gate_audits_a_timed_out_background_tail_to_completion():
     )
     assert budget.background_tail_snapshot() == {
         "started": 1,
-        "active": 1,
-        "completed": 0,
+        "active": 0,
+        "completed": 1,
     }
 
 

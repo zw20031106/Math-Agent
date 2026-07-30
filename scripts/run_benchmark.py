@@ -21,7 +21,10 @@ from mathforge.benchmark import (  # noqa: E402
 )
 from mathforge.config import HarnessConfig, load_competition_config  # noqa: E402
 from mathforge.evaluation.artifacts import finalize_artifact  # noqa: E402
-from mathforge.model_identity import require_exact_intern_model  # noqa: E402
+from mathforge.model_identity import (  # noqa: E402
+    EXACT_INTERN_MODEL,
+    exact_model_identity,
+)
 from mathforge.provenance import build_run_provenance  # noqa: E402
 from mathforge.retrieval.retriever import Retriever  # noqa: E402
 from mathforge.runtime import MathForgeHarness  # noqa: E402
@@ -34,8 +37,13 @@ BENCHMARK_SCHEMA_VERSION = "3.4"
 def build_benchmark_metadata(
     input_path: Path,
     config_path: Path,
+    *,
+    requested_model: str = EXACT_INTERN_MODEL,
 ) -> dict:
-    model_identity = require_exact_intern_model()
+    model_identity = exact_model_identity(
+        requested_model,
+        request_source="argument:--model",
+    )
     config = load_benchmark_config(config_path)
     provenance = build_run_provenance(
         config,
@@ -66,14 +74,20 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=ROOT / "config" / "competition.json")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--model", default=EXACT_INTERN_MODEL)
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
-    model_identity = require_exact_intern_model()
+    model_identity = exact_model_identity(
+        args.model,
+        request_source="argument:--model",
+    )
     config = load_benchmark_config(args.config)
+    client = InternChatClient()
+    client.model = args.model
     harness = MathForgeHarness(
-        InternChatClient(),
+        client,
         config,
         model_identity=model_identity,
     )
@@ -90,6 +104,7 @@ def main() -> int:
         **build_benchmark_metadata(
             args.input,
             args.config,
+            requested_model=args.model,
         ),
         "config": args.config.as_posix(),
         "preflight": preflight.to_dict(),

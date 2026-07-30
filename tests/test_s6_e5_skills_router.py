@@ -311,7 +311,11 @@ def test_runtime_composes_all_six_general_skills_for_compatible_roles():
         SkillCaptureClient(),
         _skill_runtime_config(),
     ).solve(
-        "Prove by contradiction that a numerical expression is equal.",
+        (
+            "Prove by contradiction that a piecewise numerical expression "
+            "with absolute value is equal if and only if there exists a "
+            "unique solution."
+        ),
         {},
     )
     expression_result = MathForgeHarness(

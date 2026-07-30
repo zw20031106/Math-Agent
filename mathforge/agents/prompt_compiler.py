@@ -24,29 +24,64 @@ _SOLVER_OUTPUT_TOKENS = {
         "alternative_solver": 8192,
     },
     "standard": {
-        "primary_solver": 16384,
-        "alternative_solver": 12288,
+        "primary_solver": 8192,
+        "alternative_solver": 8192,
     },
     "tool": {
-        "primary_solver": 16384,
-        "alternative_solver": 16384,
+        "primary_solver": 8192,
+        "alternative_solver": 8192,
     },
     "proof": {
-        "primary_solver": 32768,
-        "alternative_solver": 24576,
+        "primary_solver": 8192,
+        "alternative_solver": 8192,
     },
 }
 _CANDIDATE_CORE_PROTOCOL = (
     "Return exactly one complete JSON object, with no prose or Markdown fence. "
     "Put the durable core fields first in this order: method, final_answer, "
-    "public_solution_steps, claims. Then include method_steps, solution_text, "
-    "assumptions, theorems, and unresolved_obligations. All nine fields are "
-    "required; list fields may be empty. Copy the assigned method family exactly. "
-    "Each method step must reference real Claim IDs. Do not emit Host-owned fields "
+    "public_solution_steps, claims. Then include solution_text, assumptions, "
+    "theorems, and unresolved_obligations. All eight fields are required; list "
+    "fields may be empty. State the intended method family concisely. "
+    "method, final_answer, and solution_text are strings. "
+    "public_solution_steps, assumptions, theorems, and unresolved_obligations "
+    "are string arrays, never object arrays. "
+    "Each claims item must contain exactly claim_id, statement, depends_on, "
+    "check_type, and importance; depends_on is a string array, and "
+    "importance must be critical or supporting. "
+    "All claim_id values and references must be strings such as c1, never "
+    "numbers. check_type must be reasoning, definition, "
+    "theorem_preconditions, necessity, sufficiency, existence, uniqueness, "
+    "boundary, interchange, safe_parse_expression, symbolic_equivalence, "
+    "simplify_expression, numerical_residual, matrix_shape_check, "
+    "latex_syntax_check, density_normalization, small_case_enumeration, or "
+    "answer_type_check. "
+    "If theorems is nonempty, include at least one theorem_preconditions Claim "
+    "that explicitly checks the hypotheses of every invoked theorem. "
+    "Do not substitute id or dependencies inside Claim objects. Do not emit "
+    "Host-owned fields "
     "(candidate_id, role, answer_type, planned_method_family, version, "
-    "schema_version, parse_status, is_method_duplicate, contract_deviations, or "
-    "Claim verification state). Do not emit tool calls, tool arguments, private "
-    "reasoning, scratchpads, or hidden chain-of-thought."
+    "schema_version, parse_status, parse_tier, source, method_steps, "
+    "is_method_duplicate, contract_deviations, or Claim verification state). "
+    "Do not emit tool calls, tool arguments, private "
+    "reasoning, scratchpads, or hidden chain-of-thought. Use this exact structural "
+    'shape: {"method":"<assigned>","final_answer":"<answer>",'
+    '"public_solution_steps":["<step>"],"claims":[{"claim_id":"c1",'
+    '"statement":"<claim>","depends_on":[],"check_type":"reasoning",'
+    '"importance":"critical"}],"solution_text":"<public derivation>",'
+    '"assumptions":[],"theorems":[],'
+    '"unresolved_obligations":[]}. Default check_type to reasoning. Use a '
+    "tool-named check_type only when that check is selected in the authorized "
+    "context and the Claim states its exact mathematical inputs. Prioritize a "
+    "complete valid object over verbosity and finish within 8,192 output tokens."
+)
+_REPAIR_PATCH_PROTOCOL = (
+    "Return exactly one bare JSON object containing replacement_claims, "
+    "final_answer, public_solution_steps, and unresolved_obligations. "
+    "replacement_claims contains only affected Claim replacements, each with "
+    "exactly claim_id, statement, depends_on, check_type, and importance. "
+    "Do not return method, method_steps, solution_text, unrelated Claims, or "
+    "Host-owned fields. The Host applies the patch to the prior Candidate, "
+    "re-verifies the affected dependency closure, and rolls back regressions."
 )
 _ROLE_PROTOCOLS = {
     "router_planner": (
@@ -62,9 +97,9 @@ _ROLE_PROTOCOLS = {
         "not pass. Do not reconstruct full solutions or emit private reasoning."
     ),
     "repair": (
-        f"{_CANDIDATE_CORE_PROTOCOL} Change only the supplied failed Claim "
-        "dependency closure. Preserve unrelated content and return a local patch "
-        "with the corrected or unchanged exact final answer."
+        f"{_REPAIR_PATCH_PROTOCOL} Change only the supplied failed Claim "
+        "dependency closure. Preserve the exact final answer unless the affected "
+        "terminal Claim proves it must change."
     ),
     "finalizer": (
         f"{_CANDIDATE_CORE_PROTOCOL} Improve public exposition only. Preserve the "
@@ -192,8 +227,8 @@ class PromptCompiler:
     def _solver_profile_protocol(profile: str) -> str:
         if profile == "minimal":
             return (
-                "This is a short problem. Use one to three public steps, Claims, and "
-                "method steps. Keep optional lists concise and finish the JSON early."
+                "Use 1-3 public steps, Claims, and method steps. Keep optional lists "
+                "concise; finish JSON early."
             )
         if profile == "proof":
             return (

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-import os
-from typing import Any, Mapping
+from typing import Any
 
 
 EXACT_INTERN_MODEL = "intern-s2-preview-397b"
-MODEL_ENVIRONMENT_VARIABLE = "INTERN_MODEL"
 UNOBSERVABLE_REASON = "official_client_returns_assistant_content_only"
 
 
@@ -46,30 +44,25 @@ class ModelIdentity:
         return cls(**payload)
 
 
-def require_exact_intern_model(
-    environment: Mapping[str, str] | None = None,
+def exact_model_identity(
+    requested_model: str,
+    *,
+    request_source: str,
 ) -> ModelIdentity:
-    source = os.environ if environment is None else environment
-    requested_model = source.get(MODEL_ENVIRONMENT_VARIABLE)
-    if requested_model is None:
-        raise RuntimeError(
-            f"{MODEL_ENVIRONMENT_VARIABLE} must be explicitly set to "
-            f"{EXACT_INTERN_MODEL}"
-        )
     if requested_model != EXACT_INTERN_MODEL:
         raise RuntimeError(
-            f"{MODEL_ENVIRONMENT_VARIABLE} must equal the exact callable model ID "
+            "model must equal the exact callable model ID "
             f"{EXACT_INTERN_MODEL}; aliases are not accepted"
         )
     return ModelIdentity(
         requested_model=requested_model,
-        request_source=f"environment:{MODEL_ENVIRONMENT_VARIABLE}",
+        request_source=request_source,
     )
 
 
 def official_client_model_identity() -> ModelIdentity:
     return ModelIdentity(
-        requested_model=EXACT_INTERN_MODEL,
+        requested_model="unreported",
         request_source="official_client_injected",
     )
 

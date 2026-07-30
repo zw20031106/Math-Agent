@@ -92,7 +92,8 @@ def _minimal_config(**changes) -> HarnessConfig:
 def test_competition_config_uses_reliable_completion_cap_and_e1_deadlines():
     config = load_competition_config()
 
-    assert config.schema_version == "1.4"
+    assert config.schema_version == "1.5"
+    assert config.final_response_max_chars == 20000
     assert config.primary_max_tokens == 65536
     assert config.max_model_tokens == 0
     assert config.model_context_window_tokens == 262144
@@ -105,7 +106,7 @@ def test_competition_config_uses_reliable_completion_cap_and_e1_deadlines():
         config.hard_deadline_seconds,
         config.deterministic_finalize_reserve_seconds,
         config.model_call_start_margin_seconds,
-    ) == (800.0, 1000.0, 1150.0, 50.0, 100.0)
+    ) == (600.0, 720.0, 850.0, 50.0, 100.0)
 
 
 def test_zero_token_quota_records_without_enforcement_and_positive_quota_remains_hard():
@@ -165,17 +166,44 @@ def test_near_window_prompt_shrinks_output_and_oversized_prompt_never_calls_clie
     assert client.calls == []
 
 
-def test_utf8_fallback_is_conservative_and_never_uses_character_quarter_estimate():
+def test_completed_response_over_role_cap_is_retained_when_context_still_fits():
+    client = RecordingClient(response="1234567890")
+    context = ModelContextBudget(
+        context_window_tokens=64,
+        safety_margin_tokens=8,
+        token_counter=InternS2TokenCounter(FixedTokenizer(prompt_tokens=10)),
+    )
+    budget = CallBudget(1)
+    budget.consume(stage="primary")
+
+    response = OfficialClientProvider(
+        client,
+        ModelCallGate(1),
+        context,
+    ).chat(
+        messages=_messages(),
+        temperature=0.0,
+        max_tokens=4,
+        budget=budget,
+        stage="primary",
+    )
+
+    assert response == "1234567890"
+    assert response.output_budget_exceeded is True
+    assert budget.model_call_records[0]["output_budget_exceeded"] is True
+
+
+def test_multilingual_fallback_avoids_three_times_cjk_overcount():
     counter = InternS2TokenCounter(BrokenTokenizer())
-    content = "数学🙂"
+    content = "数学推理需要验证"
 
     text_count = counter.count_text(content)
     message_count = counter.count_messages(_messages(content))
 
-    assert text_count.counting_mode == "utf8_byte_upper_bound"
-    assert text_count.tokens == len(content.encode("utf-8"))
-    assert text_count.tokens > len(content) // 4
-    assert message_count.counting_mode == "utf8_byte_upper_bound"
+    assert text_count.counting_mode == "multilingual_estimate"
+    assert text_count.tokens == len(content)
+    assert text_count.tokens < len(content.encode("utf-8"))
+    assert message_count.counting_mode == "multilingual_estimate"
     assert message_count.tokens > text_count.tokens
 
 
@@ -337,7 +365,7 @@ def test_runner_timeout_is_terminal_atomic_and_late_result_cannot_overwrite(tmp_
         == "per_case_wall_clock_exceeded"
     )
     assert all(
-        event["schema_version"] == "3.0"
+        event["schema_version"] == "3.1"
         for event in payload["trace"]
     )
     assert records[0].run_metrics.per_case_wall_clock_timeout_count == 1

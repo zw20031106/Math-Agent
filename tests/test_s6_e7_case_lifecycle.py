@@ -9,6 +9,9 @@ import pytest
 
 from mathforge.benchmark import BenchmarkCase, run_benchmark
 from mathforge.harness.errors import ModelTransportError
+from mathforge.output.judge_trace import minimal_judge_trace
+from mathforge.runtime import MathForgeHarness
+from tests.fake_client import FakeClient
 from scripts.run_case_outputs import (
     CaseRunManifest,
     ConsecutiveProviderFailureCircuitBreaker,
@@ -17,7 +20,7 @@ from scripts.run_case_outputs import (
     PerCaseWallClockRunner,
     RUN_MANIFEST_FILENAME,
     RunStopController,
-    SerializedFastRetryClient,
+    FastRetryClient,
     _planned_stop_reason,
     build_argument_parser,
     main as runner_main,
@@ -40,12 +43,10 @@ def _paths(tmp_path):
 
 
 def _success_record(case: BenchmarkCase):
+    harness = MathForgeHarness(FakeClient())
     records, _ = run_benchmark(
         [case],
-        lambda *_: {
-            "final_response": "Final answer: 2",
-            "trace": [{"event": "run_completed", "outcome": "primary"}],
-        },
+        harness.solve,
     )
     return records[0]
 
@@ -110,7 +111,10 @@ def test_manifest_resume_validates_schema_and_bound_output_hash(tmp_path):
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     payload["final_response"] = "tampered"
     output_path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(ValueError, match="hash mismatch"):
+    with pytest.raises(
+        ValueError,
+        match="digest is inconsistent|hash mismatch",
+    ):
         CaseRunManifest.prepare(
             cases=[case],
             input_path=input_path,
@@ -234,28 +238,28 @@ def test_model_availability_preflight_requires_all_three_levels():
     report = verify_model_availability(client)
     assert report["status"] == "passed"
     assert [level["level"] for level in report["levels"]] == ["L0", "L1", "L2"]
-    assert client.calls[0]["max_tokens"] == MODEL_PREFLIGHT_L1_MAX_TOKENS == 256
+    assert client.calls[0]["max_tokens"] == MODEL_PREFLIGHT_L1_MAX_TOKENS == 4096
     assert client.calls[1]["max_tokens"] == MODEL_PREFLIGHT_MAX_TOKENS == 8192
 
 
-def test_model_http_timeout_uses_the_harness_call_window():
+def test_model_http_timeout_uses_the_transport_delivery_window():
     config = SimpleNamespace(
         outer_platform_limit_seconds=1200.0,
         hard_deadline_seconds=870.0,
         deterministic_finalize_reserve_seconds=30.0,
     )
 
-    assert model_http_timeout_seconds(config) == 125
+    assert model_http_timeout_seconds(config) == 150
 
 
-def test_model_client_retries_one_fast_retryable_failure_and_records_attempts(
+def test_local_model_client_does_not_add_a_second_transport_retry(
     monkeypatch,
 ):
     monkeypatch.setattr(
         "scripts.run_case_outputs.sleep",
         lambda _: None,
     )
-    ticks = iter([0.0, 1.0, 2.0])
+    ticks = iter([0.0, 1.0])
     monkeypatch.setattr(
         "scripts.run_case_outputs.perf_counter",
         lambda: next(ticks),
@@ -272,12 +276,13 @@ def test_model_client_retries_one_fast_retryable_failure_and_records_attempts(
             return "candidate content"
 
     base = FlakyClient()
-    client = SerializedFastRetryClient(base)
+    client = FastRetryClient(base)
 
-    response = client.chat(messages=[], temperature=0.0, max_tokens=1)
-    assert response == "candidate content"
-    assert response.transport_attempts == 2
-    assert base.calls == 2
+    with pytest.raises(ModelTransportError) as captured:
+        client.chat(messages=[], temperature=0.0, max_tokens=1)
+    assert captured.value.code == "provider_5xx"
+    assert captured.value.attempts == 1
+    assert base.calls == 1
 
 
 def test_model_client_does_not_retry_a_failure_beyond_the_fast_window(monkeypatch):
@@ -296,7 +301,7 @@ def test_model_client_does_not_retry_a_failure_beyond_the_fast_window(monkeypatc
             raise RuntimeError("503 server error")
 
     base = FailingClient()
-    client = SerializedFastRetryClient(base)
+    client = FastRetryClient(base)
 
     with pytest.raises(ModelTransportError) as captured:
         client.chat(messages=[], temperature=0.0, max_tokens=1)
@@ -322,7 +327,7 @@ def test_model_client_does_not_retry_unknown_failures(monkeypatch):
 
     base = FailingClient()
     with pytest.raises(ModelTransportError) as captured:
-        SerializedFastRetryClient(base).chat(
+        FastRetryClient(base).chat(
             messages=[],
             temperature=0.0,
             max_tokens=1,
@@ -438,23 +443,23 @@ def test_resume_skips_only_success_and_reruns_failed_and_timeout(tmp_path):
         _success_record(cases[0]),
         run_benchmark(
             [cases[1]],
-            lambda *_: {
-                "final_response": "Unable to complete.",
-                "trace": [
-                    {
-                        "event": "candidate_generation_failed",
-                        "reason": "provider_5xx",
-                    },
-                    {"event": "run_completed", "outcome": "fallback"},
-                ],
-            },
+                lambda *_: {
+                    "final_response": "Unable to complete.",
+                    "trace": minimal_judge_trace(
+                        outcome="fallback",
+                        error_code="provider_5xx",
+                    ),
+                },
         )[0][0],
         run_benchmark(
             [cases[2]],
-            lambda *_: {
-                "final_response": "Timed out safely.",
-                "trace": [{"event": "run_completed", "outcome": "timeout"}],
-            },
+                lambda *_: {
+                    "final_response": "Timed out safely.",
+                    "trace": minimal_judge_trace(
+                        outcome="timeout",
+                        error_code="per_case_wall_clock_exceeded",
+                    ),
+                },
         )[0][0],
     ]
     for record in records:
@@ -507,11 +512,21 @@ def test_manifest_lifecycle_never_leaves_interruption_as_running(tmp_path):
     assert summary["pending_case_count"] == 1
 
 
-def test_runner_defaults_to_one_and_rejects_queued_case_concurrency():
+def test_runner_defaults_to_four_and_bounds_case_concurrency():
     parser = build_argument_parser()
     args = parser.parse_args(["--input", "cases.jsonl", "--output-dir", "out"])
-    assert args.concurrency == 1
+    assert args.concurrency == 4
     assert args.rerun_status == frozenset({"failed", "timeout"})
+    assert parser.parse_args(
+        [
+            "--input",
+            "cases.jsonl",
+            "--output-dir",
+            "out",
+            "--concurrency",
+            "1",
+        ]
+    ).concurrency == 1
 
     with pytest.raises(SystemExit):
         parser.parse_args(
@@ -521,7 +536,7 @@ def test_runner_defaults_to_one_and_rejects_queued_case_concurrency():
                 "--output-dir",
                 "out",
                 "--concurrency",
-                "2",
+                "5",
             ]
         )
 
@@ -601,10 +616,16 @@ def test_max_cases_stops_after_atomic_case_write_and_marks_degraded(
                 "trace": [{"event": "run_completed", "outcome": "primary"}],
             }
 
-    monkeypatch.setenv("INTERN_MODEL", "intern-s2-preview-397b")
+    base_clients = []
+
+    def build_client(**_kwargs):
+        client = SimpleNamespace(chat=lambda **_call: "unused")
+        base_clients.append(client)
+        return client
+
     monkeypatch.setattr(
-        "scripts.run_case_outputs.require_exact_intern_model",
-        lambda: identity,
+        "scripts.run_case_outputs.exact_model_identity",
+        lambda *_args, **_kwargs: identity,
     )
     monkeypatch.setattr(
         "scripts.run_case_outputs.load_benchmark_config",
@@ -612,7 +633,7 @@ def test_max_cases_stops_after_atomic_case_write_and_marks_degraded(
     )
     monkeypatch.setattr(
         "scripts.run_case_outputs.InternChatClient",
-        lambda **_kwargs: SimpleNamespace(chat=lambda **_call: "unused"),
+        build_client,
     )
     monkeypatch.setattr(
         "scripts.run_case_outputs.run_model_preflight",
@@ -646,6 +667,7 @@ def test_max_cases_stops_after_atomic_case_write_and_marks_degraded(
 
     assert (output_dir / "1.json").exists()
     assert not (output_dir / "2.json").exists()
+    assert base_clients[0].model == "intern-s2-preview-397b"
     assert set(
         json.loads((output_dir / "1.json").read_text(encoding="utf-8"))
     ) == {"id", "status", "final_response", "trace"}

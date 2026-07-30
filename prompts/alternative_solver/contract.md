@@ -15,27 +15,25 @@ Output protocol:
 
 1. Return exactly one complete JSON object without surrounding prose or a
    Markdown code fence.
-2. Copy the runtime-assigned method family exactly into `method`. The assigned
-   family differs from the forbidden Primary families; renaming the same method
-   does not make it independent.
+2. State the intended method family concisely in `method`. The assigned family
+   differs from the forbidden Primary families; renaming the same method does
+   not make it independent.
 3. Solve independently. You may use the Primary method label only to avoid it.
    You cannot see, reconstruct, or imitate the Primary `solution_text`.
 4. `solution_text` must be a complete public solution.
    `public_solution_steps` must visibly demonstrate how this method differs
    from the forbidden method families.
 5. Include all model-owned fields in the example, even when a list is empty.
-   Do not output Host-owned fields: `candidate_id`, `role`, `answer_type`,
+   The Host constructs `method_steps` from normalized Claims. Do not output
+   Host-owned fields: `candidate_id`, `role`, `answer_type`,
    `planned_method_family`, `version`, `schema_version`, `parse_status`,
-   `is_method_duplicate`, `contract_deviations`, or Claim verification status.
+   `parse_tier`, `source`, `method_steps`, `is_method_duplicate`,
+   `contract_deviations`, or Claim verification status.
 6. The model has no native tool-calling interface. Do not emit tool calls or
    tool arguments. `check_type` is only a Host check suggestion.
 7. Avoid irrelevant repetition. Preserve `final_answer`,
    `public_solution_steps`, critical Claims, and `unresolved_obligations`
    before optional exposition.
-
-Allowed `method_steps[].kind` values:
-`definition`, `transformation`, `theorem_application`, `construction`,
-`case_split`, `contradiction`, `computation`, `conclusion`, `other`.
 
 Allowed `claims[].importance` values: `critical`, `supporting`.
 
@@ -50,20 +48,6 @@ Complete output example:
 
 {
   "method": "<copy assigned method family exactly>",
-  "method_steps": [
-    {
-      "step_id": "a1",
-      "kind": "construction",
-      "claim_ids": ["a-claim-1"],
-      "theorem": ""
-    },
-    {
-      "step_id": "a2",
-      "kind": "conclusion",
-      "claim_ids": ["a-claim-2"],
-      "theorem": "the theorem used, or an empty string"
-    }
-  ],
   "solution_text": "A complete public derivation using the assigned alternative method.",
   "public_solution_steps": [
     "Introduce the alternative construction or invariant.",

@@ -71,7 +71,7 @@ def test_all_prompt_contracts_are_v2_and_solver_contract_is_unambiguous():
         assert contract.fields["version"] == "2"
         assert "when possible" not in contract.body.lower()
 
-    for role in ("primary_solver", "alternative_solver", "repair"):
+    for role in ("primary_solver", "alternative_solver"):
         body = loader.load(role).body
         assert "public_solution_steps" in body
         assert "method_steps" in body
@@ -79,21 +79,17 @@ def test_all_prompt_contracts_are_v2_and_solver_contract_is_unambiguous():
         assert "candidate_id" in body
         assert "no native tool-calling interface" in body
         assert '"answer_type":' not in body
-        for kind in (
-            "definition",
-            "transformation",
-            "theorem_application",
-            "construction",
-            "case_split",
-            "contradiction",
-            "computation",
-            "conclusion",
-            "other",
-        ):
-            assert kind in body
+        assert "Host constructs" in body
+        assert "`source`" in body
+        assert "`parse_tier`" in body
+
+    repair = loader.load("repair").body
+    assert "replacement_claims" in repair
+    assert "Do not rewrite" in repair
+    assert "local-patch output example" in repair
 
 
-def test_solver_runtime_prompt_copies_assigned_method_and_excludes_host_output_fields():
+def test_solver_runtime_prompt_uses_method_as_a_diversity_signal():
     problem = ProblemParser().parse("求 1+1。")
     route = RouterRuleEngine().plan(problem)
     request = SolverRequest(
@@ -107,7 +103,7 @@ def test_solver_runtime_prompt_copies_assigned_method_and_excludes_host_output_f
     rendered = "\n".join(message["content"] for message in messages)
 
     assert "Required core method family: direct-deduction." in rendered
-    assert "Copy method exactly" in rendered
+    assert "diversity signal" in rendered
     assert "when possible" not in rendered.lower()
     assert "Host-owned fields" in rendered
     assert "public_solution_steps" in rendered

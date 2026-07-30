@@ -23,7 +23,7 @@ def _route(count: int = 2) -> RoutePlan:
     )
 
 
-def test_fanout_is_parallel_stable_and_hides_primary_text():
+def test_fanout_runs_primary_first_then_stable_independent_alternatives():
     client = FakeClient(delay=0.02)
     provider = OfficialClientProvider(client, ModelCallGate(2))
     orchestrator = CandidateOrchestrator(SolverExecutor(provider, SolutionParser()))
@@ -39,7 +39,10 @@ def test_fanout_is_parallel_stable_and_hides_primary_text():
         "primary-1",
         "alternative-1",
     ]
-    assert client.max_active_calls == 2
+    assert client.max_active_calls == 1
+    assert client.calls[0]["messages"][0]["content"].startswith(
+        "You are PrimarySolver"
+    )
     alternative_prompt = next(
         call["messages"][-1]["content"]
         for call in client.calls

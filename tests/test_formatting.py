@@ -4,7 +4,10 @@ import pytest
 
 from mathforge.harness.schemas import CandidateSolution
 from mathforge.output.answer_validator import AnswerValidator
-from mathforge.output.deterministic_formatter import DeterministicFormatter
+from mathforge.output.deterministic_formatter import (
+    DeterministicFormatter,
+    bound_final_response,
+)
 from mathforge.parsing.problem_parser import ProblemParser
 
 
@@ -33,6 +36,19 @@ def test_formatter_preserves_exact_answer():
     )
     rendered = DeterministicFormatter().format(candidate, parsed)
     assert rendered.endswith(r"\frac{1}{3}")
+
+
+def test_final_response_limit_preserves_complete_exact_answer():
+    rendered = bound_final_response(
+        ("A complete derivation. " * 2000) + "\n\nFinal answer: -1/4",
+        exact_answer="-1/4",
+        max_chars=20000,
+    )
+
+    assert len(rendered) <= 20000
+    assert rendered.endswith("Final answer: -1/4")
+    assert rendered.count("Final answer:") == 1
+    assert "configured output limit" in rendered
 
 
 def test_formatter_does_not_treat_exact_answer_as_substring_of_wrong_value():

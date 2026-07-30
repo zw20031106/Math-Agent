@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import re
 
+from mathforge.agents.finalizer import FinalizationResult
 from mathforge.config import HarnessConfig
 from mathforge.runtime import MathForgeHarness
 
@@ -26,7 +28,20 @@ def _proof_config() -> HarnessConfig:
     )
 
 
-def _proof_candidate(solution_text: str, claims: list[dict]) -> dict:
+def _assigned_method(messages) -> str:
+    match = re.search(
+        r"Required core method family: ([a-z-]+)\.",
+        messages[-1]["content"],
+    )
+    return match.group(1) if match is not None else "direct-deduction"
+
+
+def _proof_candidate(
+    solution_text: str,
+    claims: list[dict],
+    *,
+    method: str = "direct-deduction",
+) -> dict:
     normalized_claims = []
     for claim in claims:
         normalized_claims.append(
@@ -37,7 +52,7 @@ def _proof_candidate(solution_text: str, claims: list[dict]) -> dict:
             }
         )
     return {
-        "method": "direct",
+        "method": method,
         "method_steps": [
             {
                 "step_id": "s1",
@@ -104,20 +119,24 @@ class ProofClient:
             _proof_candidate(
                 "Assertion only." if self.claimless else "Complete structured proof.",
                 claims,
+                method=_assigned_method(messages),
             )
         )
 
 
-def test_claimless_proof_falls_back_even_when_skeptic_claims_pass():
+def test_incomplete_proof_is_retained_as_best_available_candidate():
     result = MathForgeHarness(ProofClient(claimless=True), _proof_config()).solve(
         "Prove that x equals x", {}
     )
-    assert "Assertion only" not in result["final_response"]
+    assert "Assertion only" in result["final_response"]
     assert result["trace"][-1]["event"] == "run_completed"
-    assert result["run_metrics"]["error_code"] == "proof_incomplete"
+    assert result["run_metrics"]["outcome"] == "primary"
+    assert result["run_metrics"]["error_code"] == ""
     gate = next(event for event in result["trace"] if event["event"] == "proof_completion_gate")
-    assert gate["accepted"] == []
-    assert gate["rejected"][0]["status"] == "incomplete"
+    assert gate["accepted"] == ["primary-1"]
+    assert gate["fully_verified"] == []
+    assert gate["degraded_accepted"] == ["primary-1"]
+    assert gate["rejected"] == []
 
 
 def test_structured_proof_with_mapped_skeptic_findings_passes_gate():
@@ -131,12 +150,105 @@ def test_structured_proof_with_mapped_skeptic_findings_passes_gate():
     assert len(client.calls) == 2
 
 
-def test_invalid_verifier_output_cannot_complete_proof():
+class LowRiskTheoremClient:
+    def __init__(self) -> None:
+        self.roles: list[str] = []
+
+    def chat(self, *, messages, temperature, max_tokens):
+        del temperature, max_tokens
+        role = messages[0]["content"]
+        self.roles.append(role)
+        if role.startswith("You are VerifierSkeptic"):
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "candidate_id": "primary-1",
+                            "claim_id": "conditions",
+                            "obligation_ids": [
+                                "primary-1:theorem_preconditions"
+                            ],
+                            "status": "pass",
+                            "public_rationale": (
+                                "The stated arithmetic definitions apply."
+                            ),
+                            "missing_condition": "",
+                            "counterexample_summary": "",
+                        }
+                    ]
+                }
+            )
+        return json.dumps(
+            {
+                "method": "direct-analytic",
+                "method_steps": [
+                    {
+                        "step_id": "s1",
+                        "kind": "theorem_application",
+                        "claim_ids": ["conditions"],
+                        "theorem": "Elementary limit law",
+                    }
+                ],
+                "solution_text": "The elementary limit law gives 1/n to 0.",
+                "public_solution_steps": [
+                    "Apply the elementary limit law."
+                ],
+                "final_answer": "0",
+                "assumptions": ["n tends to positive infinity."],
+                "theorems": ["Elementary limit law"],
+                "claims": [
+                    {
+                        "claim_id": "conditions",
+                        "statement": (
+                            "Since n tends to positive infinity, the "
+                            "elementary limit law applies and gives 1/n to 0."
+                        ),
+                        "depends_on": [],
+                        "check_type": "theorem_preconditions",
+                        "importance": "critical",
+                    }
+                ],
+                "unresolved_obligations": [],
+            }
+        )
+
+
+def test_low_risk_candidate_with_required_obligation_runs_verifier():
+    client = LowRiskTheoremClient()
+    config = replace(
+        _proof_config(),
+        max_model_calls=2,
+        enable_tools=False,
+    )
+
+    result = MathForgeHarness(client, config).solve(
+        "Evaluate the limit of 1/n as n tends to infinity.",
+        {},
+    )
+
+    route = next(
+        event for event in result["trace"] if event["event"] == "route_planned"
+    )
+    gate = next(
+        event
+        for event in result["trace"]
+        if event["event"] == "proof_completion_gate"
+    )
+    assert route["risk_level"] == "low"
+    assert gate["accepted"] == ["primary-1"]
+    assert any(
+        role.startswith("You are VerifierSkeptic") for role in client.roles
+    )
+    assert result["run_metrics"]["outcome"] == "primary"
+
+
+def test_invalid_verifier_output_degrades_but_does_not_erase_candidate():
     result = MathForgeHarness(ProofClient(invalid_verifier=True), _proof_config()).solve(
         "Prove that x equals x", {}
     )
     assert result["trace"][-1]["event"] == "run_completed"
-    assert result["run_metrics"]["error_code"] == "proof_incomplete"
+    assert result["run_metrics"]["outcome"] == "primary"
+    assert "Complete structured proof" in result["final_response"]
     verifier = next(event for event in result["trace"] if event["event"] == "verifier_completed")
     assert verifier["reason"] == "invalid_or_empty_findings"
 
@@ -175,6 +287,7 @@ class RoutedProofClient:
                     }
                     for kind in ("definition", "sufficiency", "boundary")
                 ],
+                method=_assigned_method(messages),
             )
         )
 
@@ -235,7 +348,11 @@ class RepairPressureProofClient:
                 for kind in ("definition", "sufficiency", "boundary")
             ]
         return json.dumps(
-            _proof_candidate("Complete alternative proof.", claims)
+            _proof_candidate(
+                "Complete alternative proof.",
+                claims,
+                method=_assigned_method(messages),
+            )
         )
 
 
@@ -268,7 +385,7 @@ def test_optional_repair_cannot_consume_required_verifier_call():
 
 class SyntaxOnlyProofClient:
     def chat(self, *, messages, temperature, max_tokens):
-        del messages, temperature, max_tokens
+        del temperature, max_tokens
         return json.dumps(
             _proof_candidate(
                 "Unsupported assertions only.",
@@ -281,11 +398,12 @@ class SyntaxOnlyProofClient:
                     }
                     for kind in ("definition", "sufficiency", "uniqueness", "boundary")
                 ],
+                method=_assigned_method(messages),
             )
         )
 
 
-def test_syntax_checks_cannot_complete_mathematical_proof_obligations():
+def test_syntax_only_checks_mark_candidate_incomplete_but_keep_its_answer():
     config = replace(
         _proof_config(),
         max_model_calls=1,
@@ -295,12 +413,43 @@ def test_syntax_checks_cannot_complete_mathematical_proof_obligations():
     result = MathForgeHarness(SyntaxOnlyProofClient(), config).solve(
         "Prove that the solution is unique.", {}
     )
-    assert "Unsupported assertions" not in result["final_response"]
+    assert "Unsupported assertions" in result["final_response"]
     gate = next(event for event in result["trace"] if event["event"] == "proof_completion_gate")
-    assert gate["accepted"] == []
+    assert gate["accepted"] == ["primary-1"]
+    assert gate["degraded_accepted"] == ["primary-1"]
     assert {
         item.rsplit(":", 1)[-1]
-        for item in gate["rejected"][0]["unresolved_obligation_ids"]
+        for item in gate["decisions"][0]["unresolved_obligation_ids"]
     } == {"definition", "sufficiency", "uniqueness", "boundary"}
     assert result["trace"][-1]["event"] == "run_completed"
-    assert result["run_metrics"]["error_code"] == "proof_incomplete"
+    assert result["run_metrics"]["outcome"] == "primary"
+
+
+def test_empty_finalizer_result_rolls_back_to_deterministic_response():
+    class EmptyFinalizer:
+        @staticmethod
+        def finalize(*args, **kwargs):
+            del args, kwargs
+            return FinalizationResult("", True, "accepted")
+
+    harness = MathForgeHarness(
+        ProofClient(),
+        replace(
+            _proof_config(),
+            max_model_calls=3,
+            enable_finalizer=True,
+        ),
+    )
+    harness._finalizer = EmptyFinalizer()
+
+    result = harness.solve("Prove that x equals x", {})
+
+    assert "Complete structured proof" in result["final_response"]
+    finalization = next(
+        event
+        for event in result["trace"]
+        if event["event"] == "finalization_completed"
+    )
+    assert finalization["used_llm"] is False
+    assert finalization["reason"] == "finalizer_empty"
+    assert result["run_metrics"]["outcome"] == "primary"

@@ -119,3 +119,23 @@ def test_call_allocation_reserves_post_verifier_repair_as_an_atomic_cycle():
     assert {"repair", "reverification"} <= set(
         insufficient.unreachable_by_budget
     )
+
+
+def test_call_allocation_uses_one_spare_call_for_primary_contract_retry():
+    plan = CallAllocationPlan.build(
+        max_calls=6,
+        router_calls=0,
+        candidate_count=1,
+        verifier_required=False,
+        repair_requested=False,
+        lemma_requested=False,
+        finalizer_requested=False,
+    )
+
+    assert plan.primary == 2
+    budget = CallBudget(6)
+    budget.set_allocation_plan(plan)
+    budget.consume(stage="primary")
+    budget.consume(stage="primary", optional=True)
+    with pytest.raises(BudgetExceeded, match="primary"):
+        budget.consume(stage="primary", optional=True)

@@ -16,8 +16,9 @@ class BudgetExceeded(MathForgeError):
 class ModelCallRejected(BudgetExceeded):
     """A model call was rejected by deterministic admission or deadline policy."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, dispatched: bool = False) -> None:
         self.code = str(code)
+        self.dispatched = bool(dispatched)
         super().__init__(f"model call rejected: {self.code}")
 
 
@@ -37,8 +38,9 @@ class ModelTransportError(MathForgeError):
 class ModelResponseError(ContractViolation):
     """A returned model response is incomplete or violates the role contract."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, details: tuple[str, ...] = ()) -> None:
         self.code = str(code)
+        self.details = tuple(str(item)[:128] for item in details[:32])
         super().__init__(f"model response rejected: {self.code}")
 
 

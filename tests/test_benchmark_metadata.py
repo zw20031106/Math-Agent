@@ -27,7 +27,7 @@ def test_benchmark_metadata_hashes_exact_inputs(tmp_path):
     assert metadata["git_commit"]
     assert isinstance(metadata["code_dirty"], bool)
     assert metadata["requested_model"] == EXACT_INTERN_MODEL
-    assert metadata["request_source"] == "environment:INTERN_MODEL"
+    assert metadata["request_source"] == "argument:--model"
     assert metadata["response_model_observable"] is False
     assert metadata["thinking_mode_observable"] is False
     assert "model_identifier" not in metadata

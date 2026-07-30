@@ -7,8 +7,13 @@ import math
 import re
 from typing import Any, Iterable, Mapping
 
+from mathforge.output.loop_health import (
+    build_closed_loop_health,
+    minimal_closed_loop_health,
+)
 
-JUDGE_TRACE_SCHEMA_VERSION = "3.0"
+
+JUDGE_TRACE_SCHEMA_VERSION = "3.1"
 JUDGE_EVENT_STAGES = {
     "session_started": "session",
     "problem_parsed": "parsing",
@@ -17,12 +22,14 @@ JUDGE_EVENT_STAGES = {
     "candidate_summaries": "candidate_generation",
     "evidence_summary": "evidence",
     "proof_completion_summary": "verification",
+    "decision_summary": "arbitration",
     "candidate_arbitrated": "arbitration",
     "final_answer_selected": "finalization",
     "fallback_used": "fallback",
     "deadline_finalize": "deadline",
     "per_case_wall_clock_timeout": "deadline",
     "case_execution_failed": "completion",
+    "closed_loop_health": "finalization",
     "budget_summary": "finalization",
     "trace_compaction": "finalization",
     "run_completed": "completion",
@@ -32,12 +39,14 @@ _PROTECTED_EVENTS = frozenset(
         "session_started",
         "evidence_summary",
         "proof_completion_summary",
+        "decision_summary",
         "candidate_arbitrated",
         "final_answer_selected",
         "fallback_used",
         "deadline_finalize",
         "per_case_wall_clock_timeout",
         "case_execution_failed",
+        "closed_loop_health",
         "budget_summary",
         "run_completed",
     }
@@ -51,7 +60,9 @@ _FORBIDDEN_KEYS = re.compile(
     r")$",
     re.I,
 )
-_ABSOLUTE_PATH = re.compile(r"(?:[A-Za-z]:\\|/(?:home|Users|root|tmp)/)[^\s]+")
+_ABSOLUTE_PATH = re.compile(
+    r"(?:(?<![A-Za-z0-9_])[A-Za-z]:[\\/]|/(?:home|Users|root|tmp)/)[^\s]+"
+)
 _API_TOKEN_VALUE = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}")
 _AUTHORIZATION_VALUE = re.compile(r"\bbearer\s+\S+", re.I)
 _TRACEBACK_VALUE = re.compile(r"\btraceback\s*\(most recent call last\)", re.I)
@@ -63,6 +74,7 @@ class JudgeTraceIntegrityError(ValueError):
 
 @dataclass(frozen=True)
 class JudgeTraceLimits:
+    final_response_max_chars: int = 20000
     public_result_max_bytes: int = 4000000
     judge_trace_max_events: int = 64
     judge_trace_max_chars: int = 196608
@@ -85,6 +97,8 @@ class JudgeTraceLimits:
         return limits
 
     def validate(self) -> None:
+        if not 4096 <= self.final_response_max_chars <= 200000:
+            raise ValueError("final_response_max_chars is invalid")
         if self.public_result_max_bytes < 4096:
             raise ValueError("public_result_max_bytes is too small")
         if self.judge_trace_max_events < 8:
@@ -208,6 +222,7 @@ def project_judge_trace(
         case_summary,
         selected_id=selected_id,
         limit=active_limits.candidate_summary_max_count,
+        limits=active_limits,
     )
     if candidate_summaries or omitted_candidates:
         details: dict[str, Any] = {"candidates": candidate_summaries}
@@ -346,12 +361,43 @@ def project_judge_trace(
             )
 
     budget = _last(by_name, "budget_summary")
+    decision_source, decision_details = _decision_summary(by_name)
+    append(
+        "decision_summary",
+        decision_source,
+        decision_details,
+    )
+    completed = _last(by_name, "run_completed")
+    health = _last(by_name, "closed_loop_health")
+    if health is None:
+        health_details = build_closed_loop_health(
+            trace,
+            budget=budget,
+            selected_candidate_id=selected_id,
+            outcome=str(completed.get("outcome", "")) if completed else "",
+            error_code=str(completed.get("error_code", "")) if completed else "",
+        )
+    else:
+        health_details = _select(
+            health,
+            (
+                "health",
+                "model_dispatch",
+                "candidate_flow",
+                "verification_flow",
+                "closure",
+            ),
+        )
+    append(
+        "closed_loop_health",
+        health or completed or budget,
+        health_details,
+    )
     append(
         "budget_summary",
         budget,
         _budget_summary(budget),
     )
-    completed = _last(by_name, "run_completed")
     append(
         "run_completed",
         completed,
@@ -426,7 +472,12 @@ def validate_judge_trace(
         errors.append("Judge Trace elapsed time is not monotonic")
     if trace[-1].get("event") != "run_completed":
         errors.append("run_completed must be the final Judge Trace event")
-    for required in ("session_started", "budget_summary", "run_completed"):
+    for required in (
+        "session_started",
+        "closed_loop_health",
+        "budget_summary",
+        "run_completed",
+    ):
         if len(by_name.get(required, [])) != 1:
             errors.append(f"{required} must occur exactly once")
 
@@ -477,13 +528,24 @@ def validate_judge_trace(
             "content_digest",
             "rejection_category",
             "evidence_summary",
+            "public_final_answer",
+            "public_solution_steps",
+            "proof_status",
+            "selection_reason",
         }
         for candidate in candidates:
             if not isinstance(candidate, dict) or set(candidate) != expected:
-                errors.append("rejected candidate summary schema is invalid")
+                errors.append("candidate summary schema is invalid")
                 continue
             if str(candidate.get("candidate_id", "")) == selected_id:
                 errors.append("selected candidate appears in rejected summaries")
+            if candidate.get("status") != "viable_not_selected" and (
+                candidate.get("public_final_answer")
+                or candidate.get("public_solution_steps")
+            ):
+                errors.append("rejected candidate exposes public answer content")
+
+    _validate_closed_loop_health(by_name, outcome, selected_id, errors)
 
     if not isinstance(final_response, str) or not final_response.strip():
         errors.append("final_response must be a non-empty string")
@@ -509,9 +571,17 @@ def minimal_judge_trace(
             error_code=error_code,
             failed_phase="created",
         ),
-        _judge_event(3, "budget_summary", outcome=outcome),
         _judge_event(
-            4,
+            3,
+            "closed_loop_health",
+            **minimal_closed_loop_health(
+                health="timeout" if outcome == "timeout" else "failed",
+                root_failure_code=error_code,
+            ),
+        ),
+        _judge_event(4, "budget_summary", outcome=outcome),
+        _judge_event(
+            5,
             "run_completed",
             outcome=outcome,
             error_code=error_code,
@@ -527,6 +597,7 @@ def _candidate_summaries(
     *,
     selected_id: str,
     limit: int,
+    limits: JudgeTraceLimits,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     starts = {
         str(event.get("candidate_id", "")): event
@@ -548,10 +619,28 @@ def _candidate_summaries(
         if isinstance(case_summary, dict)
         else []
     )
-    states = {
+    summary_states = {
         str(item.get("candidate_id", "")): item
         for item in state_items
         if isinstance(item, dict) and item.get("candidate_id")
+    }
+    final_state_event = _last(by_name, "candidate_final_states")
+    final_state_items = (
+        final_state_event.get("candidates", [])
+        if isinstance(final_state_event, dict)
+        else []
+    )
+    final_states = {
+        str(item.get("candidate_id", "")): item
+        for item in final_state_items
+        if isinstance(item, dict) and item.get("candidate_id")
+    }
+    states = {
+        candidate_id: {
+            **final_states.get(candidate_id, {}),
+            **summary_states.get(candidate_id, {}),
+        }
+        for candidate_id in set(summary_states) | set(final_states)
     }
     order = list(dict.fromkeys([*starts, *generated, *failed, *states]))
     summaries: list[dict[str, Any]] = []
@@ -568,6 +657,14 @@ def _candidate_summaries(
             str(reason_codes[0])
             if isinstance(reason_codes, list) and reason_codes
             else str(failure.get("reason", "not_selected_by_arbitration"))
+        )
+        viable = state.get("status") == "viable_not_selected"
+        content = candidate.get("content", {})
+        if not isinstance(content, dict):
+            content = {}
+        candidate_char_share = max(
+            512,
+            limits.judge_trace_event_max_chars // max(1, limit),
         )
         summary = {
             "candidate_id": candidate_id,
@@ -603,6 +700,26 @@ def _candidate_summaries(
                 if isinstance(state, dict)
                 else {}
             ),
+            "public_final_answer": (
+                _compact_text(
+                    str(content.get("final_answer", "")),
+                    max(128, candidate_char_share // 4),
+                )
+                if viable
+                else ""
+            ),
+            "public_solution_steps": (
+                _candidate_steps(
+                    content.get("public_solution_steps", []),
+                    candidate_char_share,
+                )
+                if viable
+                else []
+            ),
+            "proof_status": _candidate_proof_status(state),
+            "selection_reason": (
+                rejection if viable else f"rejected:{rejection}"
+            ),
         }
         if len(summaries) < limit:
             summaries.append(summary)
@@ -624,6 +741,17 @@ def _proof_summary(
     *,
     selected_candidate_id: str,
 ) -> dict[str, Any]:
+    if not selected_candidate_id:
+        return {
+            "selected_candidate_id": "",
+            "status": "not_available",
+            "unresolved_obligation_ids": [],
+            "failed_obligation_ids": [],
+            "failed_claim_ids": [],
+            "graph_summary": {},
+            "mode": "",
+            "verifier_reason": "",
+        }
     selected_decision: dict[str, Any] = {}
     if proof_gate is not None:
         decisions = proof_gate.get("decisions", [])
@@ -678,6 +806,170 @@ def _proof_summary(
             else ""
         ),
     }
+
+
+def _candidate_proof_status(state: dict[str, Any]) -> str:
+    obligations = state.get("proof_obligations", [])
+    if not isinstance(obligations, list):
+        return "not_available"
+    required = [
+        item
+        for item in obligations
+        if isinstance(item, dict) and item.get("required") is True
+    ]
+    if not required:
+        return "not_available"
+    return (
+        "complete"
+        if all(item.get("status") == "satisfied" for item in required)
+        else "incomplete"
+    )
+
+
+def _decision_summary(
+    by_name: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    cache = _last(by_name, "frozen_lemma_cache")
+    shadow = _last(by_name, "shadow_probe_completed")
+    fanout = _last(by_name, "adaptive_fanout_decided")
+    cross_review = _last(by_name, "candidate_conflict_matrix")
+    source = cross_review or fanout or shadow or cache
+    if source is None:
+        return None, {}
+
+    details: dict[str, Any] = {}
+    if cache is not None:
+        hits = cache.get("hits", [])
+        if not isinstance(hits, list):
+            hits = []
+        details["cache"] = {
+            "enabled": bool(cache.get("enabled", False)),
+            "store_hash": str(cache.get("store_hash", "")),
+            "hit_count": len(hits),
+            "hits": [
+                _select(
+                    hit,
+                    (
+                        "lemma_id",
+                        "content_hash",
+                        "score",
+                        "assumption_checks",
+                    ),
+                )
+                for hit in hits
+                if isinstance(hit, dict)
+            ],
+            "runtime_write_count": _nonnegative_int(
+                cache.get("runtime_write_count", 0)
+            ),
+        }
+    if shadow is not None:
+        details["shadow"] = _select(
+            shadow,
+            (
+                "enabled",
+                "status",
+                "capability",
+                "normalized_input",
+                "limitations",
+                "elapsed_seconds",
+                "model_calls_added",
+            ),
+        )
+    if fanout is not None:
+        details["adaptive_fanout"] = _select(
+            fanout,
+            (
+                "requested_candidates",
+                "admitted_candidates",
+                "reason_codes",
+                "budget",
+            ),
+        )
+    if cross_review is not None:
+        matrix = cross_review.get("matrix", {})
+        if not isinstance(matrix, dict):
+            matrix = {}
+        conflicts = matrix.get("conflicts", [])
+        if not isinstance(conflicts, list):
+            conflicts = []
+        details["cross_review"] = {
+            "candidate_ids": _plain_string_list(
+                matrix.get("candidate_ids", [])
+            ),
+            "pair_count": len(conflicts),
+            "answer_conflict_count": sum(
+                isinstance(item, dict)
+                and item.get("answer_conflict") is True
+                for item in conflicts
+            ),
+            "assumption_conflict_count": sum(
+                isinstance(item, dict)
+                and item.get("assumption_conflict") is True
+                for item in conflicts
+            ),
+            "obligation_conflict_count": sum(
+                isinstance(item, dict)
+                and item.get("obligation_conflict") is True
+                for item in conflicts
+            ),
+        }
+    return source, details
+
+
+def _validate_closed_loop_health(
+    by_name: dict[str, list[dict[str, Any]]],
+    outcome: Any,
+    selected_id: str,
+    errors: list[str],
+) -> None:
+    events = by_name.get("closed_loop_health", [])
+    if len(events) != 1:
+        return
+    event = events[0]
+    expected_fields = {
+        "health",
+        "model_dispatch",
+        "candidate_flow",
+        "verification_flow",
+        "closure",
+    }
+    if not expected_fields <= set(event):
+        errors.append("closed-loop health schema is incomplete")
+        return
+    health = str(event.get("health", ""))
+    allowed = {
+        "primary": {"healthy", "degraded"},
+        "success": {"healthy", "degraded"},
+        "fallback": {"failed"},
+        "error": {"failed"},
+        "failed": {"failed"},
+        "timeout": {"timeout"},
+        "interrupted": {"interrupted"},
+    }
+    if health not in allowed.get(str(outcome), {"failed"}):
+        errors.append("closed-loop health conflicts with terminal outcome")
+
+    candidate_flow = event.get("candidate_flow", {})
+    closure = event.get("closure", {})
+    if not isinstance(candidate_flow, dict) or not isinstance(closure, dict):
+        errors.append("closed-loop health flow schema is invalid")
+        return
+    if str(candidate_flow.get("selected_candidate_id", "")) != selected_id:
+        errors.append("closed-loop health selected candidate is inconsistent")
+    if bool(closure.get("answer_available", False)) != bool(selected_id):
+        errors.append("closed-loop health answer availability is inconsistent")
+
+    proof_events = by_name.get("proof_completion_summary", [])
+    expected_proof = "not_available"
+    if proof_events and selected_id:
+        expected_proof = (
+            "complete"
+            if proof_events[-1].get("status") == "complete"
+            else "incomplete"
+        )
+    if closure.get("proof_status") != expected_proof:
+        errors.append("closed-loop health proof status is inconsistent")
 
 
 def _budget_summary(event: dict[str, Any] | None) -> dict[str, Any]:
@@ -818,6 +1110,26 @@ def _selected_steps(value: Any, limits: JudgeTraceLimits) -> list[Any]:
         return []
     text_limit = max(256, limits.judge_trace_event_max_chars // 6)
     item_limit = min(32, max(1, limits.judge_trace_event_max_chars // 512))
+    steps = [
+        _compact_text(str(step), text_limit)
+        for step in value[:item_limit]
+    ]
+    if len(value) > item_limit:
+        steps.append(
+            {
+                "kind": "step_overflow",
+                "item_count": len(value),
+                "content_digest": _digest(value),
+            }
+        )
+    return steps
+
+
+def _candidate_steps(value: Any, char_budget: int) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    item_limit = min(4, max(1, char_budget // 512))
+    text_limit = max(96, char_budget // max(2, item_limit * 2))
     steps = [
         _compact_text(str(step), text_limit)
         for step in value[:item_limit]

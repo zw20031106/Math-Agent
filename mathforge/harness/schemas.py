@@ -32,6 +32,37 @@ class CandidateRole(str, Enum):
     ALTERNATIVE_SOLVER = "AlternativeSolver"
     REPAIR_AGENT = "RepairAgent"
     LLM_FINALIZER = "LLMFinalizer"
+    DETERMINISTIC_SHADOW = "DeterministicShadow"
+
+
+class CandidateSource(str, Enum):
+    LLM_PRIMARY = "llm_primary"
+    LLM_ALTERNATIVE = "llm_alternative"
+    LLM_REPAIR = "llm_repair"
+    LLM_FINALIZER = "llm_finalizer"
+    DETERMINISTIC_SHADOW = "deterministic_shadow"
+    LEMMA_GUIDED = "lemma_guided"
+
+
+class CandidateParseTier(str, Enum):
+    STRICT = "strict"
+    RECOVERED = "recovered"
+    ANSWER_RECOVERED = "answer_recovered"
+    REJECTED = "rejected"
+
+
+def _default_candidate_source(role: str) -> str:
+    return {
+        CandidateRole.PRIMARY_SOLVER.value: CandidateSource.LLM_PRIMARY.value,
+        CandidateRole.ALTERNATIVE_SOLVER.value: (
+            CandidateSource.LLM_ALTERNATIVE.value
+        ),
+        CandidateRole.REPAIR_AGENT.value: CandidateSource.LLM_REPAIR.value,
+        CandidateRole.LLM_FINALIZER.value: CandidateSource.LLM_FINALIZER.value,
+        CandidateRole.DETERMINISTIC_SHADOW.value: (
+            CandidateSource.DETERMINISTIC_SHADOW.value
+        ),
+    }.get(role, CandidateSource.LLM_PRIMARY.value)
 
 
 class ProblemType(str, Enum):
@@ -470,6 +501,75 @@ class Claim:
 
 
 @dataclass
+class CandidatePatch:
+    source_candidate_id: str
+    base_version: int
+    affected_claim_ids: list[str]
+    replacement_claims: list[Claim]
+    final_answer: str = ""
+    public_solution_steps: list[str] = field(default_factory=list)
+    unresolved_obligations: list[str] = field(default_factory=list)
+    parse_status: str = "strict_json"
+    contract_deviations: list[str] = field(default_factory=list)
+
+    def validate(self) -> None:
+        if not self.source_candidate_id:
+            raise SchemaValidationError("CandidatePatch source identity is required")
+        if type(self.base_version) is not int or self.base_version < 1:
+            raise SchemaValidationError("CandidatePatch base version is invalid")
+        _require_string_list(
+            self.affected_claim_ids,
+            "CandidatePatch.affected_claim_ids",
+        )
+        _require_string_list(
+            self.public_solution_steps,
+            "CandidatePatch.public_solution_steps",
+        )
+        _require_string_list(
+            self.unresolved_obligations,
+            "CandidatePatch.unresolved_obligations",
+        )
+        _require_string_list(
+            self.contract_deviations,
+            "CandidatePatch.contract_deviations",
+        )
+        if not self.affected_claim_ids:
+            raise SchemaValidationError("CandidatePatch affected claims are empty")
+        if not isinstance(self.final_answer, str):
+            raise SchemaValidationError("CandidatePatch final answer must be a string")
+        affected = set(self.affected_claim_ids)
+        replacement_ids: set[str] = set()
+        for claim in self.replacement_claims:
+            claim.validate()
+            if claim.claim_id not in affected:
+                raise SchemaValidationError(
+                    "CandidatePatch contains an unrelated replacement"
+                )
+            if claim.claim_id in replacement_ids:
+                raise SchemaValidationError(
+                    "CandidatePatch contains a duplicate replacement"
+                )
+            replacement_ids.add(claim.claim_id)
+        if not replacement_ids:
+            raise SchemaValidationError("CandidatePatch has no replacement claims")
+
+    def to_dict(self) -> dict:
+        return {
+            "source_candidate_id": self.source_candidate_id,
+            "base_version": self.base_version,
+            "affected_claim_ids": list(self.affected_claim_ids),
+            "replacement_claims": [
+                claim.to_dict() for claim in self.replacement_claims
+            ],
+            "final_answer": self.final_answer,
+            "public_solution_steps": list(self.public_solution_steps),
+            "unresolved_obligations": list(self.unresolved_obligations),
+            "parse_status": self.parse_status,
+            "contract_deviations": list(self.contract_deviations),
+        }
+
+
+@dataclass
 class CandidateSolution:
     SCHEMA_VERSION: ClassVar[str] = CANDIDATE_SCHEMA_VERSION
 
@@ -490,6 +590,8 @@ class CandidateSolution:
     is_method_duplicate: bool = False
     contract_deviations: list[str] = field(default_factory=list)
     method_steps: list[MethodStep] = field(default_factory=list)
+    source: str = CandidateSource.LLM_PRIMARY.value
+    parse_tier: str = CandidateParseTier.STRICT.value
     schema_version: str = CANDIDATE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -512,6 +614,8 @@ class CandidateSolution:
             "is_method_duplicate": self.is_method_duplicate,
             "contract_deviations": list(self.contract_deviations),
             "method_steps": [step.to_dict() for step in self.method_steps],
+            "source": self.source,
+            "parse_tier": self.parse_tier,
         }
 
     def validate(self) -> None:
@@ -526,6 +630,8 @@ class CandidateSolution:
             self.solution_text,
             self.parse_status,
             self.planned_method_family,
+            self.source,
+            self.parse_tier,
         )
         if any(not isinstance(value, str) for value in string_fields):
             raise SchemaValidationError(
@@ -533,6 +639,12 @@ class CandidateSolution:
             )
         if self.role not in {item.value for item in CandidateRole}:
             raise SchemaValidationError(f"invalid candidate role: {self.role}")
+        if self.source not in {item.value for item in CandidateSource}:
+            raise SchemaValidationError(f"invalid candidate source: {self.source}")
+        if self.parse_tier not in {item.value for item in CandidateParseTier}:
+            raise SchemaValidationError(
+                f"invalid candidate parse tier: {self.parse_tier}"
+            )
         if self.answer_type not in {item.value for item in AnswerType}:
             raise SchemaValidationError(f"invalid candidate answer type: {self.answer_type}")
         if (
@@ -653,6 +765,8 @@ class CandidateSolution:
             "is_method_duplicate",
             "contract_deviations",
             "method_steps",
+            "source",
+            "parse_tier",
         }
         _reject_unknown_fields(payload, allowed, "CandidateSolution")
         strings = _require_string_fields(
@@ -724,6 +838,15 @@ class CandidateSolution:
             method_steps=[
                 MethodStep.from_dict(item) for item in raw_method_steps
             ],
+            source=str(
+                payload.get(
+                    "source",
+                    _default_candidate_source(strings["role"]),
+                )
+            ),
+            parse_tier=str(
+                payload.get("parse_tier", CandidateParseTier.STRICT.value)
+            ),
             schema_version=cls.SCHEMA_VERSION,
         )
         candidate.validate()

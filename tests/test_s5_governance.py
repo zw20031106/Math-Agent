@@ -11,7 +11,7 @@ import pytest
 from mathforge.benchmark import BenchmarkCase, benchmark_record_to_dict, run_benchmark
 from mathforge.evaluation.artifacts import finalize_artifact, validate_artifact
 from mathforge.governance.reviews import validate_review_manifest
-from mathforge.model_identity import EXACT_INTERN_MODEL, require_exact_intern_model
+from mathforge.model_identity import EXACT_INTERN_MODEL, exact_model_identity
 from mathforge.retrieval.builder import build_database
 from mathforge.retrieval.retriever import RetrievalStatus, Retriever
 from mathforge.retrieval.schemas import KnowledgeCard
@@ -118,7 +118,10 @@ def test_run_and_benchmark_provenance_are_complete_and_tamper_evident(tmp_path):
     harness = MathForgeHarness(
         FakeClient(),
         _minimal_config(),
-        model_identity=require_exact_intern_model(),
+        model_identity=exact_model_identity(
+            EXACT_INTERN_MODEL,
+            request_source="test",
+        ),
     )
     result = harness.solve("1 + 1", {})
     provenance = result["provenance"]
@@ -135,7 +138,7 @@ def test_run_and_benchmark_provenance_are_complete_and_tamper_evident(tmp_path):
     assert len(provenance["config"]["sha256"]) == 64
     assert len(provenance["prompts"]) == 8
     assert len(provenance["skills"]) == 35
-    assert len(provenance["tools"]) == 9
+    assert len(provenance["tools"]) == 10
     assert provenance["rag"]["schema_version"]
     assert len(provenance["rag"]["knowledge_db_sha256"]) == 64
     assert provenance["content_reviews"]["status"] == "pending-human"

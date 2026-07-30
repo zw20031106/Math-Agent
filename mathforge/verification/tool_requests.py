@@ -53,7 +53,7 @@ class ClaimToolRequestBuilder:
         selected_tools: list[str] | None = None,
     ) -> ClaimToolRequest:
         check = str(claim.check_type).strip().lower()
-        if check not in self._tools.registered_tools:
+        if check not in self._tools.claimable_tools:
             return ClaimToolRequest(
                 claim.claim_id,
                 check,

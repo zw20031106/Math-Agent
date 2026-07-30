@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from threading import Lock
 
-from mathforge.harness.allocation import CallAllocationPlan
+from mathforge.harness.allocation import CallAllocationPlan, CallBudgetSnapshot
 from mathforge.harness.deadline import DeadlineController
 from mathforge.harness.errors import BudgetExceeded
 
@@ -108,12 +108,7 @@ class CallBudget:
             self._ensure_mutable_locked()
             if plan.max_calls != self.max_calls:
                 raise ValueError("call allocation plan does not match budget")
-            for stage, used in self._stage_calls.items():
-                if used > plan.limit_for(stage):
-                    raise ValueError(
-                        f"existing {stage} calls exceed allocation plan"
-                    )
-            self._allocation_plan = plan
+            self._allocation_plan = plan.with_stage_floors(self._stage_calls)
 
     def consume(self, *, stage: str = "unallocated", optional: bool = False) -> None:
         with self._lock:
@@ -128,6 +123,20 @@ class CallBudget:
                 raise BudgetExceeded("model call deadline reached")
             self.used_calls += 1
             self._stage_calls[stage] = self._stage_calls.get(stage, 0) + 1
+
+    def refund(self, *, stage: str = "unallocated") -> bool:
+        """Return a reservation only when no provider request was dispatched."""
+        with self._lock:
+            self._ensure_mutable_locked()
+            used_for_stage = self._stage_calls.get(stage, 0)
+            if self.used_calls <= 0 or used_for_stage <= 0:
+                return False
+            self.used_calls -= 1
+            if used_for_stage == 1:
+                self._stage_calls.pop(stage, None)
+            else:
+                self._stage_calls[stage] = used_for_stage - 1
+            return True
 
     def record_tokens(self, tokens: int) -> None:
         with self._lock:
@@ -152,6 +161,7 @@ class CallBudget:
             record = {
                 "stage": str(stage),
                 **dict(allocation),
+                "dispatched": False,
                 "started_elapsed_seconds": round(
                     self.deadline.elapsed_seconds(),
                     6,
@@ -172,6 +182,7 @@ class CallBudget:
                 "observed_output_tokens": 0,
                 "output_counting_mode": "",
                 "output_chars": 0,
+                "output_budget_exceeded": False,
                 "elapsed_seconds": 0.0,
                 "queue_elapsed_seconds": 0.0,
                 "execution_elapsed_seconds": 0.0,
@@ -179,6 +190,11 @@ class CallBudget:
             }
             self.model_call_records.append(record)
             return len(self.model_call_records) - 1
+
+    def record_model_call_dispatched(self, index: int) -> None:
+        with self._lock:
+            self._ensure_mutable_locked()
+            self.model_call_records[index]["dispatched"] = True
 
     def record_model_call_completed(
         self,
@@ -189,6 +205,7 @@ class CallBudget:
         output_chars: int,
         elapsed_seconds: float,
         transport_attempts: int = 1,
+        output_budget_exceeded: bool = False,
     ) -> None:
         with self._lock:
             self._ensure_mutable_locked()
@@ -207,6 +224,9 @@ class CallBudget:
                     "observed_output_tokens": observed,
                     "output_counting_mode": str(output_counting_mode),
                     "output_chars": characters,
+                    "output_budget_exceeded": bool(
+                        output_budget_exceeded
+                    ),
                     "elapsed_seconds": round(elapsed, 6),
                 }
             )
@@ -433,6 +453,40 @@ class CallBudget:
 
     def _elapsed(self) -> float:
         return self.deadline.elapsed_seconds()
+
+    def snapshot(self) -> CallBudgetSnapshot:
+        with self._lock:
+            limits = (
+                {
+                    stage: self._allocation_plan.limit_for(stage)
+                    for stage in (
+                        "router",
+                        "primary",
+                        "alternative",
+                        "verifier",
+                        "repair",
+                        "lemma",
+                        "finalizer",
+                    )
+                }
+                if self._allocation_plan is not None
+                else {}
+            )
+            stage_remaining = {
+                stage: max(0, limit - self._stage_calls.get(stage, 0))
+                for stage, limit in limits.items()
+            }
+            return CallBudgetSnapshot(
+                max_calls=self.max_calls,
+                used_calls=self.used_calls,
+                remaining_calls=max(0, self.max_calls - self.used_calls),
+                remaining_seconds=round(
+                    self.deadline.remaining_seconds(),
+                    6,
+                ),
+                exploration_open=self.deadline.exploration_allowed(),
+                stage_remaining=stage_remaining,
+            )
 
     def to_dict(self) -> dict:
         with self._lock:

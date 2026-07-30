@@ -33,46 +33,64 @@
       "path": "prompts",
       "pattern": "contract.md",
       "expected_count": 7,
-      "version": "prompt-contract-2",
-      "engineering_reviewer": "codex-s6-e6-evidence-audit",
-      "review_date": "2026-07-25",
-      "sha256": "e03d1d373e1c65324ee9b3cda2265b78b7557600ab59fc779ef8cda901cf5b53"
+      "version": "prompt-contract-3",
+      "engineering_reviewer": "codex-phase3-candidate-v2",
+      "review_date": "2026-07-29",
+      "sha256": "bbe4515617c6b79b9bf1c853538da246b4a58a8631214f07b9e9a6a28fc30458"
     },
     {
       "id": "prompt-compiler",
       "kind": "file",
       "path": "mathforge/agents/prompt_compiler.py",
       "expected_count": 1,
-      "version": "prompt-compiler-3",
-      "engineering_reviewer": "codex-phase3-prompt-audit",
-      "review_date": "2026-07-26",
-      "sha256": "cec20a12503c2014e4d3cb806da7891138a8dc551e5d9791cdc47ca315c45ffe"
+      "version": "prompt-compiler-5",
+      "engineering_reviewer": "codex-phase3-candidate-v2",
+      "review_date": "2026-07-29",
+      "sha256": "2ff40ee9eb5fb41728a41a0e9bb9b42ca7147a8e9a8ffd584e04ffece2430436"
     },
     {
       "id": "proof-obligations",
       "kind": "file",
       "path": "mathforge/verification/proof_obligations.py",
       "expected_count": 1,
-      "version": "core-schema-1.2",
-      "engineering_reviewer": "codex-s5-audit",
-      "review_date": "2026-07-23",
-      "sha256": "9600329351ee394d603447f4a3dd0ddcf1df1ddd2f38a73ac680fe1cbd9f8b52"
+      "version": "proof-obligations-phase4",
+      "engineering_reviewer": "codex-phase4-proof-closure",
+      "review_date": "2026-07-29",
+      "sha256": "85838f7d94049b06a44a363ac738091d20945f568cc9d4285dc1f3e9b50b4e5c"
     },
     {
       "id": "tool-capabilities",
       "kind": "file_set",
       "paths": [
         "mathforge/tool_prompt_examples.py",
+        "mathforge/tools/executor.py",
+        "mathforge/tools/mcp_server.py",
         "mathforge/tools/registry.py",
+        "mathforge/tools/shadow_solver.py",
         "mathforge/verification/capabilities.py",
         "mathforge/verification/tool_requests.py",
         "mathforge/verification/evidence.py"
       ],
-      "expected_count": 5,
-      "version": "tool-contract-6",
-      "engineering_reviewer": "codex-phase4-math-kernel-audit",
-      "review_date": "2026-07-27",
-      "sha256": "80196db9cb957e11b796eb1ba7df5b36823a84be9ead632873d80077f0aed46c"
+      "expected_count": 8,
+      "version": "tool-contract-phase5-shadow",
+      "engineering_reviewer": "codex-phase5-shadow-audit",
+      "review_date": "2026-07-29",
+      "sha256": "977d189331693605e9cb42707eb6a3bf654ce00a1fd11ac7144934d34750664c"
+    },
+    {
+      "id": "frozen-lemma-store",
+      "kind": "file_set",
+      "paths": [
+        "mathforge/memory/frozen_lemma_store.py",
+        "scripts/build_frozen_lemma_store.py",
+        "data/frozen_lemmas.jsonl",
+        "data/frozen_lemmas_manifest.json"
+      ],
+      "expected_count": 4,
+      "version": "frozen-lemma-store-1",
+      "engineering_reviewer": "codex-phase5-cache-audit",
+      "review_date": "2026-07-29",
+      "sha256": "1ebe387cbc947812f57fe3744eee5b4589a32cd64f684be5ca45be553b1dca78"
     },
     {
       "id": "answer-normalization",

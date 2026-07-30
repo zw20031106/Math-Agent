@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import re
 from time import perf_counter
 
 from mathforge.config import HarnessConfig
@@ -36,8 +37,13 @@ class ClaimsClient:
         self.calls = 0
 
     def chat(self, *, messages, temperature, max_tokens):
-        del messages, temperature, max_tokens
+        del temperature, max_tokens
         self.calls += 1
+        match = re.search(
+            r"Required core method family: ([a-z-]+)\.",
+            messages[-1]["content"],
+        )
+        method = match.group(1) if match is not None else "direct-deduction"
         claims = [
             {
                 "claim_id": f"c{index}",
@@ -50,7 +56,7 @@ class ClaimsClient:
         ]
         return json.dumps(
             {
-                "method": "direct",
+                "method": method,
                 "method_steps": [
                     {
                         "step_id": "s1",

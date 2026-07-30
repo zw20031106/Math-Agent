@@ -31,6 +31,12 @@ class StdioMCPServer:
             arguments = parameters.get("arguments", {})
             if not isinstance(arguments, dict):
                 return self._error(request_id, -32602, "tool arguments must be an object")
+            try:
+                model_claimable = self._registry.is_model_claimable(name)
+            except KeyError:
+                model_claimable = False
+            if not model_claimable:
+                return self._error(request_id, -32602, "tool is not model-callable")
             tool_result = self._executor.execute(name, arguments)
             structured = tool_result.to_dict()
             result = {

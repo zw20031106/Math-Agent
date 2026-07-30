@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.4",
+  "schema_version": "1.5",
   "profile": "safe",
   "status": "validated",
   "model_max_concurrency": 1,
@@ -23,6 +23,7 @@
   "late_result_registry_max_entries": 64,
   "trace_max_chars": 12000,
   "trace_max_events": 64,
+  "final_response_max_chars": 20000,
   "public_result_max_bytes": 262144,
   "judge_trace_max_events": 32,
   "judge_trace_max_chars": 24000,
@@ -45,5 +46,7 @@
   "enable_lemma_loop": false,
   "enable_rag": false,
   "enable_repair": false,
-  "enable_finalizer": false
+  "enable_finalizer": false,
+  "enable_shadow": false,
+  "enable_frozen_lemma_store": false
 }

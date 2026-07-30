@@ -30,6 +30,7 @@ _HTTP_5XX = re.compile(r"\b5\d\d\b")
 class ObservedModelResponse(str):
     transport_attempts: int
     model_call_index: int | None
+    output_budget_exceeded: bool
 
     def __new__(
         cls,
@@ -37,10 +38,12 @@ class ObservedModelResponse(str):
         *,
         transport_attempts: int = 1,
         model_call_index: int | None = None,
+        output_budget_exceeded: bool = False,
     ) -> ObservedModelResponse:
         instance = super().__new__(cls, value)
         instance.transport_attempts = max(1, int(transport_attempts))
         instance.model_call_index = model_call_index
+        instance.output_budget_exceeded = bool(output_budget_exceeded)
         return instance
 
 
@@ -64,6 +67,11 @@ def classify_transport_failure(error: BaseException) -> str:
             "connection refused",
             "name resolution",
             "dns",
+            "proxyerror",
+            "sslerror",
+            "unexpected_eof_while_reading",
+            "remote end closed connection",
+            "connection reset",
         )
     ):
         return "network_connect_failure"

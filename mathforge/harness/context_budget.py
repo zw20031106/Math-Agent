@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
+from math import ceil
 import os
 from pathlib import Path
 from typing import Any
@@ -22,11 +23,12 @@ INTERN_S2_CHAT_TEMPLATE_SHA256 = (
     "ae808284ec32b532b894f4d8d9f90fcc8db9826c33265a8602ffdab15d569210"
 )
 TOKENIZER_DIRECTORY_ENV = "MATHFORGE_INTERN_S2_TOKENIZER_DIR"
-UTF8_FALLBACK_VERSION = "utf8-chat-envelope-v1"
+UTF8_FALLBACK_VERSION = "multilingual-chat-estimator-v2"
 _UTF8_FALLBACK_SPEC = (
     "Each message is serialized as <|im_start|>{role}\\n{content}<|im_end|>\\n; "
     "the Intern-S2 assistant thinking generation prefix is appended; "
-    "one UTF-8 byte is counted as one token."
+    "ASCII non-space characters count as 0.5 token, ASCII whitespace as 0.25, "
+    "CJK characters as 1.0, and other Unicode characters as 1.5."
 )
 UTF8_FALLBACK_SHA256 = sha256(_UTF8_FALLBACK_SPEC.encode("utf-8")).hexdigest()
 
@@ -41,7 +43,10 @@ class TokenCount:
     def __post_init__(self) -> None:
         if type(self.tokens) is not int or self.tokens < 0:
             raise ValueError("token count must be a nonnegative integer")
-        if self.counting_mode not in {"official_tokenizer", "utf8_byte_upper_bound"}:
+        if self.counting_mode not in {
+            "official_tokenizer",
+            "multilingual_estimate",
+        }:
             raise ValueError("unsupported token counting mode")
 
 
@@ -80,7 +85,7 @@ class ContextAllocation:
 
 
 class InternS2TokenCounter:
-    """Count with the pinned official tokenizer, or a conservative byte upper bound."""
+    """Count with the pinned tokenizer or a recorded multilingual estimate."""
 
     def __init__(self, tokenizer: Any | None = None) -> None:
         self._tokenizer = tokenizer if tokenizer is not None else _load_local_tokenizer()
@@ -126,8 +131,8 @@ class InternS2TokenCounter:
     @staticmethod
     def _fallback_count(text: str) -> TokenCount:
         return TokenCount(
-            tokens=len(text.encode("utf-8")),
-            counting_mode="utf8_byte_upper_bound",
+            tokens=_estimated_multilingual_tokens(text),
+            counting_mode="multilingual_estimate",
             tokenizer_revision=UTF8_FALLBACK_VERSION,
             tokenizer_sha256=UTF8_FALLBACK_SHA256,
         )
@@ -280,3 +285,22 @@ def _encoded_length(encoded: Any) -> int:
         "unsupported tokenizer output shape: "
         f"{type(encoded).__name__}:{len(serialized)}"
     )
+
+
+def _estimated_multilingual_tokens(text: str) -> int:
+    if not text:
+        return 0
+    estimate = 0.0
+    for character in text:
+        codepoint = ord(character)
+        if codepoint < 128:
+            estimate += 0.25 if character.isspace() else 0.5
+        elif (
+            0x3400 <= codepoint <= 0x4DBF
+            or 0x4E00 <= codepoint <= 0x9FFF
+            or 0xF900 <= codepoint <= 0xFAFF
+        ):
+            estimate += 1.0
+        else:
+            estimate += 1.5
+    return max(1, ceil(estimate))

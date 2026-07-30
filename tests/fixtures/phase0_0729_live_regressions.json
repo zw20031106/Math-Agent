@@ -1,0 +1,183 @@
+{
+  "schema_version": "1.0",
+  "source": "sanitized_fourth_live_run",
+  "captured_at": "2026-07-29",
+  "contains_raw_private_reasoning": false,
+  "contains_credentials": false,
+  "run": {
+    "attempt_count": 2,
+    "manifest_status_after_forced_stop": "running",
+    "configured_case_concurrency": 1,
+    "preflight_status": "passed"
+  },
+  "cases": [
+    {
+      "id": "0",
+      "status": "success",
+      "latency_seconds": 249.321202,
+      "model_calls": 3,
+      "transport_attempts": 3,
+      "repair_attempts": 1,
+      "repair_successes": 0,
+      "repair_rollbacks": 1,
+      "proof_status": "incomplete",
+      "final_answer": "-1/4"
+    },
+    {
+      "id": "1",
+      "status": "failed",
+      "latency_seconds": 110.199995,
+      "model_calls": 1,
+      "transport_attempts": 2,
+      "root_failure": "network_connect_failure",
+      "terminal_error": "all_candidates_failed",
+      "proof_status": "complete"
+    },
+    {
+      "id": "2",
+      "status": "success",
+      "latency_seconds": 77.31395,
+      "model_calls": 1,
+      "transport_attempts": 1,
+      "proof_obligation_count": 0,
+      "proof_status": "complete",
+      "final_answer": "π^2/6 - (ln 2)^2"
+    },
+    {
+      "id": "3",
+      "status": "failed",
+      "latency_seconds": 126.881782,
+      "model_calls": 1,
+      "transport_attempts": 1,
+      "root_failure": "network_connect_failure",
+      "terminal_error": "all_candidates_failed",
+      "proof_status": "complete"
+    },
+    {
+      "id": "4",
+      "status": "interrupted",
+      "last_completed_stage": "candidate_generation",
+      "next_started_stage": "verification"
+    }
+  ],
+  "candidate_replays": [
+    {
+      "case_id": "0",
+      "problem": "求极限 lim_{n→∞} n^4(ln(1+1/n)-1/n+1/(2n^2)-1/(3n^3))。",
+      "answer_type": "expression",
+      "response": {
+        "method": "direct-analytic",
+        "final_answer": "-1/4",
+        "public_solution_steps": [
+          "Apply Taylor's theorem to ln(1+x) at x=0 through the fourth-order term, with a fifth-order remainder.",
+          "Substitute x=1/n, multiply by n^4, and let n tend to infinity to obtain -1/4."
+        ],
+        "claims": [
+          {
+            "claim_id": "c1",
+            "statement": "The fourth-order Taylor expansion has an O(x^5) remainder near zero.",
+            "depends_on": [],
+            "check_type": "theorem_preconditions",
+            "importance": "critical"
+          },
+          {
+            "claim_id": "c2",
+            "statement": "After substitution and cancellation the expression is -1/4+O(1/n).",
+            "depends_on": [
+              "c1"
+            ],
+            "check_type": "reasoning",
+            "importance": "critical"
+          }
+        ],
+        "method_steps": [
+          {
+            "step_id": "s1",
+            "kind": "theorem_application",
+            "claim_ids": [
+              "c1"
+            ],
+            "theorem": "Taylor's theorem with remainder"
+          },
+          {
+            "step_id": "s2",
+            "kind": "conclusion",
+            "claim_ids": [
+              "c2"
+            ],
+            "theorem": ""
+          }
+        ],
+        "solution_text": "Taylor expansion and cancellation give -1/4+O(1/n), hence the limit is -1/4.",
+        "assumptions": [],
+        "theorems": [
+          "Taylor's theorem with remainder"
+        ],
+        "unresolved_obligations": []
+      }
+    },
+    {
+      "case_id": "2",
+      "problem": "设 H_n^(2)=sum_{k=1}^n 1/k^2，计算 sum_{n=1}^∞ H_n^(2)/2^n。",
+      "answer_type": "expression",
+      "response": {
+        "method": "direct-analytic",
+        "final_answer": "π^2/6 - (ln 2)^2",
+        "public_solution_steps": [
+          "Write the series as a double sum and interchange the order of summation using absolute convergence.",
+          "Use the generating function sum H_n^(2)x^n=Li_2(x)/(1-x) and set x=1/2.",
+          "Apply Li_2(1/2)=π^2/12-(ln 2)^2/2."
+        ],
+        "claims": [
+          {
+            "claim_id": "c1",
+            "statement": "For |x|<1, sum H_n^(2)x^n=Li_2(x)/(1-x).",
+            "depends_on": [],
+            "check_type": "interchange",
+            "importance": "critical"
+          },
+          {
+            "claim_id": "c2",
+            "statement": "Li_2(1/2)=π^2/12-(ln 2)^2/2.",
+            "depends_on": [],
+            "check_type": "symbolic_equivalence",
+            "importance": "critical"
+          },
+          {
+            "claim_id": "c3",
+            "statement": "The requested sum is π^2/6-(ln 2)^2.",
+            "depends_on": [
+              "c1",
+              "c2"
+            ],
+            "check_type": "reasoning",
+            "importance": "critical"
+          }
+        ],
+        "method_steps": [
+          {
+            "step_id": "s1",
+            "kind": "theorem_application",
+            "claim_ids": [
+              "c1"
+            ],
+            "theorem": ""
+          },
+          {
+            "step_id": "s2",
+            "kind": "computation",
+            "claim_ids": [
+              "c2",
+              "c3"
+            ],
+            "theorem": ""
+          }
+        ],
+        "solution_text": "The generating function and the value of Li_2(1/2) give the stated closed form.",
+        "assumptions": [],
+        "theorems": [],
+        "unresolved_obligations": []
+      }
+    }
+  ]
+}

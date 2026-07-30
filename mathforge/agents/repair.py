@@ -8,11 +8,13 @@ from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import ModelResponseError
 from mathforge.harness.provider import OfficialClientProvider
-from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProblemIR
-from mathforge.parsing.solution_parser import (
-    SolutionParser,
-    candidate_response_validation,
+from mathforge.harness.schemas import (
+    CandidatePatch,
+    CandidateSolution,
+    EvidenceRecord,
+    ProblemIR,
 )
+from mathforge.parsing.solution_parser import SolutionParser
 
 
 class RepairAgent:
@@ -38,7 +40,7 @@ class RepairAgent:
         max_tokens: int,
         context_view: RoleContextView | None = None,
         skill_context: str = "",
-    ) -> CandidateSolution:
+    ) -> CandidatePatch:
         local_claims = [
             claim.to_dict() for claim in candidate.claims if claim.claim_id in affected_claim_ids
         ]
@@ -70,10 +72,10 @@ class RepairAgent:
             user_content=user,
             runtime_instructions=(
                 "Repair only the supplied failed claim impact closure. "
-                "Return exactly one CandidateSolution model-fields JSON object with "
-                "replacement claims, corrected public steps, the corrected or unchanged "
-                "exact final answer, and unresolved obligations. Do not rewrite unrelated "
-                "content or emit native tool calls."
+                "Return only replacement_claims, corrected local public steps, "
+                "the corrected or unchanged exact final answer, and unresolved "
+                "obligations. Do not rewrite unrelated content or emit native "
+                "tool calls."
             ),
         )
         messages = compilation.messages
@@ -93,18 +95,120 @@ class RepairAgent:
         if budget.deadline.must_finalize():
             raise RuntimeError("repair response arrived after finalize cutoff")
         budget.ensure_stage("solution_parser")
-        repaired = self._parser.parse(
+        patch = self._parse_patch(
             response,
-            candidate_id=f"{candidate.candidate_id}-v{candidate.version + 1}",
+            candidate,
+            affected_claim_ids,
+        )
+        budget.record_model_response_validation(
+            getattr(response, "model_call_index", None),
+            (
+                "strict_repair_patch"
+                if patch.parse_status == "strict_json"
+                and not patch.contract_deviations
+                else "recovered_repair_patch"
+            ),
+            rejected=False,
+        )
+        return patch
+
+    def _parse_patch(
+        self,
+        response: str,
+        candidate: CandidateSolution,
+        affected_claim_ids: list[str],
+    ) -> CandidatePatch:
+        payload, parse_status = self._parser._payload(response.strip())
+        if payload is None:
+            raise ModelResponseError("repair_patch_invalid")
+        deviations: list[str] = []
+        raw_replacements = payload.get("replacement_claims")
+        if raw_replacements is None and "claims" in payload:
+            raw_replacements = payload["claims"]
+            deviations.append("claims:legacy_patch_alias")
+        if not isinstance(raw_replacements, list):
+            raise ModelResponseError("repair_patch_invalid")
+
+        normalized, alias_deviations = self._parser._normalize_aliases(
+            {"claims": raw_replacements}
+        )
+        deviations.extend(alias_deviations)
+        normalized_replacements = normalized["claims"]
+        replacement_ids = {
+            str(item.get("claim_id", ""))
+            for item in normalized_replacements
+            if isinstance(item, dict)
+        }
+        original_claims = {
+            claim.claim_id: {
+                "claim_id": claim.claim_id,
+                "statement": claim.statement,
+                "depends_on": list(claim.depends_on),
+                "check_type": claim.check_type,
+                "importance": claim.importance,
+            }
+            for claim in candidate.claims
+        }
+        for item in normalized_replacements:
+            if isinstance(item, dict):
+                original_claims[str(item.get("claim_id", ""))] = item
+        synthetic_payload = {
+            "method": candidate.method,
+            "method_steps": [
+                {
+                    "step_id": step.step_id,
+                    "kind": step.kind,
+                    "claim_ids": list(step.claim_ids),
+                    "theorem": step.theorem,
+                }
+                for step in candidate.method_steps
+            ],
+            "solution_text": "\n".join(
+                item
+                for item in payload.get("public_solution_steps", [])
+                if isinstance(item, str)
+            ),
+            "public_solution_steps": [
+                item
+                for item in payload.get("public_solution_steps", [])
+                if isinstance(item, str)
+            ],
+            "final_answer": (
+                payload.get("final_answer", "")
+                if isinstance(payload.get("final_answer", ""), str)
+                else ""
+            ),
+            "assumptions": list(candidate.assumptions),
+            "theorems": list(candidate.theorems),
+            "claims": list(original_claims.values()),
+            "unresolved_obligations": [
+                item
+                for item in payload.get("unresolved_obligations", [])
+                if isinstance(item, str)
+            ],
+        }
+        normalized_candidate = self._parser.parse(
+            json.dumps(synthetic_payload, ensure_ascii=False),
+            candidate_id=f"{candidate.candidate_id}-patch",
             role="RepairAgent",
             answer_type=candidate.answer_type,
         )
-        validation_code, rejected = candidate_response_validation(repaired)
-        budget.record_model_response_validation(
-            getattr(response, "model_call_index", None),
-            validation_code,
-            rejected=rejected,
+        patch = CandidatePatch(
+            source_candidate_id=candidate.candidate_id,
+            base_version=candidate.version,
+            affected_claim_ids=list(affected_claim_ids),
+            replacement_claims=[
+                claim
+                for claim in normalized_candidate.claims
+                if claim.claim_id in replacement_ids
+            ],
+            final_answer=synthetic_payload["final_answer"],
+            public_solution_steps=synthetic_payload["public_solution_steps"],
+            unresolved_obligations=synthetic_payload[
+                "unresolved_obligations"
+            ],
+            parse_status=parse_status,
+            contract_deviations=deviations,
         )
-        if rejected:
-            raise ModelResponseError(validation_code)
-        return repaired
+        patch.validate()
+        return patch

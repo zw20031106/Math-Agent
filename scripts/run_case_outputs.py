@@ -5,8 +5,10 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 import os
+import platform
 from pathlib import Path
 import signal
+import subprocess
 import sys
 import tempfile
 from threading import Event, Lock, Thread
@@ -23,6 +25,7 @@ from llm_client import InternChatClient  # noqa: E402
 from mathforge.agents.router_planner import RouterRuleEngine  # noqa: E402
 from mathforge.agents.solver import (  # noqa: E402
     PrimarySolver,
+    SolverExecutor,
     SolverRequest,
 )
 from mathforge.benchmark import (  # noqa: E402
@@ -33,6 +36,7 @@ from mathforge.benchmark import (  # noqa: E402
     summarize,
 )
 from mathforge.harness.orchestration import candidate_trace_payload  # noqa: E402
+from mathforge.harness.budget import CallBudget  # noqa: E402
 from mathforge.harness.errors import (  # noqa: E402
     ModelResponseError,
     ModelTransportError,
@@ -40,7 +44,11 @@ from mathforge.harness.errors import (  # noqa: E402
 from mathforge.harness.fingerprints import request_fingerprint  # noqa: E402
 from mathforge.harness.metrics import RunMetrics  # noqa: E402
 from mathforge.harness.model_policy import (  # noqa: E402
-    PROVIDER_CALL_TIMEOUT_SECONDS,
+    PROVIDER_HTTP_TIMEOUT_SECONDS,
+)
+from mathforge.harness.provider import (  # noqa: E402
+    ModelCallGate,
+    OfficialClientProvider,
 )
 from mathforge.harness.trace import TraceBuilder  # noqa: E402
 from mathforge.harness.trace_journal import TraceJournalFactory  # noqa: E402
@@ -52,10 +60,12 @@ from mathforge.harness.transport import (  # noqa: E402
 )
 from mathforge.model_identity import (  # noqa: E402
     EXACT_INTERN_MODEL,
-    MODEL_ENVIRONMENT_VARIABLE,
-    require_exact_intern_model,
+    exact_model_identity,
 )
 from mathforge.output.public_result import build_public_result  # noqa: E402
+from mathforge.output.judge_trace import (  # noqa: E402
+    JUDGE_TRACE_SCHEMA_VERSION,
+)
 from mathforge.output.deterministic_formatter import (  # noqa: E402
     DeterministicFormatter,
 )
@@ -67,13 +77,13 @@ from scripts.run_benchmark import load_benchmark_config  # noqa: E402
 
 PER_CASE_WALL_CLOCK_SECONDS = 1200.0
 RESULT_SERIALIZATION_RESERVE_SECONDS = 50.0
-RUN_MANIFEST_SCHEMA_VERSION = "1.2"
-COMPATIBLE_RUN_MANIFEST_SCHEMA_VERSIONS = frozenset({"1.1", "1.2"})
+RUN_MANIFEST_SCHEMA_VERSION = "1.3"
+COMPATIBLE_RUN_MANIFEST_SCHEMA_VERSIONS = frozenset({"1.1", "1.2", "1.3"})
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 MODEL_PREFLIGHT_SCHEMA_VERSION = "1.0"
-MODEL_PREFLIGHT_L1_MAX_TOKENS = 256
+MODEL_PREFLIGHT_L1_MAX_TOKENS = 4096
 MODEL_PREFLIGHT_MAX_TOKENS = 8192
-MODEL_FAST_FAILURE_ATTEMPTS = 2
+MODEL_FAST_FAILURE_ATTEMPTS = 1
 MODEL_FAST_FAILURE_SECONDS = 10.0
 MODEL_FAST_FAILURE_BACKOFF_SECONDS = 1.0
 DEFAULT_MAX_CONSECUTIVE_PROVIDER_FAILURES = 3
@@ -99,8 +109,8 @@ _PROVIDER_CIRCUIT_REASONS = frozenset(
 )
 
 
-class SerializedFastRetryClient:
-    """Serialize calls and retry one bounded provider-side failure."""
+class FastRetryClient:
+    """Retry one bounded provider-side failure without serializing callers."""
 
     def __init__(
         self,
@@ -121,37 +131,35 @@ class SerializedFastRetryClient:
         self._max_attempts = max_attempts
         self._fast_failure_seconds = fast_failure_seconds
         self._backoff_seconds = backoff_seconds
-        self._lock = Lock()
 
     def chat(self, *, messages, temperature, max_tokens) -> Any:
-        with self._lock:
-            for attempt in range(self._max_attempts):
-                started = perf_counter()
-                try:
-                    response = self._chat(
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                    )
-                    if not isinstance(response, str):
-                        return response
-                    return ObservedModelResponse(
-                        response,
-                        transport_attempts=attempt + 1,
-                    )
-                except Exception as error:
-                    elapsed = perf_counter() - started
-                    failure_code = classify_transport_failure(error)
-                    if (
-                        attempt + 1 >= self._max_attempts
-                        or elapsed > self._fast_failure_seconds
-                        or failure_code not in RETRYABLE_TRANSPORT_FAILURE_CODES
-                    ):
-                        raise ModelTransportError(
-                            failure_code,
-                            attempts=attempt + 1,
-                        ) from error
-                    sleep(self._backoff_seconds * (2**attempt))
+        for attempt in range(self._max_attempts):
+            started = perf_counter()
+            try:
+                response = self._chat(
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                if not isinstance(response, str):
+                    return response
+                return ObservedModelResponse(
+                    response,
+                    transport_attempts=attempt + 1,
+                )
+            except Exception as error:
+                elapsed = perf_counter() - started
+                failure_code = classify_transport_failure(error)
+                if (
+                    attempt + 1 >= self._max_attempts
+                    or elapsed > self._fast_failure_seconds
+                    or failure_code not in RETRYABLE_TRANSPORT_FAILURE_CODES
+                ):
+                    raise ModelTransportError(
+                        failure_code,
+                        attempts=attempt + 1,
+                    ) from error
+                sleep(self._backoff_seconds * (2**attempt))
         raise RuntimeError("unreachable model retry state")
 
 
@@ -418,6 +426,13 @@ class CaseRunManifest:
         self.rerun_case_ids: list[str] = []
         self._lock = Lock()
 
+    @property
+    def attempt_id(self) -> str:
+        attempts = self.payload.get("attempts", [])
+        if not isinstance(attempts, list) or not attempts:
+            raise RuntimeError("run manifest has no current attempt")
+        return str(attempts[-1]["attempt_id"])
+
     @classmethod
     def prepare(
         cls,
@@ -431,8 +446,8 @@ class CaseRunManifest:
         resume: bool,
         rerun_statuses: frozenset[str] = DEFAULT_RERUN_STATUSES,
     ) -> tuple[list, CaseRunManifest]:
-        if concurrency != 1:
-            raise ValueError("case runner concurrency must be exactly 1")
+        if concurrency < 1 or concurrency > 4:
+            raise ValueError("case runner concurrency must be between 1 and 4")
         invalid_rerun_statuses = set(rerun_statuses) - PUBLIC_CASE_STATUSES
         if invalid_rerun_statuses:
             raise ValueError(
@@ -445,6 +460,7 @@ class CaseRunManifest:
         manifest_path = output_dir / RUN_MANIFEST_FILENAME
         input_hash = _file_sha256(input_path)
         config_hash = _file_sha256(config_path)
+        run_contract = _current_run_contract()
         expected_ids = {case.idx for case in cases}
         unknown_files = sorted(
             path.name
@@ -470,6 +486,8 @@ class CaseRunManifest:
                 config_hash=config_hash,
                 case_ids=expected_ids,
                 seed=seed,
+                concurrency=concurrency,
+                run_contract=run_contract,
             )
         elif any(
             _contained_case_path(output_dir, case.idx).exists()
@@ -502,12 +520,44 @@ class CaseRunManifest:
             "cases": {},
             "summary": {},
             "attempt_count": 0,
+            "attempts": [],
+            "run_contract": run_contract,
         }
+        _migrate_attempt_history(payload, now=now)
+        attempts = payload["attempts"]
+        if attempts and attempts[-1].get("status") == "running":
+            attempts[-1]["status"] = "interrupted"
+            attempts[-1]["stop_reason"] = "superseded_by_resume"
+            attempts[-1]["ended_at"] = now
+            attempts[-1]["updated_at"] = now
         payload["schema_version"] = RUN_MANIFEST_SCHEMA_VERSION
+        payload["run_contract"] = run_contract
         payload["status"] = "created"
         payload["updated_at"] = now
         payload["concurrency"] = int(concurrency)
-        payload["attempt_count"] = int(payload.get("attempt_count", 0)) + 1
+        payload["attempt_count"] = (
+            max(int(payload.get("attempt_count", 0)), len(attempts)) + 1
+        )
+        attempt_id = f"attempt-{payload['attempt_count']:04d}"
+        attempts.append(
+            {
+                "attempt_id": attempt_id,
+                "status": "created",
+                "started_at": now,
+                "updated_at": now,
+                "heartbeat_at": now,
+                "run_pid": os.getpid(),
+                "host_fingerprint": _host_fingerprint(),
+                "concurrency": int(concurrency),
+                "seed": int(seed),
+                "model_request_policy": run_contract[
+                    "model_request_policy"
+                ],
+                "code_identity": run_contract["code_identity"],
+                "output_contract": run_contract["output_contract"],
+                "cases": {},
+            }
+        )
         payload.pop("failure_type", None)
         payload.pop("stop_reason", None)
         payload.pop("ended_at", None)
@@ -573,6 +623,7 @@ class CaseRunManifest:
             if existing and existing != identity:
                 raise ValueError("resume model identity does not match manifest")
             self.payload["model_identity"] = dict(identity)
+            self._update_attempt_locked(model_identity=dict(identity))
             self._persist_locked()
 
     def record_preflight(self, report: dict[str, Any]) -> None:
@@ -581,6 +632,7 @@ class CaseRunManifest:
             if report.get("status") == "passed":
                 self.payload["status"] = "preflight_passed"
             self.payload["updated_at"] = _utc_now()
+            self._update_attempt_locked(preflight=dict(report))
             self._persist_locked()
 
     def mark_running(self) -> None:
@@ -589,12 +641,13 @@ class CaseRunManifest:
                 raise RuntimeError("cannot start cases before model preflight passes")
             self.payload["status"] = "running"
             self.payload["updated_at"] = _utc_now()
+            self._update_attempt_locked(status="running")
             self._persist_locked()
 
     def record(self, record: BenchmarkRecord, output_path: Path) -> None:
         with self._lock:
             outcome = record.run_metrics.outcome
-            self.payload.setdefault("cases", {})[record.case.idx] = {
+            case_record = {
                 "status": _terminal_status(outcome),
                 "terminal_outcome": outcome,
                 "output_file": output_path.name,
@@ -608,8 +661,14 @@ class CaseRunManifest:
                     if record.case.idx in self.rerun_case_ids
                     else "executed"
                 ),
+                "attempt_id": self.attempt_id,
                 "completed_at": _utc_now(),
             }
+            self.payload.setdefault("cases", {})[record.case.idx] = case_record
+            self._update_attempt_locked(
+                case_id=record.case.idx,
+                case_record=case_record,
+            )
             self.payload["updated_at"] = _utc_now()
             self._persist_locked()
 
@@ -647,6 +706,15 @@ class CaseRunManifest:
                     self.payload["stop_reason"] = "partial_run"
             self.payload["ended_at"] = _utc_now()
             self.payload["updated_at"] = _utc_now()
+            self._update_attempt_locked(
+                status=(
+                    "interrupted"
+                    if self.payload["status"] == "aborted"
+                    else self.payload["status"]
+                ),
+                summary=combined,
+                ended=True,
+            )
             self._persist_locked()
             return combined
 
@@ -656,6 +724,11 @@ class CaseRunManifest:
             self.payload["failure_type"] = str(failure_type)
             self.payload["ended_at"] = _utc_now()
             self.payload["updated_at"] = _utc_now()
+            self._update_attempt_locked(
+                status="failed",
+                failure_type=str(failure_type),
+                ended=True,
+            )
             self._persist_locked()
 
     def mark_degraded(self, reason: str) -> None:
@@ -663,6 +736,10 @@ class CaseRunManifest:
             self.payload["status"] = "degraded"
             self.payload["stop_reason"] = str(reason)
             self.payload["updated_at"] = _utc_now()
+            self._update_attempt_locked(
+                status="degraded",
+                stop_reason=str(reason),
+            )
             self._persist_locked()
 
     def mark_aborted(self, reason: str) -> None:
@@ -670,6 +747,11 @@ class CaseRunManifest:
             self.payload["status"] = "aborted"
             self.payload["stop_reason"] = str(reason)
             self.payload["updated_at"] = _utc_now()
+            self._update_attempt_locked(
+                status="interrupted",
+                stop_reason=str(reason),
+                ended=True,
+            )
             self._persist_locked()
 
     def mark_provider_circuit_open(
@@ -681,6 +763,10 @@ class CaseRunManifest:
             self.payload["stop_reason"] = "provider_circuit_open"
             self.payload["circuit_breaker"] = dict(circuit_breaker)
             self.payload["updated_at"] = _utc_now()
+            self._update_attempt_locked(
+                status="degraded",
+                stop_reason="provider_circuit_open",
+            )
             self._persist_locked()
 
     def lifecycle_summary(self) -> dict[str, Any]:
@@ -705,6 +791,30 @@ class CaseRunManifest:
     def _persist_locked(self) -> None:
         _atomic_write_json(self.path, self.payload)
 
+    def _update_attempt_locked(
+        self,
+        *,
+        status: str | None = None,
+        case_id: str | None = None,
+        case_record: dict[str, Any] | None = None,
+        ended: bool = False,
+        **details: Any,
+    ) -> None:
+        attempts = self.payload.get("attempts", [])
+        if not isinstance(attempts, list) or not attempts:
+            return
+        attempt = attempts[-1]
+        now = _utc_now()
+        if status is not None:
+            attempt["status"] = status
+        if case_id is not None and case_record is not None:
+            attempt.setdefault("cases", {})[case_id] = dict(case_record)
+        attempt.update(details)
+        attempt["heartbeat_at"] = now
+        attempt["updated_at"] = now
+        if ended:
+            attempt["ended_at"] = now
+
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -719,9 +829,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--concurrency",
-        type=_single_case_concurrency,
-        default=1,
-        help="must be 1 so queued cases do not consume their wall-clock budget",
+        type=_case_concurrency,
+        default=4,
+        help="number of concurrently active cases (1-4, default: 4)",
+    )
+    parser.add_argument(
+        "--model",
+        type=_exact_model_id,
+        default=EXACT_INTERN_MODEL,
+        help=f"exact local model ID (default: {EXACT_INTERN_MODEL})",
     )
     parser.add_argument(
         "--max-consecutive-provider-failures",
@@ -778,7 +894,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not remaining_cases:
         summary = manifest.finalize({})
-        print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
+        _safe_print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0
 
     stop_controller = RunStopController()
@@ -786,15 +902,10 @@ def main(argv: list[str] | None = None) -> int:
     summary: dict[str, Any] = {}
     exit_code = 0
     try:
-        requested_model = os.environ.get(MODEL_ENVIRONMENT_VARIABLE, "")
-        if requested_model != EXACT_INTERN_MODEL:
-            preflight_report = run_model_preflight(
-                None,
-                requested_model=requested_model,
-            )
-            manifest.record_preflight(preflight_report)
-            raise RuntimeError("model preflight failed at L0")
-        model_identity = require_exact_intern_model()
+        model_identity = exact_model_identity(
+            args.model,
+            request_source="argument:--model",
+        )
         manifest.record_model_identity(model_identity.to_dict())
         config = load_benchmark_config(args.config)
         try:
@@ -802,6 +913,7 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=model_http_timeout_seconds(config),
                 retry=1,
             )
+            base_client.model = args.model
         except Exception:
             preflight_report = run_model_preflight(
                 None,
@@ -809,7 +921,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             manifest.record_preflight(preflight_report)
             raise RuntimeError("model preflight failed at L0") from None
-        client = SerializedFastRetryClient(base_client)
+        client = FastRetryClient(base_client)
         preflight_report = run_model_preflight(
             client,
             requested_model=model_identity.requested_model,
@@ -824,14 +936,15 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError(
                 f"model preflight failed at {preflight_report['failed_level']}"
             )
-        print("MODEL_PREFLIGHT_L0_L1_L2_OK", flush=True)
+        _safe_print("MODEL_PREFLIGHT_L0_L1_L2_OK")
         manifest.mark_running()
         harness = MathForgeHarness(
             client,
             config,
             model_identity=model_identity,
             trace_sink_factory=TraceJournalFactory(
-                args.output_dir / ".trace-journal"
+                args.output_dir / ".trace-journal",
+                attempt_id=manifest.attempt_id,
             ),
         )
         wall_clock_runner = PerCaseWallClockRunner(
@@ -846,61 +959,55 @@ def main(argv: list[str] | None = None) -> int:
         def persist(record: BenchmarkRecord) -> None:
             path = write_case_output(record, args.output_dir)
             manifest.record(record, path)
-            print(
+            _safe_print(
                 "CASE_COMPLETED "
                 f"id={record.case.idx} "
                 f"status={_terminal_status(record.run_metrics.outcome)} "
                 f"elapsed={record.latency_seconds:.3f}s "
-                f"path={path}",
-                flush=True,
+                f"path={path}"
             )
 
         breaker = ConsecutiveProviderFailureCircuitBreaker(
             args.max_consecutive_provider_failures
         )
-        completed_records: list[BenchmarkRecord] = []
-        for case in remaining_cases:
-            if stop_controller.requested:
-                manifest.mark_aborted(stop_controller.reason)
-                exit_code = stop_controller.exit_code
-                break
-            case_records, _ = run_benchmark(
-                [case],
-                wall_clock_runner.solve,
-                concurrency=1,
-                seed=args.seed,
-                on_record_completed=persist,
-            )
-            completed_records.extend(case_records)
-            record = case_records[0]
-            all_cases_complete = (
-                manifest.lifecycle_summary()["pending_case_count"] == 0
-            )
-            if breaker.observe(record) and not all_cases_complete:
+        attempted_cases, planned_stop = _planned_case_batch(
+            remaining_cases,
+            stop_after_case=args.stop_after_case,
+            max_cases=args.max_cases,
+        )
+        provider_circuit_open = Event()
+
+        def persist_and_observe(record: BenchmarkRecord) -> None:
+            persist(record)
+            if (
+                not provider_circuit_open.is_set()
+                and breaker.observe(record)
+                and manifest.lifecycle_summary()["pending_case_count"] > 0
+            ):
                 manifest.mark_provider_circuit_open(breaker.to_dict())
-                print(
+                provider_circuit_open.set()
+                _safe_print(
                     "PROVIDER_CIRCUIT_OPEN "
-                    f"consecutive_failures={breaker.consecutive_failures}",
-                    flush=True,
+                    f"consecutive_failures={breaker.consecutive_failures}"
                 )
-                break
-            if stop_controller.requested and not all_cases_complete:
-                manifest.mark_aborted(stop_controller.reason)
-                exit_code = stop_controller.exit_code
-                break
-            planned_stop = _planned_stop_reason(
-                case_id=case.idx,
-                executed_case_count=len(completed_records),
-                stop_after_case=args.stop_after_case,
-                max_cases=args.max_cases,
-            )
-            if planned_stop and not all_cases_complete:
-                manifest.mark_degraded(planned_stop)
-                print(
-                    f"CONTROLLED_STOP reason={planned_stop} id={case.idx}",
-                    flush=True,
-                )
-                break
+
+        completed_records, _ = run_benchmark(
+            attempted_cases,
+            wall_clock_runner.solve,
+            concurrency=args.concurrency,
+            seed=args.seed,
+            on_record_completed=persist_and_observe,
+            should_stop_scheduling=lambda: (
+                stop_controller.requested or provider_circuit_open.is_set()
+            ),
+        )
+        pending_case_count = manifest.lifecycle_summary()["pending_case_count"]
+        if stop_controller.requested and pending_case_count:
+            manifest.mark_aborted(stop_controller.reason)
+            exit_code = stop_controller.exit_code
+        elif planned_stop and pending_case_count:
+            manifest.mark_degraded(planned_stop)
+            _safe_print(f"CONTROLLED_STOP reason={planned_stop}")
         benchmark_summary = summarize(completed_records)
         benchmark_summary["circuit_breaker"] = breaker.to_dict()
         summary = manifest.finalize(benchmark_summary)
@@ -917,13 +1024,21 @@ def main(argv: list[str] | None = None) -> int:
     return _print_summary(summary, exit_code)
 
 
-def _single_case_concurrency(value: str) -> int:
+def _case_concurrency(value: str) -> int:
     concurrency = int(value)
-    if concurrency != 1:
+    if concurrency < 1 or concurrency > 4:
         raise argparse.ArgumentTypeError(
-            "--concurrency must be exactly 1 for per-case deadline isolation"
+            "--concurrency must be between 1 and 4"
         )
     return concurrency
+
+
+def _exact_model_id(value: str) -> str:
+    if value != EXACT_INTERN_MODEL:
+        raise argparse.ArgumentTypeError(
+            f"--model must be exactly {EXACT_INTERN_MODEL}"
+        )
+    return value
 
 
 def _parse_rerun_statuses(value: str) -> frozenset[str]:
@@ -955,9 +1070,39 @@ def _planned_stop_reason(
     return ""
 
 
+def _planned_case_batch(
+    cases: list,
+    *,
+    stop_after_case: str | None,
+    max_cases: int | None,
+) -> tuple[list, str]:
+    planned = []
+    reason = ""
+    for case in cases:
+        planned.append(case)
+        reason = _planned_stop_reason(
+            case_id=case.idx,
+            executed_case_count=len(planned),
+            stop_after_case=stop_after_case,
+            max_cases=max_cases,
+        )
+        if reason:
+            break
+    if len(planned) == len(cases):
+        reason = ""
+    return planned, reason
+
+
 def _print_summary(summary: dict[str, Any], exit_code: int) -> int:
-    print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
+    _safe_print(json.dumps(summary, ensure_ascii=False, indent=2))
     return int(exit_code)
+
+
+def _safe_print(message: str) -> None:
+    try:
+        print(message, flush=True)
+    except (BrokenPipeError, OSError, UnicodeError):
+        pass
 
 
 def write_case_output(record: BenchmarkRecord, output_dir: Path) -> Path:
@@ -1059,47 +1204,37 @@ def run_model_preflight(
     )
 
     l2_started = perf_counter()
+    l2_budget = CallBudget(2)
     try:
         l2_problem = ProblemParser().parse("Compute 1+1.")
         l2_route = RouterRuleEngine().plan(l2_problem)
         l2_method_family = l2_route.method_families[0]
-        l2_messages = PrimarySolver().build_messages(
-            SolverRequest(
-                candidate_id="preflight-l2",
-                problem=l2_problem,
-                route=l2_route,
-                skill_context="",
-                method_family=l2_method_family,
-            )
+        l2_request = SolverRequest(
+            candidate_id="preflight-l2",
+            problem=l2_problem,
+            route=l2_route,
+            skill_context="",
+            method_family=l2_method_family,
         )
-        l2_response = client.chat(
-            messages=l2_messages,
+        candidate = SolverExecutor(
+            OfficialClientProvider(client, ModelCallGate(1)),
+            SolutionParser(),
+        ).execute(
+            PrimarySolver(),
+            l2_request,
+            l2_budget,
             temperature=0.0,
             max_tokens=MODEL_PREFLIGHT_MAX_TOKENS,
         )
-        if not isinstance(l2_response, str):
-            raise ModelTransportError("response_shape_invalid")
-        if not l2_response.strip():
-            raise ModelTransportError(
-                "empty_response",
-                attempts=transport_attempts(l2_response),
-            )
-        candidate = SolutionParser().parse(
-            l2_response,
-            candidate_id="preflight-l2",
-            role="PrimarySolver",
-            answer_type=l2_problem.answer_type,
-        )
         if (
-            candidate.parse_status != "strict_json"
-            or candidate.contract_deviations
-            or candidate.final_answer.strip() != "2"
-            or candidate.method.strip().lower()
-            != l2_method_family.strip().lower()
+            candidate.final_answer.strip() != "2"
             or not candidate.claims
             or not candidate.method_steps
         ):
-            raise ModelResponseError("candidate_schema_invalid")
+            raise ModelResponseError(
+                "candidate_schema_invalid",
+                details=tuple(candidate.contract_deviations),
+            )
         _validate_l2_pipeline(candidate)
     except Exception as error:
         _record_preflight_failure(
@@ -1108,6 +1243,7 @@ def run_model_preflight(
             error,
             l2_started,
             MODEL_PREFLIGHT_MAX_TOKENS,
+            transport_attempt_count=l2_budget.transport_attempts,
         )
         return report
     report["levels"].append(
@@ -1115,7 +1251,7 @@ def run_model_preflight(
             "L2",
             l2_started,
             MODEL_PREFLIGHT_MAX_TOKENS,
-            transport_attempts(l2_response),
+            l2_budget.transport_attempts,
         )
     )
     report["status"] = "passed"
@@ -1136,7 +1272,7 @@ def model_http_timeout_seconds(config: Any) -> int:
     )
     if available < 1:
         raise ValueError("model HTTP timeout window is not positive")
-    return max(1, int(min(available, PROVIDER_CALL_TIMEOUT_SECONDS)))
+    return max(1, int(min(available, PROVIDER_HTTP_TIMEOUT_SECONDS)))
 
 
 def _validate_l2_pipeline(candidate: Any) -> None:
@@ -1241,6 +1377,8 @@ def _record_preflight_failure(
     error: Exception,
     started: float,
     max_tokens: int,
+    *,
+    transport_attempt_count: int | None = None,
 ) -> None:
     code = getattr(error, "code", None) or classify_transport_failure(error)
     report["levels"].append(
@@ -1250,7 +1388,11 @@ def _record_preflight_failure(
             "error_code": str(code),
             "elapsed_seconds": round(max(0.0, perf_counter() - started), 6),
             "max_tokens": max_tokens,
-            "transport_attempts": transport_attempts(error),
+            "transport_attempts": (
+                transport_attempts(error)
+                if transport_attempt_count is None
+                else max(1, int(transport_attempt_count))
+            ),
         }
     )
     report["status"] = "failed"
@@ -1278,6 +1420,13 @@ def validate_case_output(path: Path, identifier: str) -> dict[str, Any]:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"case output is unreadable: {path.name}") from error
     _validate_public_payload(payload, identifier)
+    schema_versions = {
+        event.get("schema_version")
+        for event in payload["trace"]
+        if isinstance(event, dict)
+    }
+    if schema_versions != {JUDGE_TRACE_SCHEMA_VERSION}:
+        raise ValueError("case output Judge Trace schema is incompatible")
     build_public_result(payload["id"], payload)
     return payload
 
@@ -1349,6 +1498,8 @@ def _validate_manifest_compatibility(
     config_hash: str,
     case_ids: set[str],
     seed: int,
+    concurrency: int,
+    run_contract: dict[str, Any],
 ) -> None:
     if (
         payload.get("schema_version")
@@ -1365,8 +1516,123 @@ def _validate_manifest_compatibility(
         raise ValueError("resume case count does not match manifest")
     if payload.get("seed") != int(seed):
         raise ValueError("resume seed does not match manifest")
+    if payload.get("concurrency") != int(concurrency):
+        raise ValueError("resume concurrency does not match manifest")
     if not isinstance(payload.get("cases"), dict):
         raise ValueError("run manifest case records are invalid")
+    recorded_contract = payload.get("run_contract")
+    if payload.get("schema_version") == RUN_MANIFEST_SCHEMA_VERSION:
+        if recorded_contract != run_contract:
+            raise ValueError("resume run contract does not match manifest")
+    elif recorded_contract not in (None, {}, run_contract):
+        raise ValueError("resume legacy run contract does not match")
+
+
+def _migrate_attempt_history(
+    payload: dict[str, Any],
+    *,
+    now: str,
+) -> None:
+    attempts = payload.get("attempts")
+    if isinstance(attempts, list):
+        return
+    count = max(0, int(payload.get("attempt_count", 0)))
+    migrated: list[dict[str, Any]] = []
+    for number in range(1, count + 1):
+        is_last = number == count
+        migrated.append(
+            {
+                "attempt_id": f"attempt-{number:04d}",
+                "status": (
+                    str(payload.get("status", "unknown"))
+                    if is_last
+                    else "historical"
+                ),
+                "started_at": str(payload.get("started_at", now)),
+                "updated_at": str(payload.get("updated_at", now)),
+                "heartbeat_at": str(payload.get("updated_at", now)),
+                "ended_at": str(payload.get("ended_at", "")),
+                "run_pid": 0,
+                "host_fingerprint": "",
+                "cases": (
+                    dict(payload.get("cases", {})) if is_last else {}
+                ),
+                "migrated_from_legacy_manifest": True,
+            }
+        )
+    payload["attempts"] = migrated
+
+
+def _current_run_contract() -> dict[str, Any]:
+    return {
+        "model_request_policy": {
+            "requested_model": EXACT_INTERN_MODEL,
+            "source": "internal_explicit_default_or_cli_argument",
+            "interface": "client.chat",
+        },
+        "code_identity": _code_identity(),
+        "output_contract": {
+            "judge_trace_schema_version": JUDGE_TRACE_SCHEMA_VERSION,
+            "top_level_fields": [
+                "id",
+                "status",
+                "final_response",
+                "trace",
+            ],
+            "case_statuses": sorted(PUBLIC_CASE_STATUSES),
+        },
+        "manifest_schema_version": RUN_MANIFEST_SCHEMA_VERSION,
+    }
+
+
+def _code_identity() -> dict[str, Any]:
+    source_paths = sorted(
+        [
+            *ROOT.joinpath("mathforge").rglob("*.py"),
+            ROOT / "scripts" / "run_case_outputs.py",
+            ROOT / "user_agent.py",
+        ],
+        key=lambda path: path.as_posix(),
+    )
+    digest = sha256()
+    for path in source_paths:
+        if not path.is_file():
+            continue
+        digest.update(path.relative_to(ROOT).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    commit = _git_output("rev-parse", "HEAD")
+    dirty_status = _git_output(
+        "status",
+        "--porcelain",
+        "--untracked-files=no",
+    )
+    return {
+        "commit": commit or "unavailable",
+        "dirty": bool(dirty_status),
+        "source_sha256": digest.hexdigest(),
+    }
+
+
+def _git_output(*arguments: str) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", *arguments],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return completed.stdout.strip() if completed.returncode == 0 else ""
+
+
+def _host_fingerprint() -> str:
+    host = platform.node().strip().casefold()
+    return sha256(host.encode("utf-8")).hexdigest() if host else ""
 
 
 def _case_request_fingerprint(

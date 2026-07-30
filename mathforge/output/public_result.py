@@ -36,6 +36,8 @@ def build_public_result(identifier: int | str | None, result: dict) -> dict:
         if isinstance(result, dict)
         else None
     )
+    if len(final_response) > limits.final_response_max_chars:
+        raise ValueError("final_response exceeds configured character budget")
     if any(
         isinstance(event, dict)
         and event.get("schema_version") == TRACE_SCHEMA_VERSION
