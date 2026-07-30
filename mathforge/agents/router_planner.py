@@ -380,6 +380,27 @@ _METHOD_FAMILIES: dict[str, tuple[str, str, str]] = {
     "topology": ("structural-transform", "invariant-extremal", "contradiction"),
     "general-math": ("direct-deduction", "constructive-computation", "contradiction-extremal"),
 }
+_HIGH_DIFFICULTY_FEATURES = frozenset(
+    {
+        "nested_aggregation",
+        "asymptotic_cancellation",
+        "spectral_inference",
+        "state_dependent_probability",
+        "coupled_congruences",
+        "surjective_counting",
+        "radical_domain_constraints",
+        "multivariable_global_constraint",
+        "higher_order_differential_system",
+        "singular_or_special_integral",
+        "parameter_regime",
+        "multiple_targets",
+        "long_condition_chain",
+        "nested_quantifiers",
+        "bidirectional_proof",
+        "multi_stage_proof",
+        "candidate_conflict",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -578,7 +599,12 @@ class RouterRuleEngine:
             missing_dedicated_skill=ranked[0][0] == "general-math",
         )
         long_reasoning = "long_reasoning" in problem.risk_flags
-        if len(complexity_flags) >= 4 or (
+        structural_high = bool(
+            _HIGH_DIFFICULTY_FEATURES.intersection(
+                problem.difficulty_features
+            )
+        )
+        if structural_high or len(complexity_flags) >= 4 or (
             long_reasoning and len(complexity_flags) >= 2
         ):
             risk = "high"
@@ -683,6 +709,15 @@ class RouterRuleEngine:
             flags.append("low_parser_confidence")
         if missing_dedicated_skill:
             flags.append("general_math_fallback")
+        flags.extend(
+            f"structure:{feature}"
+            for feature in problem.difficulty_features
+        )
+        if any(
+            ambiguity != "low_answer_type_confidence"
+            for ambiguity in problem.ambiguities
+        ):
+            flags.append("problem_ir_ambiguity")
         if problem.problem_type in {"proof", "derivation"} or any(
             marker in lowered
             for marker in ("induction", "lemma", "case analysis", "contradiction")

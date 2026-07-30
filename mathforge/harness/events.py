@@ -6,6 +6,7 @@ DEBUG_TRACE_SCHEMA_VERSION = "1.0"
 
 EVENT_STAGES = {
     "session_started": "session",
+    "effective_config_snapshot": "session",
     "problem_parsed": "parsing",
     "route_planned": "routing",
     "skills_selected": "skill_selection",
@@ -60,6 +61,7 @@ JUDGE_EVENTS = frozenset(EVENT_STAGES)
 PROTECTED_TRACE_EVENTS = frozenset(
     {
         "session_started",
+        "effective_config_snapshot",
         "problem_parsed",
         "route_planned",
         "skills_selected",

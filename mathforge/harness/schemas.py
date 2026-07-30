@@ -14,7 +14,7 @@ from mathforge.harness.state import (
 
 
 CORE_SCHEMA_VERSION = "1.2"
-PROBLEM_IR_SCHEMA_VERSION = "1.3"
+PROBLEM_IR_SCHEMA_VERSION = "2.0"
 CANDIDATE_SCHEMA_VERSION = "2.0"
 MAX_CLAIMS = 64
 MAX_METHOD_STEPS = 64
@@ -87,6 +87,16 @@ class AnswerType(str, Enum):
     POLYNOMIAL = "polynomial"
     ALGEBRAIC_STRUCTURE = "algebraic_structure"
     TEXT = "text"
+
+
+class TargetKind(str, Enum):
+    SELECT_OPTION = "select_option"
+    COMPUTE_VALUE = "compute_value"
+    PROVE_STATEMENT = "prove_statement"
+    DERIVE_STATEMENT = "derive_statement"
+    EXPLAIN_REASON = "explain_reason"
+    CONSTRUCT_OBJECT = "construct_object"
+    MULTIPLE_TARGETS = "multiple_targets"
 
 
 class RiskLevel(str, Enum):
@@ -253,8 +263,16 @@ class ProblemIR:
     domains: dict[str, str] = field(default_factory=dict)
     requested_output: str = ""
     target_phrase: str = ""
+    target_kind: str = "compute_value"
     parser_confidence: float = 0.0
+    answer_type_confidence: float = 1.0
     options: list[str] = field(default_factory=list)
+    definitions: list[str] = field(default_factory=list)
+    quantifiers: list[str] = field(default_factory=list)
+    constraints: list[str] = field(default_factory=list)
+    ambiguities: list[str] = field(default_factory=list)
+    difficulty_features: list[str] = field(default_factory=list)
+    subproblem_hints: list[str] = field(default_factory=list)
     risk_flags: list[str] = field(default_factory=list)
     schema_version: str = PROBLEM_IR_SCHEMA_VERSION
 
@@ -271,8 +289,16 @@ class ProblemIR:
             "domains": dict(self.domains),
             "requested_output": self.requested_output,
             "target_phrase": self.target_phrase,
+            "target_kind": self.target_kind,
             "parser_confidence": self.parser_confidence,
+            "answer_type_confidence": self.answer_type_confidence,
             "options": list(self.options),
+            "definitions": list(self.definitions),
+            "quantifiers": list(self.quantifiers),
+            "constraints": list(self.constraints),
+            "ambiguities": list(self.ambiguities),
+            "difficulty_features": list(self.difficulty_features),
+            "subproblem_hints": list(self.subproblem_hints),
             "risk_flags": list(self.risk_flags),
         }
 
@@ -286,6 +312,7 @@ class ProblemIR:
             self.answer_type,
             self.requested_output,
             self.target_phrase,
+            self.target_kind,
         )
         if any(not isinstance(value, str) for value in string_fields):
             raise SchemaValidationError("ProblemIR string field has invalid type")
@@ -293,15 +320,28 @@ class ProblemIR:
             raise SchemaValidationError(f"invalid problem type: {self.problem_type}")
         if self.answer_type not in {item.value for item in AnswerType}:
             raise SchemaValidationError(f"invalid answer type: {self.answer_type}")
+        if self.target_kind not in {item.value for item in TargetKind}:
+            raise SchemaValidationError(f"invalid target kind: {self.target_kind}")
         if (
             type(self.parser_confidence) not in {int, float}
             or not 0.0 <= float(self.parser_confidence) <= 1.0
         ):
             raise SchemaValidationError("invalid parser confidence")
+        if (
+            type(self.answer_type_confidence) not in {int, float}
+            or not 0.0 <= float(self.answer_type_confidence) <= 1.0
+        ):
+            raise SchemaValidationError("invalid answer type confidence")
         for name, value in (
             ("symbols", self.symbols),
             ("assumptions", self.assumptions),
             ("options", self.options),
+            ("definitions", self.definitions),
+            ("quantifiers", self.quantifiers),
+            ("constraints", self.constraints),
+            ("ambiguities", self.ambiguities),
+            ("difficulty_features", self.difficulty_features),
+            ("subproblem_hints", self.subproblem_hints),
             ("risk_flags", self.risk_flags),
         ):
             _require_string_list(value, f"ProblemIR.{name}")
@@ -341,20 +381,29 @@ class ProblemIR:
             "domains",
             "requested_output",
             "target_phrase",
+            "target_kind",
             "parser_confidence",
+            "answer_type_confidence",
             "options",
+            "definitions",
+            "quantifiers",
+            "constraints",
+            "ambiguities",
+            "difficulty_features",
+            "subproblem_hints",
             "risk_flags",
         }
         _reject_unknown_fields(payload, allowed, "ProblemIR")
         strings = _require_string_fields(
             payload,
             (
-            "raw_problem",
-            "normalized_problem",
-            "problem_type",
-            "answer_type",
-            "requested_output",
-            "target_phrase",
+                "raw_problem",
+                "normalized_problem",
+                "problem_type",
+                "answer_type",
+                "requested_output",
+                "target_phrase",
+                "target_kind",
             ),
             "ProblemIR",
         )
@@ -371,6 +420,14 @@ class ProblemIR:
         ):
             raise SchemaValidationError(
                 "ProblemIR.parser_confidence must be numeric"
+            )
+        raw_answer_type_confidence = payload.get("answer_type_confidence")
+        if not isinstance(
+            raw_answer_type_confidence,
+            (int, float),
+        ) or isinstance(raw_answer_type_confidence, bool):
+            raise SchemaValidationError(
+                "ProblemIR.answer_type_confidence must be numeric"
             )
         problem = cls(
             raw_problem=strings["raw_problem"],
@@ -389,8 +446,34 @@ class ProblemIR:
             domains=dict(raw_domains),
             requested_output=strings["requested_output"],
             target_phrase=strings["target_phrase"],
+            target_kind=strings["target_kind"],
             parser_confidence=float(raw_parser_confidence),
+            answer_type_confidence=float(raw_answer_type_confidence),
             options=_require_string_list(payload.get("options"), "ProblemIR.options"),
+            definitions=_require_string_list(
+                payload.get("definitions"),
+                "ProblemIR.definitions",
+            ),
+            quantifiers=_require_string_list(
+                payload.get("quantifiers"),
+                "ProblemIR.quantifiers",
+            ),
+            constraints=_require_string_list(
+                payload.get("constraints"),
+                "ProblemIR.constraints",
+            ),
+            ambiguities=_require_string_list(
+                payload.get("ambiguities"),
+                "ProblemIR.ambiguities",
+            ),
+            difficulty_features=_require_string_list(
+                payload.get("difficulty_features"),
+                "ProblemIR.difficulty_features",
+            ),
+            subproblem_hints=_require_string_list(
+                payload.get("subproblem_hints"),
+                "ProblemIR.subproblem_hints",
+            ),
             risk_flags=_require_string_list(
                 payload.get("risk_flags"),
                 "ProblemIR.risk_flags",

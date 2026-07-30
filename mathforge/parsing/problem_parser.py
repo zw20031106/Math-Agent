@@ -8,7 +8,11 @@ from mathforge.parsing.normalization import normalize_problem
 
 
 _OPTION_PATTERN = re.compile(
-    r"(?:^|\n)\s*(?:[（(]?([A-H])[)）.、:]|([A-H])\s+)\s*([^\n]+)",
+    r"(?:^|\n)\s*(?:"
+    r"\((?P<ascii_paren>[A-H])\)|"
+    r"（(?P<cjk_paren>[A-H])）|"
+    r"(?P<punctuated>[A-H])[)）.、:：]"
+    r")\s*(?P<content>[^\n]+)",
     re.IGNORECASE,
 )
 _SYMBOL_PATTERN = re.compile(r"(?<![\\A-Za-z])([a-zA-Z])(?![A-Za-z])")
@@ -18,7 +22,17 @@ _DOMAIN_PATTERN = re.compile(
 )
 _REQUEST_PATTERN = re.compile(
     r"(?:求解|求|计算|确定|写出|给出|判断|解答|"
-    r"\b(?:find|compute|calculate|determine|write\s+down|give)\b)\s*",
+    r"\b(?:find|compute|calculate|determine|write\s+down|give|solve|"
+    r"prove|show|explain|select)\b)\s*",
+    re.IGNORECASE,
+)
+_CHOICE_INTENT = re.compile(
+    r"(?:选择|下列|which\s+of|select\s+(?:the\s+)?(?:correct|best))",
+    re.IGNORECASE,
+)
+_QUANTIFIER_PATTERN = re.compile(
+    r"\b(?:for\s+all|for\s+every|every|any|there\s+exists|exists?|unique(?:ly)?)\b"
+    r"|(?:任意|所有|每个|存在|唯一)",
     re.IGNORECASE,
 )
 _INTEGER_TARGETS = (
@@ -57,7 +71,7 @@ class ProblemParser:
         raw = problem if isinstance(problem, str) else str(problem)
         normalized = normalize_problem(raw)
         lowered = normalized.lower()
-        options = [match.group(3).strip() for match in _OPTION_PATTERN.finditer(normalized)]
+        options = self._options(normalized)
         requested_output = self._requested_output(normalized)
         target_phrase, target_confidence = self._target_phrase(requested_output)
         target_lowered = target_phrase.lower()
@@ -72,7 +86,30 @@ class ProblemParser:
             4,
         )
         domains = {symbol: domain for symbol, domain in _DOMAIN_PATTERN.findall(normalized)}
+        constraints = self._constraints(normalized)
         assumptions = self._assumptions(normalized)
+        definitions = self._definitions(normalized)
+        quantifiers = self._quantifiers(normalized)
+        target_kind = self._target_kind(
+            problem_type,
+            answer_type,
+            target_lowered,
+            lowered,
+        )
+        difficulty_features = self._difficulty_features(
+            normalized,
+            problem_type=problem_type,
+            constraints=constraints,
+            quantifiers=quantifiers,
+            target_kind=target_kind,
+        )
+        ambiguities = self._ambiguities(
+            normalized,
+            options=options,
+            target_phrase=target_phrase,
+            answer_type_confidence=type_confidence,
+            target_kind=target_kind,
+        )
         risk_flags: list[str] = []
         if not normalized:
             risk_flags.append("empty_problem")
@@ -80,6 +117,10 @@ class ProblemParser:
             risk_flags.append("unbalanced_latex")
         if problem_type in {"proof", "derivation"}:
             risk_flags.append("long_reasoning")
+        if ambiguities:
+            risk_flags.append("parser_ambiguity")
+        if difficulty_features:
+            risk_flags.append("structural_difficulty")
         parsed = ProblemIR(
             raw_problem=raw,
             normalized_problem=normalized,
@@ -90,8 +131,19 @@ class ProblemParser:
             domains=domains,
             requested_output=requested_output,
             target_phrase=target_phrase,
+            target_kind=target_kind,
             parser_confidence=parser_confidence,
+            answer_type_confidence=round(type_confidence, 4),
             options=options,
+            definitions=definitions,
+            quantifiers=quantifiers,
+            constraints=constraints,
+            ambiguities=ambiguities,
+            difficulty_features=difficulty_features,
+            subproblem_hints=self._subproblem_hints(
+                difficulty_features,
+                target_kind,
+            ),
             risk_flags=risk_flags,
         )
         parsed.validate()
@@ -99,7 +151,7 @@ class ProblemParser:
 
     @staticmethod
     def _problem_type(lowered: str, options: list[str]) -> str:
-        if options or any(marker in lowered for marker in ("选择", "which of", "select ")):
+        if options:
             return "multiple_choice"
         if any(marker in lowered for marker in ("证明", "prove", "show that", "证毕")):
             return "proof"
@@ -167,10 +219,301 @@ class ProblemParser:
         return "expression", 0.78
 
     @staticmethod
+    def _options(normalized: str) -> list[str]:
+        matches = list(_OPTION_PATTERN.finditer(normalized))
+        labels = [
+            next(
+                group.upper()
+                for group in (
+                    match.group("ascii_paren"),
+                    match.group("cjk_paren"),
+                    match.group("punctuated"),
+                )
+                if group
+            )
+            for match in matches
+        ]
+        expected = [chr(ord("A") + index) for index in range(len(labels))]
+        if len(labels) < 2 or labels != expected:
+            return []
+        return [match.group("content").strip() for match in matches]
+
+    @staticmethod
     def _assumptions(normalized: str) -> list[str]:
         parts = re.split(r"[。.;；]|\b(?:where|given that|such that)\b", normalized)
         markers = (r"\in", ">", "<", "正", "非负", "integer", "real")
         return [part.strip() for part in parts if any(marker in part for marker in markers)][:8]
+
+    @staticmethod
+    def _constraints(normalized: str) -> list[str]:
+        parts = re.split(
+            r"[。.;；，,]|\b(?:where|given that|such that|subject to|with)\b",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        markers = (
+            r"\in",
+            "=",
+            ">",
+            "<",
+            "positive",
+            "negative",
+            "integer",
+            "real",
+            "continuous",
+            "differentiable",
+            "满足",
+            "正",
+            "非负",
+        )
+        return list(
+            dict.fromkeys(
+                part.strip()
+                for part in parts
+                if part.strip()
+                and any(marker in part.lower() for marker in markers)
+            )
+        )[:12]
+
+    @staticmethod
+    def _definitions(normalized: str) -> list[str]:
+        parts = [
+            part.strip()
+            for part in re.split(r"[。.;；]", normalized)
+            if part.strip()
+        ]
+        markers = (
+            "let ",
+            "define",
+            "defined by",
+            "denote",
+            "where ",
+            "设",
+            "定义",
+            "记",
+            "其中",
+        )
+        return [
+            part
+            for part in parts
+            if any(marker in part.lower() for marker in markers)
+        ][:8]
+
+    @staticmethod
+    def _quantifiers(normalized: str) -> list[str]:
+        return list(
+            dict.fromkeys(
+                match.group(0).casefold()
+                for match in _QUANTIFIER_PATTERN.finditer(normalized)
+            )
+        )[:8]
+
+    @staticmethod
+    def _target_kind(
+        problem_type: str,
+        answer_type: str,
+        target: str,
+        full_problem: str,
+    ) -> str:
+        if problem_type == "multiple_choice":
+            return "select_option"
+        if problem_type == "proof":
+            return "prove_statement"
+        if problem_type == "derivation":
+            return "derive_statement"
+        if problem_type == "explanation":
+            return "explain_reason"
+        target_markers = (
+            "det(",
+            "tr(",
+            "eigenvalue",
+            "eigenvector",
+            "every requested target",
+        )
+        if sum(marker in full_problem for marker in target_markers) >= 2:
+            return "multiple_targets"
+        if answer_type in {
+            "vector",
+            "tuple",
+            "set",
+            "matrix",
+            "polynomial",
+            "algebraic_structure",
+        }:
+            return "construct_object"
+        return "compute_value"
+
+    @staticmethod
+    def _ambiguities(
+        normalized: str,
+        *,
+        options: list[str],
+        target_phrase: str,
+        answer_type_confidence: float,
+        target_kind: str,
+    ) -> list[str]:
+        ambiguities: list[str] = []
+        if _CHOICE_INTENT.search(normalized) and not options:
+            ambiguities.append("choice_intent_without_reliable_options")
+        if not target_phrase:
+            ambiguities.append("missing_target")
+        if answer_type_confidence < 0.85:
+            ambiguities.append("low_answer_type_confidence")
+        if target_kind == "multiple_targets":
+            ambiguities.append("multiple_requested_targets")
+        if not braces_balanced(normalized):
+            ambiguities.append("unbalanced_latex")
+        return ambiguities
+
+    @staticmethod
+    def _difficulty_features(
+        normalized: str,
+        *,
+        problem_type: str,
+        constraints: list[str],
+        quantifiers: list[str],
+        target_kind: str,
+    ) -> list[str]:
+        lowered = normalized.lower()
+        features: list[str] = []
+
+        def add(condition: bool, name: str) -> None:
+            if condition:
+                features.append(name)
+
+        add(
+            (
+                lowered.count("sum") >= 2
+                or ("series" in lowered and ("h_n" in lowered or "harmonic" in lowered))
+            ),
+            "nested_aggregation",
+        )
+        add(
+            "limit" in lowered
+            and (
+                len(re.findall(r"1/\(?\d*n\^?\d*", lowered)) >= 2
+                or bool(re.search(r"\bn\^\d+\s*\(", lowered))
+            ),
+            "asymptotic_cancellation",
+        )
+        add(
+            any(
+                marker in lowered
+                for marker in (
+                    "characteristic polynomial",
+                    "minimal polynomial",
+                    "jordan",
+                )
+            ),
+            "spectral_inference",
+        )
+        add(
+            "until" in lowered
+            and any(marker in lowered for marker in ("first", "either", "stopping")),
+            "state_dependent_probability",
+        )
+        add(lowered.count(" mod ") >= 2, "coupled_congruences")
+        add(
+            any(marker in lowered for marker in ("surjection", "onto a")),
+            "surjective_counting",
+        )
+        add(
+            "sqrt" in lowered
+            and any(marker in lowered for marker in ("all real", "satisfying", "solve")),
+            "radical_domain_constraints",
+        )
+        add(
+            any(marker in lowered for marker in ("minimum", "maximum", "minimize", "maximize"))
+            and (
+                bool(re.search(r"\bxyz\b", lowered))
+                or len(re.findall(r"\b[a-z]\b", lowered)) >= 3
+            ),
+            "multivariable_global_constraint",
+        )
+        add(
+            bool(re.search(r"[a-z]''|d\^2[a-z]/d", lowered))
+            or "second-order" in lowered,
+            "higher_order_differential_system",
+        )
+        add(
+            any(marker in lowered for marker in ("integral", r"\int"))
+            and any(marker in lowered for marker in ("ln(", "log(", "zeta", "improper")),
+            "singular_or_special_integral",
+        )
+        add(
+            bool(
+                re.search(
+                    r"(?:find|determine)\s+all\s+(?:real\s+)?[a-z]\s+for\s+which",
+                    lowered,
+                )
+            ),
+            "parameter_regime",
+        )
+        add(target_kind == "multiple_targets", "multiple_targets")
+        add(len(constraints) >= 3, "long_condition_chain")
+        add(len(quantifiers) >= 2, "nested_quantifiers")
+        add(
+            any(
+                marker in lowered
+                for marker in (
+                    "if and only if",
+                    "necessary and sufficient",
+                    "converse",
+                )
+            ),
+            "bidirectional_proof",
+        )
+        add(
+            problem_type in {"proof", "derivation"}
+            and any(
+                marker in lowered
+                for marker in ("lemma", "induction", "case", "contradiction")
+            ),
+            "multi_stage_proof",
+        )
+        add(
+            "proposed solutions" in lowered
+            and any(marker in lowered for marker in ("conflict", "give final answers")),
+            "candidate_conflict",
+        )
+        return list(dict.fromkeys(features))
+
+    @staticmethod
+    def _subproblem_hints(
+        difficulty_features: list[str],
+        target_kind: str,
+    ) -> list[str]:
+        hints: list[str] = []
+        feature_set = set(difficulty_features)
+        if "bidirectional_proof" in feature_set:
+            hints.extend(["prove_forward_direction", "prove_reverse_direction"])
+        if feature_set.intersection(
+            {
+                "radical_domain_constraints",
+                "parameter_regime",
+                "long_condition_chain",
+            }
+        ):
+            hints.append("establish_domain_and_constraints")
+        if feature_set.intersection(
+            {
+                "state_dependent_probability",
+                "surjective_counting",
+                "candidate_conflict",
+            }
+        ):
+            hints.append("build_independent_case_or_state_check")
+        if feature_set.intersection(
+            {
+                "asymptotic_cancellation",
+                "singular_or_special_integral",
+                "higher_order_differential_system",
+            }
+        ):
+            hints.append("verify_boundary_and_convergence_conditions")
+        if target_kind == "multiple_targets":
+            hints.append("resolve_each_requested_target")
+        return list(dict.fromkeys(hints))
 
     @staticmethod
     def _requested_output(normalized: str) -> str:

@@ -21,6 +21,7 @@ class AdaptiveFanoutPolicy:
         requested = max(1, min(3, route.candidate_count))
         requested_alternatives = min(2, requested - 1)
         reasons: list[str] = []
+        posterior_signals = _primary_posterior_signals(primary)
 
         if requested_alternatives == 0:
             reasons.append("route_single_candidate")
@@ -42,15 +43,22 @@ class AdaptiveFanoutPolicy:
             and primary.public_solution_steps
             and not primary.unresolved_obligations
             and not primary.contract_deviations
+            and not posterior_signals
         ):
             reasons.append("low_risk_primary_complete")
             admitted_alternatives = 0
         else:
-            reasons.append(
-                "primary_recovered"
-                if primary.parse_tier != "strict"
-                else f"risk_{route.risk_level}"
-            )
+            if posterior_signals:
+                reasons.append("primary_posterior_escalation")
+                reasons.extend(
+                    f"posterior:{signal}" for signal in posterior_signals
+                )
+            else:
+                reasons.append(
+                    "primary_recovered"
+                    if primary.parse_tier != "strict"
+                    else f"risk_{route.risk_level}"
+                )
             admitted_alternatives = requested_alternatives
 
         call_capacity = max(
@@ -79,3 +87,24 @@ class AdaptiveFanoutPolicy:
             reason_codes=tuple(dict.fromkeys(reasons)),
             budget=snapshot,
         )
+
+
+def _primary_posterior_signals(
+    primary: CandidateSolution | None,
+) -> tuple[str, ...]:
+    if primary is None:
+        return ()
+    signals: list[str] = []
+    if primary.parse_tier != "strict":
+        signals.append("recovered_parse")
+    if not primary.final_answer.strip():
+        signals.append("missing_answer")
+    if not primary.public_solution_steps:
+        signals.append("missing_public_steps")
+    if primary.unresolved_obligations:
+        signals.append("unresolved_obligations")
+    if primary.contract_deviations:
+        signals.append("contract_deviations")
+    if not any(claim.importance == "critical" for claim in primary.claims):
+        signals.append("missing_critical_claim")
+    return tuple(dict.fromkeys(signals))

@@ -20,6 +20,9 @@ from mathforge.harness.fallback import FallbackSolver
 from mathforge.harness.fingerprints import request_fingerprint
 from mathforge.harness.context_budget import ModelContextBudget
 from mathforge.harness.metrics import collect_run_metrics
+from mathforge.harness.effective_config import (
+    build_effective_config_snapshot,
+)
 from mathforge.harness.model_policy import (
     stage_sequence_feasible,
     stage_sequence_reserve_seconds,
@@ -228,13 +231,38 @@ class MathForgeHarness:
             if self._config.enable_shadow
             else None
         )
-        self._frozen_lemma_store = (
+        frozen_lemma_store = (
             FrozenLemmaStore(
                 resource_path("data", "frozen_lemmas.jsonl"),
                 resource_path("data", "frozen_lemmas_manifest.json"),
             )
             if self._config.enable_frozen_lemma_store
             else None
+        )
+        frozen_lemma_disabled_reason = (
+            "config_disabled"
+            if frozen_lemma_store is None
+            else ""
+        )
+        if frozen_lemma_store is not None and frozen_lemma_store.count == 0:
+            frozen_lemma_disabled_reason = "empty_store"
+            frozen_lemma_store = None
+        self._frozen_lemma_store = frozen_lemma_store
+        self._frozen_lemma_disabled_reason = frozen_lemma_disabled_reason
+        self._effective_config_snapshot = build_effective_config_snapshot(
+            self._config,
+            self._contracts,
+            frozen_lemma_store_requested=(
+                self._config.enable_frozen_lemma_store
+            ),
+            frozen_lemma_store_count=(
+                self._frozen_lemma_store.count
+                if self._frozen_lemma_store is not None
+                else 0
+            ),
+            frozen_lemma_store_disabled_reason=(
+                self._frozen_lemma_disabled_reason
+            ),
         )
         self._verifier_agent = VerifierSkepticAgent(self._provider, self._contracts)
         self._run_provenance = build_run_provenance(
@@ -343,6 +371,10 @@ class MathForgeHarness:
             request_fingerprint=run_fingerprint,
             **self._provenance,
         )
+        trace.add(
+            "effective_config_snapshot",
+            snapshot=self._effective_config_snapshot,
+        )
         terminalizer = NoThrowTerminalizer()
         outcome = "fallback"
         error_code = ""
@@ -423,7 +455,14 @@ class MathForgeHarness:
                     )
             trace.add(
                 "frozen_lemma_cache",
+                requested=self._config.enable_frozen_lemma_store,
                 enabled=self._frozen_lemma_store is not None,
+                disabled_reason=self._frozen_lemma_disabled_reason,
+                record_count=(
+                    self._frozen_lemma_store.count
+                    if self._frozen_lemma_store is not None
+                    else 0
+                ),
                 store_hash=(
                     self._frozen_lemma_store.store_hash
                     if self._frozen_lemma_store is not None
@@ -439,9 +478,21 @@ class MathForgeHarness:
                 "problem_parsed",
                 problem_type=session.problem_ir.problem_type,
                 answer_type=session.problem_ir.answer_type,
+                answer_type_confidence=(
+                    session.problem_ir.answer_type_confidence
+                ),
                 target_phrase=session.problem_ir.target_phrase,
+                target_kind=session.problem_ir.target_kind,
                 parser_confidence=session.problem_ir.parser_confidence,
                 assumptions=session.problem_ir.assumptions,
+                definitions=session.problem_ir.definitions,
+                quantifiers=session.problem_ir.quantifiers,
+                constraints=session.problem_ir.constraints,
+                ambiguities=session.problem_ir.ambiguities,
+                difficulty_features=(
+                    session.problem_ir.difficulty_features
+                ),
+                subproblem_hints=session.problem_ir.subproblem_hints,
                 domains=session.problem_ir.domains,
                 risk_flags=session.problem_ir.risk_flags,
             )
@@ -2108,8 +2159,22 @@ class MathForgeHarness:
                 model_calls=session.budget.used_calls,
                 estimated_tokens=session.budget.used_tokens,
             )
-            if validation_errors:
-                trace.add("answer_validation_warning", codes=validation_errors)
+            validation_warnings = sorted(
+                set(
+                    [
+                        *selected_admission.warning_codes,
+                        *validation_errors,
+                    ]
+                )
+            )
+            if validation_warnings:
+                trace.add(
+                    "answer_validation_warning",
+                    codes=validation_warnings,
+                    answer_type_confidence=(
+                        session.problem_ir.answer_type_confidence
+                    ),
+                )
             deterministic_response = self._formatter.format(
                 candidate,
                 session.problem_ir,
@@ -2855,9 +2920,14 @@ class MathForgeHarness:
         )
 
     def _run_answer_type_check(self, session, candidate, ledger: EvidenceLedger):
+        effective_answer_type = (
+            session.problem_ir.answer_type
+            if session.problem_ir.answer_type_confidence >= 0.75
+            else candidate.answer_type
+        )
         arguments = {
             "answer": candidate.final_answer,
-            "answer_type": session.problem_ir.answer_type,
+            "answer_type": effective_answer_type,
         }
         timeout = session.budget.begin_tool_call(
             isolated=self._tool_executor.is_isolated("answer_type_check"),

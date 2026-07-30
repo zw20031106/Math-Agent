@@ -58,6 +58,7 @@ class PrimarySolver:
             f"Problem:\n{request.problem.normalized_problem}\n\n"
             f"Required core method family: {request.method_family}.\n"
             f"Forbidden method families: {', '.join(request.forbidden_method_families) or 'none'}.\n"
+            f"{_problem_structure_prompt(request.problem)}\n"
             f"{request.skill_context}{context}"
         )
         return self._compiler.compile_solver(
@@ -93,7 +94,9 @@ class AlternativeSolver:
         user = (
             f"Problem:\n{request.problem.normalized_problem}\n\n"
             f"Required core method family: {request.method_family}.\n"
-            f"Forbidden method families: {forbidden}.\n{request.skill_context}{context}"
+            f"Forbidden method families: {forbidden}.\n"
+            f"{_problem_structure_prompt(request.problem)}\n"
+            f"{request.skill_context}{context}"
         )
         return self._compiler.compile_solver(
             "alternative_solver",
@@ -260,6 +263,28 @@ class SolverExecutor:
         candidate.planned_method_family = request.method_family
         candidate.validate()
         return candidate
+
+
+def _problem_structure_prompt(problem: ProblemIR) -> str:
+    fields = (
+        ("Target kind", [problem.target_kind]),
+        ("Definitions", problem.definitions),
+        ("Quantifiers", problem.quantifiers),
+        ("Constraints", problem.constraints),
+        ("Ambiguities", problem.ambiguities),
+        ("Structural difficulty", problem.difficulty_features),
+        ("Suggested decomposition", problem.subproblem_hints),
+    )
+    lines = ["Host-parsed public problem structure:"]
+    for label, values in fields:
+        bounded = [
+            str(value).strip()[:240]
+            for value in values
+            if str(value).strip()
+        ]
+        if bounded:
+            lines.append(f"- {label}: {'; '.join(bounded)}")
+    return "\n".join(lines)
 
 
 def _candidate_validation_details(

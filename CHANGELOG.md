@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### 0730 stability remediation phases 0-2 (2026-07-30)
+### 0730 stability remediation phases 0-3 (2026-07-30)
 
 - Added reproducible Phase 0 reliability, general high-difficulty, and
   contract-adversarial baselines, a hash manifest builder, symbolic-equivalence
@@ -28,6 +28,15 @@
 - Added a deterministic concurrency 1/2/4 capacity-profile comparator with
   frozen formation, answer-production, accuracy-drop, and peak-concurrency
   gates, plus Phase 2 stress/regression coverage.
+- Upgraded ProblemIR to 2.0 with reliable option enumeration, independent
+  answer-type confidence, definitions, quantifiers, constraints, target kind,
+  ambiguities, structural difficulty features, and public subproblem hints.
+- Added general structural high-difficulty routing and explicit Primary
+  posterior escalation while keeping low-confidence answer-type inference a
+  soft normalization gate rather than a Candidate rejection.
+- Added Judge Trace 3.2 effective Prompt/Provider/Deadline configuration and
+  per-call token/queue-limit explanations. An enabled but empty Frozen Lemma
+  Store is now disabled before evaluation work begins.
 
 ### 0729 remediation phase 6 (2026-07-29)
 

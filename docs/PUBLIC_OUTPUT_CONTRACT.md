@@ -1,6 +1,6 @@
 # MathForge 公共输出契约
 
-版本：3.1
+版本：3.2
 
 ## 对外字段
 
@@ -28,11 +28,14 @@ Harness、Benchmark artifact 和逐题运行清单中。
 
 ## Trace 内容
 
-公共 `trace` 使用 Judge Trace V3.1，是面向判分的有界审计叙事，不是内部
+公共 `trace` 使用 Judge Trace V3.2，是面向判分的有界审计叙事，不是内部
 框架日志或 Debug Journal：
 
 - 保留会话/配置、路由/Skill、关键 Evidence、proof completion、仲裁、
   最终选择、预算和终态摘要。
+- `effective_config_snapshot` 公开最终生效的 Prompt 字符预算、阶段输出上限、
+  Provider 并发/时延策略、Deadline 和 Frozen Lemma Store 状态；每次模型
+  调用同时记录实际上下文分配、输出上限、阶段 p95 与有效排队预算。
 - 选中 Candidate 保留必要公开解题步骤和最终答案，且不在 Trace 中重复
   `final_response`；二者通过内容摘要绑定并校验一致性。
 - `viable_not_selected` Candidate 额外保留受限的 `public_final_answer`、

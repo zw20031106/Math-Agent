@@ -13,9 +13,10 @@ from mathforge.output.loop_health import (
 )
 
 
-JUDGE_TRACE_SCHEMA_VERSION = "3.1"
+JUDGE_TRACE_SCHEMA_VERSION = "3.2"
 JUDGE_EVENT_STAGES = {
     "session_started": "session",
+    "effective_config_snapshot": "session",
     "problem_parsed": "parsing",
     "route_planned": "routing",
     "skills_selected": "skill_selection",
@@ -38,6 +39,7 @@ JUDGE_EVENT_STAGES = {
 _PROTECTED_EVENTS = frozenset(
     {
         "session_started",
+        "effective_config_snapshot",
         "evidence_summary",
         "proof_completion_summary",
         "decision_summary",
@@ -171,6 +173,18 @@ def project_judge_trace(
             ),
         ),
     )
+    effective_config = _last(by_name, "effective_config_snapshot")
+    append(
+        "effective_config_snapshot",
+        effective_config,
+        {
+            "snapshot": _safe_mapping(
+                effective_config.get("snapshot", {})
+                if effective_config
+                else {}
+            )
+        },
+    )
     problem = _last(by_name, "problem_parsed")
     append(
         "problem_parsed",
@@ -180,10 +194,19 @@ def project_judge_trace(
             (
                 "problem_type",
                 "answer_type",
+                "answer_type_confidence",
                 "target_phrase",
+                "target_kind",
                 "domain",
                 "assumptions",
+                "definitions",
+                "quantifiers",
+                "constraints",
+                "ambiguities",
+                "difficulty_features",
+                "subproblem_hints",
                 "parse_confidence",
+                "parser_confidence",
             ),
         ),
     )
@@ -845,7 +868,12 @@ def _decision_summary(
         if not isinstance(hits, list):
             hits = []
         details["cache"] = {
+            "requested": bool(cache.get("requested", False)),
             "enabled": bool(cache.get("enabled", False)),
+            "disabled_reason": str(cache.get("disabled_reason", "")),
+            "record_count": _nonnegative_int(
+                cache.get("record_count", 0)
+            ),
             "store_hash": str(cache.get("store_hash", "")),
             "hit_count": len(hits),
             "hits": [
@@ -1019,8 +1047,18 @@ def _budget_summary(event: dict[str, Any] | None) -> dict[str, Any]:
                     "response_validation",
                     "transport_attempts",
                     "queue_elapsed_seconds",
+                    "stage_p95_seconds",
+                    "effective_queue_budget_seconds",
                     "execution_elapsed_seconds",
                     "total_elapsed_seconds",
+                    "prompt_tokens",
+                    "available_input_tokens",
+                    "configured_output_tokens",
+                    "stage_output_cap_tokens",
+                    "max_output_tokens",
+                    "context_window_tokens",
+                    "safety_margin_tokens",
+                    "counting_mode",
                     "observed_output_tokens",
                     "output_chars",
                 ),
