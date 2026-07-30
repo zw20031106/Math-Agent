@@ -33,20 +33,20 @@
       "path": "prompts",
       "pattern": "contract.md",
       "expected_count": 7,
-      "version": "prompt-contract-4-tool-feedback",
-      "engineering_reviewer": "codex-phase5-feedback-audit",
+      "version": "prompt-contract-5-verification-closure",
+      "engineering_reviewer": "codex-phase6-verification-audit",
       "review_date": "2026-07-30",
-      "sha256": "a818a8d52747328f625648313ad291f3dfc40ad892ba047338ec489f52f09e72"
+      "sha256": "6862d9d1b3bf33c947162e6f4904b73497e351348ed2355e3f918095acd4a1a7"
     },
     {
       "id": "prompt-compiler",
       "kind": "file",
       "path": "mathforge/agents/prompt_compiler.py",
       "expected_count": 1,
-      "version": "prompt-compiler-7-tool-feedback",
-      "engineering_reviewer": "codex-phase5-feedback-audit",
+      "version": "prompt-compiler-8-verification-targets",
+      "engineering_reviewer": "codex-phase6-verification-audit",
       "review_date": "2026-07-30",
-      "sha256": "5ba7a25712a68b91de0a248fd47a529c6124a14582af2402e7b08ce76dbb5ba3"
+      "sha256": "d7074d164bdb69d615bba01a28b8a081ee47162ab256fb788c32bbf2fd546d86"
     },
     {
       "id": "reasoning-state",
@@ -63,10 +63,10 @@
       "kind": "file",
       "path": "mathforge/verification/proof_obligations.py",
       "expected_count": 1,
-      "version": "proof-obligations-phase4",
-      "engineering_reviewer": "codex-phase4-proof-closure",
-      "review_date": "2026-07-29",
-      "sha256": "85838f7d94049b06a44a363ac738091d20945f568cc9d4285dc1f3e9b50b4e5c"
+      "version": "proof-obligations-phase6-preplanned",
+      "engineering_reviewer": "codex-phase6-verification-audit",
+      "review_date": "2026-07-30",
+      "sha256": "4823c812d42abe6ec8cf5bf5cab8fffa5da9c93af385eafb62269f8b1853cd2f"
     },
     {
       "id": "tool-capabilities",
@@ -83,10 +83,10 @@
         "mathforge/harness/tool_feedback.py"
       ],
       "expected_count": 9,
-      "version": "tool-contract-phase5-feedback",
-      "engineering_reviewer": "codex-phase5-feedback-audit",
+      "version": "tool-contract-phase6-review-evidence",
+      "engineering_reviewer": "codex-phase6-verification-audit",
       "review_date": "2026-07-30",
-      "sha256": "2688ddaf6a402243a273c2e7ed12f0b6f6b94c8b371803a28ffa3aef196f7019"
+      "sha256": "c2e8cdb0db0c7f43340fde428e373105aa0a61dd97d3aaf9a370484de4b449fb"
     },
     {
       "id": "dynamic-skill-selection",
@@ -107,10 +107,34 @@
         "mathforge/harness/schemas.py"
       ],
       "expected_count": 3,
-      "version": "typed-lemma-feedback-1",
-      "engineering_reviewer": "codex-phase5-feedback-audit",
+      "version": "typed-lemma-feedback-2-proof-origin",
+      "engineering_reviewer": "codex-phase6-verification-audit",
       "review_date": "2026-07-30",
-      "sha256": "e4a72aa043ddb662c7070c6a4d7cdfb698c0eb8c956386a56f226ef22e0419be"
+      "sha256": "b633e81640963f1f33caa90e8ef4bad764ad55520a6f2c4061bb10ab87e1ebdd"
+    },
+    {
+      "id": "verification-closure",
+      "kind": "file_set",
+      "paths": [
+        "mathforge/agents/verifier.py",
+        "mathforge/context/compressor.py",
+        "mathforge/context/views.py",
+        "mathforge/harness/effective_config.py",
+        "mathforge/harness/repair.py",
+        "mathforge/output/judge_trace.py",
+        "mathforge/output/loop_health.py",
+        "mathforge/runtime.py",
+        "mathforge/verification/arbitration.py",
+        "mathforge/verification/completion.py",
+        "mathforge/verification/cross_review.py",
+        "mathforge/verification/evidence.py",
+        "mathforge/verification/proof_obligations.py"
+      ],
+      "expected_count": 13,
+      "version": "verification-closure-phase6",
+      "engineering_reviewer": "codex-phase6-verification-audit",
+      "review_date": "2026-07-30",
+      "sha256": "e1c5907ecfa816950b7e28939a9eee3b6eae8d457a35eeba0b97e204cc8b27ce"
     },
     {
       "id": "reviewed-method-cards",

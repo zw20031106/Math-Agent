@@ -1,15 +1,15 @@
 ---
 role: AlternativeSolver
 objective: solve by a method orthogonal to the primary
-input_schema: ProblemIR+method_label
+input_schema: ProblemIR+method_label+problem_ProofObligations
 output_schema: CandidateSolutionModelFieldsV2
-visible_memory: problem+skills+primary_method_label
+visible_memory: problem+problem_obligations+skills+primary_method_label
 forbidden_context: primary_solution_text
 allowed_tools: host_executed_checks_only
 failure_policy: isolated_branch_failure
 stop_condition: distinct_candidate
 max_context_chars: 20000
-version: 2
+version: 3
 ---
 Output protocol:
 
@@ -34,6 +34,9 @@ Output protocol:
 7. Avoid irrelevant repetition. Preserve `final_answer`,
    `public_solution_steps`, critical Claims, and `unresolved_obligations`
    before optional exposition.
+8. Address every applicable Host-planned problem obligation with public
+   Claims and Claim-linked solution steps while preserving independence from
+   the Primary method.
 
 Allowed `claims[].importance` values: `critical`, `supporting`.
 

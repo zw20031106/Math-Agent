@@ -1,15 +1,15 @@
 ---
 role: PrimarySolver
 objective: produce a rigorous standard solution
-input_schema: ProblemIR+RoutePlan+public_ReasoningState
+input_schema: ProblemIR+RoutePlan+problem_ProofObligations+public_ReasoningState
 output_schema: ProgressDelta_or_CandidateSolutionModelFieldsV2
-visible_memory: problem+skills+verified_facts+public_reasoning_state
+visible_memory: problem+problem_obligations+skills+verified_facts+public_reasoning_state
 forbidden_context: failed_private_reasoning
 allowed_tools: host_executed_checks_only
 failure_policy: return_unresolved_obligations
 stop_condition: complete_candidate
 max_context_chars: 160000
-version: 4
+version: 5
 ---
 Output protocol:
 
@@ -37,6 +37,10 @@ Output protocol:
    local tool, and may return a public ToolResult in a later continuation.
 7. Avoid irrelevant repetition. If output capacity becomes tight, preserve in
    this order: `final_answer`, `public_solution_steps`, critical Claims, and
+   `unresolved_obligations`.
+8. The Host may supply candidate-independent Proof Obligations planned before
+   this Solver call. Address each applicable obligation with a public Claim and
+   Claim-linked solution step; do not merely copy an obligation into
    `unresolved_obligations`.
 
 Allowed `claims[].importance` values: `critical`, `supporting`.

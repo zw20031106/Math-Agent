@@ -479,3 +479,36 @@ ProblemIR + ReasoningState + FailureCode
   → typed Lemma reuse
   → 原 Evidence / Proof / Arbitration / Output 闭环
 ```
+
+## 24. 0730 Phase 6：验证、交叉审阅与原子修复闭环
+
+| 文件 | Phase 6 职责 | 主要调用关系 |
+|---|---|---|
+| `mathforge/verification/proof_obligations.py` | Solver 前生成题目级义务；Candidate 后绑定实际 Claim 并追加方法级义务 | `ProofStage` → `MathForgeHarness` |
+| `mathforge/verification/cross_review.py` | 生成公开候选摘要、冲突矩阵、answer/claim review target 与 Claim-linked 解答切片 | `MathForgeHarness`、`VerifierSkepticAgent` |
+| `mathforge/agents/verifier.py` | 仅对结构可审阅的义务或冲突发起批量审阅；校验 Candidate、Claim、Obligation 和 target 引用 | `MathForgeHarness._run_skeptic_review` |
+| `mathforge/context/views.py` | 从公开步骤或 Claim 构造 Verifier 解答切片并移除私有 `solution_text` | `ContextCompressor` |
+| `mathforge/context/compressor.py` | 将 Verifier 上下文裁剪为显式白名单并移除重复 ClaimGraph，保证完整公开审阅材料落入角色预算 | `RoleContextFactory` |
+| `mathforge/verification/completion.py` | 区分硬完成、模型审阅和不完整；软审阅不关闭硬证明义务 | `ProofStage.evaluate` |
+| `mathforge/verification/arbitration.py` | 按硬证据、独立互证、定向审阅等层级排序，并用公开内容摘要破除完全并列 | `MathForgeHarness` |
+| `mathforge/harness/repair.py` | Claim-local 版本化 Patch、重验证、Evidence 事务提交或回滚 | `MathForgeHarness` |
+| `mathforge/output/judge_trace.py` | Judge Trace 3.5 投影题目义务、review target 覆盖、证据层级和修复结果 | `output.public_result` |
+| `mathforge/output/loop_health.py` | 将未审阅冲突、仅模型审阅证明和修复回滚反映为闭环降级原因 | `judge_trace.py` |
+| `mathforge/harness/effective_config.py` | Effective Config 1.2 公开验证闭环的生效策略 | `MathForgeHarness` |
+| `tests/test_phase6_0730_verification_cross_review_repair.py` | 验收前置义务、可审阅切片、定向冲突、证据层级、确定性仲裁及原子回滚 | Phase 6 回归门 |
+
+更新后的闭环：
+
+```text
+ProblemIR
+  → 题目级 Proof Obligations（Solver 前）
+  → Primary / Alternative 公开 Candidate
+  → Claim 绑定 + 方法级 Proof Obligations
+  → 本地 Hard Evidence + Candidate Conflict Matrix
+  → Claim-linked Verifier review targets
+  → hard / independent / model-review / incomplete 分层
+  → 证据触发的 Claim-local Repair
+  → 原子 Reverify + 质量比较 + commit/rollback
+  → 确定性 Arbitration
+  → Judge Trace 3.5 + stable final_response
+```

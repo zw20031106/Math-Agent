@@ -20,7 +20,7 @@ def test_claimless_candidate_is_incomplete():
     assert decision.unresolved_obligation_ids == ["c:sufficiency"]
 
 
-def test_mapped_skeptic_pass_completes_obligation_but_remains_soft():
+def test_mapped_skeptic_pass_is_model_reviewed_but_not_hard_complete():
     candidate = CandidateSolution(
         "c",
         "PrimarySolver",
@@ -52,8 +52,11 @@ def test_mapped_skeptic_pass_completes_obligation_but_remains_soft():
     ]
     obligation = _obligation()
     decision = ProofCompletionGate().evaluate(candidate, evidence, [obligation])
-    assert decision.status == "complete"
-    assert obligation.status == "satisfied"
+    assert decision.status == "model_reviewed"
+    assert decision.evidence_tier == "model_review"
+    assert decision.hard_satisfied_obligation_ids == []
+    assert decision.model_reviewed_obligation_ids == ["c:sufficiency"]
+    assert obligation.status == "reviewed"
     assert obligation.satisfaction_evidence_ids == ["ev"]
     assert evidence[0].strength == "soft"
     assert evidence[0].capability == "proof.obligation_review"

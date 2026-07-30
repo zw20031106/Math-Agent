@@ -25,6 +25,8 @@ from mathforge.verification.capabilities import (
 from mathforge.verification.cross_review import (
     CandidateConflictMatrix,
     CandidateReviewSummary,
+    candidate_review_segments,
+    reviewable_obligation_ids,
 )
 
 
@@ -45,6 +47,8 @@ class SkepticFinding:
     description: str
     missing_condition: str = ""
     counterexample_summary: str = ""
+    review_level: str = "obligation"
+    review_target_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -84,22 +88,43 @@ class VerifierSkepticAgent:
             obligations,
             evidence or [],
         )
+        if (
+            not payload["reviewable_obligation_ids"]
+            and not payload["review_targets"]
+        ):
+            return BatchVerificationResult(
+                [],
+                False,
+                "no_reviewable_targets",
+            )
         try:
             budget.consume(stage="verifier")
-            visible_payload = (
-                json.dumps(
-                    self._review_payload_from_view(context_view),
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                )
+            visible = (
+                self._review_payload_from_view(context_view)
                 if context_view is not None
-                else json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                else payload
+            )
+            visible["candidate_conflict_matrix"] = payload[
+                "candidate_conflict_matrix"
+            ]
+            visible["review_targets"] = payload["review_targets"]
+            visible["reviewable_obligation_ids"] = payload[
+                "reviewable_obligation_ids"
+            ]
+            visible["unreviewable_obligation_ids"] = payload[
+                "unreviewable_obligation_ids"
+            ]
+            visible_payload = json.dumps(
+                visible,
+                ensure_ascii=False,
+                separators=(",", ":"),
             )
             user = (
-                "Review this structured public batch without reconstructing or rewriting "
-                "the full solutions. Return exactly one JSON object with findings that "
-                "contain candidate_id, claim_id, obligation_ids, status, public_rationale, "
-                "missing_condition, and counterexample_summary.\n\n"
+                "Review this structured public batch using the supplied Claim-linked "
+                "public solution segments. Return exactly one JSON object with findings "
+                "that contain candidate_id, claim_id, obligation_ids, review_target_ids, "
+                "review_level, status, public_rationale, missing_condition, and "
+                "counterexample_summary.\n\n"
                 f"Batch:\n{visible_payload}"
                 + (
                     f"\n\nAuthorized skill guidance:\n{skill_context}"
@@ -112,8 +137,11 @@ class VerifierSkepticAgent:
                 user_content=user,
                 runtime_instructions=(
                     "Challenge the supplied claims and required proof obligations. "
-                    "Return JSON only. A pass must name both a real claim_id and one or more "
-                    "obligation_ids supported by that claim. Unknown is not pass. "
+                    "Return JSON only. An obligation pass must name both a real claim_id "
+                    "and supported obligation_ids. An answer-level or claim-level pass "
+                    "must name a real claim_id and supplied review_target_ids. "
+                    "Classify every supplied conflict target for both candidates. "
+                    "Unknown is not pass. "
                     "Do not emit native tool calls or private reasoning."
                 ),
             )
@@ -153,15 +181,32 @@ class VerifierSkepticAgent:
             CandidateReviewSummary.from_candidate(candidate)
             for candidate in candidates
         ]
+        matrix = CandidateConflictMatrix.build(summaries)
+        reviewable_ids = reviewable_obligation_ids(
+            candidates,
+            obligations,
+        )
+        all_required_ids = {
+            obligation.obligation_id
+            for candidate in candidates
+            for obligation in obligations.get(candidate.candidate_id, [])
+            if obligation.required
+        }
         return {
             "problem": problem.normalized_problem,
             "conditions": list(problem.assumptions),
             "candidate_review_summaries": [
                 summary.to_dict() for summary in summaries
             ],
-            "candidate_conflict_matrix": CandidateConflictMatrix.build(
-                summaries
-            ).to_dict(),
+            "candidate_conflict_matrix": matrix.to_dict(),
+            "review_targets": [
+                target.to_dict()
+                for target in matrix.review_targets()
+            ],
+            "reviewable_obligation_ids": list(reviewable_ids),
+            "unreviewable_obligation_ids": sorted(
+                all_required_ids - set(reviewable_ids)
+            ),
             "candidates": [
                 {
                     "candidate_id": candidate.candidate_id,
@@ -177,6 +222,9 @@ class VerifierSkepticAgent:
                     "public_solution_steps": list(
                         candidate.public_solution_steps
                     ),
+                    "review_segments": candidate_review_segments(
+                        candidate
+                    ),
                     "evidence": [
                         record.to_dict()
                         for record in evidence
@@ -185,6 +233,7 @@ class VerifierSkepticAgent:
                     "obligations": [
                         obligation.to_dict()
                         for obligation in obligations.get(candidate.candidate_id, [])
+                        if obligation.obligation_id in reviewable_ids
                     ],
                 }
                 for candidate in candidates
@@ -199,7 +248,8 @@ class VerifierSkepticAgent:
         return {
             "problem": payload.get("original_problem", ""),
             "candidates": [
-                {
+                (
+                    {
                     key: candidate[key]
                     for key in (
                         "candidate_id",
@@ -210,11 +260,12 @@ class VerifierSkepticAgent:
                         "claims",
                         "method_steps",
                         "public_solution_steps",
+                        "review_segments",
                         "unresolved_obligations",
                     )
                     if key in candidate
-                }
-                | {
+                    }
+                    | {
                     "evidence": [
                         record
                         for record in evidence
@@ -227,8 +278,17 @@ class VerifierSkepticAgent:
                         if str(obligation.get("obligation_id", "")).startswith(
                             f"{candidate.get('candidate_id')}:"
                         )
+                        and set(obligation.get("source_claim_ids", []))
+                        .intersection(
+                            {
+                                str(claim.get("claim_id", ""))
+                                for claim in candidate.get("claims", [])
+                                if isinstance(claim, dict)
+                            }
+                        )
                     ],
-                }
+                    }
+                )
                 for candidate in payload.get("candidates", [])
             ],
             "conditions": payload.get("conditions", []),
@@ -247,6 +307,15 @@ class VerifierSkepticAgent:
         if not isinstance(raw_findings, list):
             return []
         candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
+        review_targets = {
+            target.target_id: target
+            for target in CandidateConflictMatrix.build(
+                [
+                    CandidateReviewSummary.from_candidate(candidate)
+                    for candidate in candidates
+                ]
+            ).review_targets()
+        }
         results: list[SkepticFinding] = []
         seen: set[tuple] = set()
         for item in raw_findings[:128]:
@@ -273,6 +342,42 @@ class VerifierSkepticAgent:
             obligation_ids = sorted(
                 {str(value) for value in raw_ids if str(value) in own_obligations}
             )
+            raw_target_ids = item.get("review_target_ids", [])
+            if isinstance(raw_target_ids, str):
+                raw_target_ids = [raw_target_ids]
+            if not isinstance(raw_target_ids, list):
+                raw_target_ids = []
+            review_target_ids = tuple(
+                sorted(
+                    {
+                        str(value)
+                        for value in raw_target_ids
+                        if str(value) in review_targets
+                        and candidate_id
+                        in review_targets[str(value)].candidate_ids
+                    }
+                )
+            )
+            review_level = str(
+                item.get(
+                    "review_level",
+                    (
+                        review_targets[review_target_ids[0]].level
+                        if review_target_ids
+                        else "obligation"
+                    ),
+                )
+            ).strip().lower()
+            if review_level not in {"obligation", "answer", "claim"}:
+                review_level = "obligation"
+            if review_target_ids:
+                target_levels = {
+                    review_targets[target_id].level
+                    for target_id in review_target_ids
+                }
+                if len(target_levels) != 1:
+                    continue
+                review_level = next(iter(target_levels))
             if status == "pass":
                 obligation_ids = [
                     obligation_id
@@ -280,9 +385,22 @@ class VerifierSkepticAgent:
                     if claim_id is not None
                     and claim_id in own_obligations[obligation_id].source_claim_ids
                 ]
-                if claim_id is None or not obligation_ids:
+                if (
+                    claim_id is None
+                    or (
+                        not obligation_ids
+                        and not review_target_ids
+                    )
+                ):
                     continue
-            key = (candidate_id, claim_id, tuple(obligation_ids), status)
+            key = (
+                candidate_id,
+                claim_id,
+                tuple(obligation_ids),
+                review_target_ids,
+                review_level,
+                status,
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -300,6 +418,8 @@ class VerifierSkepticAgent:
                     )[:1000],
                     str(item.get("missing_condition", "")),
                     str(item.get("counterexample_summary", "")),
+                    review_level,
+                    review_target_ids,
                 )
             )
         return results

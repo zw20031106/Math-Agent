@@ -43,7 +43,7 @@ def build_effective_config_snapshot(
     """Build the safe final runtime limits after deterministic overrides."""
 
     return {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "profile": config.profile,
         "prompt": {
             "configured_primary_max_tokens": config.primary_max_tokens,
@@ -109,6 +109,25 @@ def build_effective_config_snapshot(
                 "tool_feedback_protocol": (
                     "work_item/local_tool/ToolResult/continue"
                 ),
+            },
+            "verification_closure": {
+                "problem_obligations_before_solver": (
+                    config.enable_proof_obligations
+                ),
+                "claim_linked_public_review": config.enable_verifier,
+                "conflict_targeted_review": config.enable_verifier,
+                "evidence_tiers": [
+                    "hard_evidence",
+                    "independent_corroboration",
+                    "model_review",
+                    "not_required",
+                    "incomplete",
+                ],
+                "soft_review_is_hard_complete": False,
+                "repair_requires_atomic_reverify_pair": (
+                    config.enable_repair and config.enable_verifier
+                ),
+                "repair_rollback_on_regression": config.enable_repair,
             },
             "reviewed_method_cards": {
                 "read_only": True,

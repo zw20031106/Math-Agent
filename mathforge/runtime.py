@@ -110,6 +110,7 @@ from mathforge.verification.admission import (
 from mathforge.verification.cross_review import (
     CandidateConflictMatrix,
     CandidateReviewSummary,
+    has_reviewable_work,
 )
 from mathforge.tools.shadow_solver import ShadowOutcome
 from mathforge.verification.answer_normalization import canonical_answer
@@ -520,6 +521,19 @@ class MathForgeHarness:
                 subproblem_hints=session.problem_ir.subproblem_hints,
                 domains=session.problem_ir.domains,
                 risk_flags=session.problem_ir.risk_flags,
+            )
+            if self._config.enable_proof_obligations:
+                session.problem_obligations = (
+                    self._proof_stage.plan_problem(session.problem_ir)
+                )
+            trace.add(
+                "problem_obligations_planned",
+                enabled=self._config.enable_proof_obligations,
+                timing="before_solver",
+                obligations=[
+                    obligation.to_dict()
+                    for obligation in session.problem_obligations
+                ],
             )
             self._transition(
                 session,
@@ -1545,7 +1559,9 @@ class MathForgeHarness:
             if self._config.enable_proof_obligations:
                 for item in viable:
                     session.proof_obligations[item.candidate_id] = self._proof_stage.generate(
-                        session.problem_ir, item
+                        session.problem_ir,
+                        item,
+                        problem_obligations=session.problem_obligations,
                     )
             trace.add(
                 "proof_obligations_generated",
@@ -1694,6 +1710,9 @@ class MathForgeHarness:
                         self._proof_stage.generate(
                             session.problem_ir,
                             expanded,
+                            problem_obligations=(
+                                session.problem_obligations
+                            ),
                         )
                     )
                 viable.append(expanded)
@@ -1754,25 +1773,34 @@ class MathForgeHarness:
             conflict_matrix = CandidateConflictMatrix.build(
                 review_summaries
             )
+            review_targets = conflict_matrix.review_targets()
             trace.add(
                 "candidate_conflict_matrix",
                 summaries=[
                     summary.to_dict() for summary in review_summaries
                 ],
                 matrix=conflict_matrix.to_dict(),
+                review_targets=[
+                    target.to_dict()
+                    for target in review_targets
+                ],
+            )
+            reviewable_work = has_reviewable_work(
+                viable,
+                session.proof_obligations,
+                conflict_matrix,
             )
             verifier_required = (
                 self._config.enable_verifier
                 and self._config.enable_evidence
                 and self._provider_allows_optional_model_work()
-                and bool(required_obligations)
+                and reviewable_work
             )
             post_verifier_repair_requested = (
                 self._config.enable_repair
                 and self._config.enable_evidence
                 and self._provider_allows_optional_model_work()
                 and verifier_required
-                and bool(required_obligations)
                 and not repair_attempted
                 and session.budget.deadline.exploration_allowed()
             )
@@ -1804,7 +1832,7 @@ class MathForgeHarness:
                 and self._config.enable_evidence
                 and self._provider_allows_optional_model_work()
                 and verifier_required
-                and required_obligations
+                and reviewable_work
                 and session.budget.deadline.exploration_allowed()
             ):
                 (
@@ -1911,6 +1939,9 @@ class MathForgeHarness:
                             self._proof_stage.generate(
                                 problem_ir,
                                 proposed,
+                                problem_obligations=(
+                                    session.problem_obligations
+                                ),
                             )
                         )
                         (
@@ -1953,7 +1984,10 @@ class MathForgeHarness:
                             for record in session.evidence
                             if record.candidate_id == proposed.candidate_id
                         )
-                        if after_decision.status != "complete":
+                        if after_decision.status not in {
+                            "complete",
+                            "model_reviewed",
+                        }:
                             return False, "post_repair_proof_incomplete"
                         if after_local_hard_passes < before_local_hard_passes:
                             return False, "evidence_quality_decreased"
@@ -2243,6 +2277,37 @@ class MathForgeHarness:
                     in {"complete", "not_required"}
                     else 0.0
                 )
+                single_status = completion_status_by_id.get(
+                    candidate.candidate_id,
+                    "not_required",
+                )
+                single_tier = {
+                    "complete": "hard_evidence",
+                    "model_reviewed": "model_review",
+                    "not_required": "not_required",
+                }.get(single_status, "incomplete")
+                single_tier_rank = {
+                    "hard_evidence": 0,
+                    "independent_corroboration": 1,
+                    "model_review": 2,
+                    "not_required": 3,
+                    "incomplete": 4,
+                }[single_tier]
+                single_review_support = sum(
+                    1
+                    if record.status == "pass"
+                    else -1
+                    if record.status == "fail"
+                    else 0
+                    for record in session.evidence
+                    if record.candidate_id == candidate.candidate_id
+                    and record.evidence_type
+                    == "llm:VerifierSkeptic"
+                    and record.payload.get("review_target_ids")
+                )
+                single_digest = semantic_fingerprint(
+                    public_candidate_content(candidate)
+                )
                 rank_details = [
                     {
                         "candidate_id": candidate.candidate_id,
@@ -2250,13 +2315,28 @@ class MathForgeHarness:
                         "required_coverage": single_coverage,
                         "answer_consistency": 1,
                         "independent_agreement": 0,
+                        "evidence_tier": single_tier,
+                        "review_support": single_review_support,
                         "soft_score": 0,
-                        "lexicographic_key": [
+                        "deterministic_tie_break": single_digest,
+                        "substantive_key": [
                             0,
+                            single_tier_rank,
                             -single_coverage,
                             -1,
                             0,
+                            -single_review_support,
                             0,
+                        ],
+                        "lexicographic_key": [
+                            0,
+                            single_tier_rank,
+                            -single_coverage,
+                            -1,
+                            0,
+                            -single_review_support,
+                            0,
+                            single_digest,
                         ],
                     }
                 ]
@@ -2264,6 +2344,7 @@ class MathForgeHarness:
                 equivalence_unknown_pairs = []
                 equivalence_disagreement_pairs = []
                 used_llm_arbiter = False
+                tie_break_reason = "single_candidate"
                 selection_mode = "single_candidate_deterministic"
             else:
                 arbitration = self._arbitration.select(
@@ -2286,6 +2367,7 @@ class MathForgeHarness:
                     arbitration.disagreement_pairs
                 )
                 used_llm_arbiter = arbitration.used_llm_arbiter
+                tie_break_reason = arbitration.tie_break_reason
                 selection_mode = "multi_candidate_arbitration"
             trace.add(
                 "candidate_arbitrated",
@@ -2299,10 +2381,11 @@ class MathForgeHarness:
                     candidate_precheck_rejections,
                 ),
                 selection_reason=(
-                    "prefer complete candidates when available, then select the "
-                    "lowest lexicographic evidence rank; stable generation order "
-                    "breaks exact ties"
+                    "prefer hard evidence, independent corroboration, and "
+                    "targeted model review in that order; exact substantive "
+                    "ties use a stable public-content digest"
                 ),
+                tie_break_reason=tie_break_reason,
                 selected_verification_status=completion_status_by_id.get(
                     candidate.candidate_id,
                     "not_required",
@@ -3355,6 +3438,11 @@ class MathForgeHarness:
             for candidate_id, items in session.proof_obligations.items()
             if use_all_candidates or candidate_id in candidate_ids
         }
+        if session.problem_obligations:
+            selected_obligations = {
+                "__problem__": list(session.problem_obligations),
+                **selected_obligations,
+            }
         try:
             view = self._context_route_stage.build_context(
                 problem=session.problem_ir,
@@ -3591,9 +3679,29 @@ class MathForgeHarness:
                     description=finding.description,
                     missing_condition=finding.missing_condition,
                     counterexample_summary=finding.counterexample_summary,
+                    review_level=finding.review_level,
+                    review_target_ids=finding.review_target_ids,
                 )
             )
             reviewed.add(finding.candidate_id)
+        conflict_matrix = CandidateConflictMatrix.build(
+            [
+                CandidateReviewSummary.from_candidate(candidate)
+                for candidate in candidates
+            ]
+        )
+        expected_review_target_ids = {
+            target.target_id
+            for target in conflict_matrix.review_targets()
+        }
+        completed_review_target_ids = {
+            target_id
+            for record in records
+            for target_id in record.payload.get(
+                "review_target_ids",
+                [],
+            )
+        }
         trace.add(
             "verifier_completed",
             used_llm=(
@@ -3610,6 +3718,12 @@ class MathForgeHarness:
             reason=verifier_reason,
             status=verifier_status,
             round=round_name,
+            review_targets=sorted(expected_review_target_ids),
+            reviewed_targets=sorted(completed_review_target_ids),
+            unreviewed_targets=sorted(
+                expected_review_target_ids
+                - completed_review_target_ids
+            ),
         )
         return verifier_result, verifier_reason, reviewed, records
 

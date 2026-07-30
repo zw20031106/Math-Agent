@@ -123,8 +123,19 @@ class ProofStage:
         self,
         problem: ProblemIR,
         candidate: CandidateSolution,
+        problem_obligations: list[ProofObligation] | None = None,
     ) -> list[ProofObligation]:
-        return self._engine.generate(problem, candidate)
+        return self._engine.generate(
+            problem,
+            candidate,
+            problem_obligations=problem_obligations,
+        )
+
+    def plan_problem(
+        self,
+        problem: ProblemIR,
+    ) -> list[ProofObligation]:
+        return self._engine.plan_problem(problem)
 
     def evaluate(
         self,

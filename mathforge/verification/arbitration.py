@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+import json
 from typing import Callable
 
 from mathforge.harness.budget import CallBudget
@@ -12,7 +14,10 @@ from mathforge.harness.schemas import (
 )
 from mathforge.tools.executor import ToolExecutor
 from mathforge.verification.equivalence import analyze_equivalence
-from mathforge.verification.evidence import is_fatal_hard_failure
+from mathforge.verification.evidence import (
+    is_fatal_hard_failure,
+    is_semantic_hard_pass,
+)
 from mathforge.verification.methods import (
     candidate_method_signature,
     method_contract_valid,
@@ -26,17 +31,33 @@ class CandidateRank:
     required_coverage: float
     answer_consistency: int
     independent_agreement: int
+    evidence_tier: str
+    review_support: int
     soft_score: int
+    deterministic_tie_break: str
 
     @property
-    def lexicographic_key(self) -> tuple:
+    def substantive_key(self) -> tuple:
+        tier_rank = {
+            "hard_evidence": 0,
+            "independent_corroboration": 1,
+            "model_review": 2,
+            "not_required": 3,
+            "incomplete": 4,
+        }.get(self.evidence_tier, 4)
         return (
             self.hard_fail_count,
+            tier_rank,
             -self.required_coverage,
             -self.answer_consistency,
             -self.independent_agreement,
+            -self.review_support,
             -self.soft_score,
         )
+
+    @property
+    def lexicographic_key(self) -> tuple:
+        return (*self.substantive_key, self.deterministic_tie_break)
 
     def to_dict(self) -> dict:
         return {
@@ -45,7 +66,11 @@ class CandidateRank:
             "required_coverage": self.required_coverage,
             "answer_consistency": self.answer_consistency,
             "independent_agreement": self.independent_agreement,
+            "evidence_tier": self.evidence_tier,
+            "review_support": self.review_support,
             "soft_score": self.soft_score,
+            "deterministic_tie_break": self.deterministic_tie_break,
+            "substantive_key": list(self.substantive_key),
             "lexicographic_key": list(self.lexicographic_key),
         }
 
@@ -58,6 +83,7 @@ class ArbitrationResult:
     unknown_pairs: list[tuple[str, str]]
     disagreement_pairs: list[tuple[str, str]]
     used_llm_arbiter: bool = False
+    tie_break_reason: str = "evidence_rank"
 
 
 class ArbitrationPolicy:
@@ -93,12 +119,20 @@ class ArbitrationPolicy:
             self._rank(candidate, evidence, obligations.get(candidate.candidate_id, []), cluster_by_id)
             for candidate in candidates
         ]
-        order = {candidate.candidate_id: index for index, candidate in enumerate(candidates)}
-        ranks.sort(key=lambda rank: (rank.lexicographic_key, order[rank.candidate_id]))
-        best_key = ranks[0].lexicographic_key
-        tied_ids = [rank.candidate_id for rank in ranks if rank.lexicographic_key == best_key]
+        ranks.sort(key=lambda rank: rank.lexicographic_key)
+        best_key = ranks[0].substantive_key
+        tied_ids = [
+            rank.candidate_id
+            for rank in ranks
+            if rank.substantive_key == best_key
+        ]
         used_llm = False
-        selected_id = tied_ids[0]
+        selected_id = ranks[0].candidate_id
+        tie_break_reason = (
+            "evidence_rank"
+            if len(tied_ids) == 1
+            else "public_content_digest"
+        )
         if len(tied_ids) > 1 and llm_arbiter is not None:
             proposed = llm_arbiter(
                 [candidate for candidate in candidates if candidate.candidate_id in tied_ids]
@@ -106,6 +140,7 @@ class ArbitrationPolicy:
             if proposed in tied_ids:
                 selected_id = proposed
                 used_llm = True
+                tie_break_reason = "llm_arbiter"
         selected = next(candidate for candidate in candidates if candidate.candidate_id == selected_id)
         return ArbitrationResult(
             selected,
@@ -114,6 +149,7 @@ class ArbitrationPolicy:
             equivalence.unknown_pairs,
             equivalence.disagreement_pairs,
             used_llm,
+            tie_break_reason,
         )
 
     @staticmethod
@@ -160,11 +196,83 @@ class ArbitrationPolicy:
             for record in own_evidence
             if record.strength != "hard"
         )
-        return CandidateRank(
-            candidate.candidate_id,
-            hard_fails,
-            coverage,
-            answer_consistency,
-            independent_agreement,
-            soft_score,
+        review_support = sum(
+            1 if record.status == "pass" else -1
+            if record.status == "fail" else 0
+            for record in own_evidence
+            if record.evidence_type == "llm:VerifierSkeptic"
+            and record.payload.get("review_target_ids")
         )
+        model_reviewed = any(
+            record.evidence_type == "llm:VerifierSkeptic"
+            and record.status == "pass"
+            for record in own_evidence
+        )
+        targeted_review_present = any(
+            record.evidence_type == "llm:VerifierSkeptic"
+            and record.payload.get("review_target_ids")
+            for record in own_evidence
+        )
+        if required and coverage == 1.0:
+            evidence_tier = "hard_evidence"
+        elif not required:
+            evidence_tier = (
+                "hard_evidence"
+                if any(
+                    is_semantic_hard_pass(record)
+                    for record in own_evidence
+                )
+                else (
+                    "independent_corroboration"
+                    if independent_agreement
+                    else (
+                        "model_review"
+                        if model_reviewed
+                        else (
+                            "incomplete"
+                            if targeted_review_present
+                            else "not_required"
+                        )
+                    )
+                )
+            )
+        elif independent_agreement:
+            evidence_tier = "independent_corroboration"
+        elif model_reviewed:
+            evidence_tier = "model_review"
+        else:
+            evidence_tier = "incomplete"
+        return CandidateRank(
+            candidate_id=candidate.candidate_id,
+            hard_fail_count=hard_fails,
+            required_coverage=coverage,
+            answer_consistency=answer_consistency,
+            independent_agreement=independent_agreement,
+            evidence_tier=evidence_tier,
+            review_support=review_support,
+            soft_score=soft_score,
+            deterministic_tie_break=_candidate_digest(candidate),
+        )
+
+
+def _candidate_digest(candidate: CandidateSolution) -> str:
+    payload = {
+        "answer": candidate.final_answer,
+        "answer_type": candidate.answer_type,
+        "method": candidate_method_signature(candidate),
+        "assumptions": sorted(candidate.assumptions),
+        "critical_claims": sorted(
+            claim.statement
+            for claim in candidate.claims
+            if claim.importance == "critical"
+        ),
+        "public_solution_steps": list(candidate.public_solution_steps),
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return sha256(canonical).hexdigest()

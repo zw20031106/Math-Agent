@@ -1260,6 +1260,7 @@ class ProofObligation:
     status: str = "unresolved"
     source_claim_ids: list[str] = field(default_factory=list)
     satisfaction_evidence_ids: list[str] = field(default_factory=list)
+    origin: str = "candidate"
     schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -1270,6 +1271,7 @@ class ProofObligation:
             "description": self.description,
             "required": self.required,
             "status": self.status,
+            "origin": self.origin,
             "source_claim_ids": list(self.source_claim_ids),
             "satisfaction_evidence_ids": list(self.satisfaction_evidence_ids),
         }
@@ -1466,6 +1468,7 @@ class MathSession:
     reasoning_state: Any = None
     candidates: list[CandidateSolution] = field(default_factory=list)
     evidence: list[EvidenceRecord] = field(default_factory=list)
+    problem_obligations: list[ProofObligation] = field(default_factory=list)
     proof_obligations: dict[str, list[ProofObligation]] = field(default_factory=dict)
     working_memory: Any = None
     lemma_memory: Any = None
@@ -1520,6 +1523,10 @@ class MathSession:
             "route_plan": self.route_plan.to_dict() if self.route_plan else None,
             "candidates": [candidate.to_dict() for candidate in self.candidates],
             "evidence": [record.to_dict() for record in self.evidence],
+            "problem_obligations": [
+                obligation.to_dict()
+                for obligation in self.problem_obligations
+            ],
             "proof_obligations": {
                 candidate_id: [obligation.to_dict() for obligation in obligations]
                 for candidate_id, obligations in self.proof_obligations.items()

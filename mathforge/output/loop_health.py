@@ -48,7 +48,8 @@ def build_closed_loop_health(
     hard_evidence = _hard_evidence_status(by_name, selected_id)
     proof_status, required_obligations = _proof_status(by_name, selected_id)
     cross_review = _cross_review_status(
-        _last(by_name, "candidate_conflict_matrix")
+        _last(by_name, "candidate_conflict_matrix"),
+        _last(by_name, "verifier_completed"),
     )
     repair = _repair_status(by_name)
     answer_available = bool(
@@ -80,6 +81,8 @@ def build_closed_loop_health(
         )
     if proof_status == "incomplete":
         degradation_reasons.append("proof_incomplete")
+    elif proof_status == "model_reviewed":
+        degradation_reasons.append("proof_model_review_only")
     if hard_evidence in {"failed", "unknown"}:
         degradation_reasons.append(f"hard_evidence_{hard_evidence}")
 
@@ -295,10 +298,23 @@ def _proof_status(
             summary.get("unresolved_required_obligations", 0)
         )
         return ("complete" if unresolved == 0 else "incomplete"), 0
-    return ("complete" if status == "complete" else "incomplete"), required
+    return (
+        status
+        if status in {
+            "complete",
+            "model_reviewed",
+            "incomplete",
+            "failed",
+        }
+        else "incomplete",
+        required,
+    )
 
 
-def _cross_review_status(event: dict[str, Any] | None) -> str:
+def _cross_review_status(
+    event: dict[str, Any] | None,
+    verifier: dict[str, Any] | None,
+) -> str:
     if not event:
         return "not_requested"
     matrix = event.get("matrix", {})
@@ -310,13 +326,26 @@ def _cross_review_status(event: dict[str, Any] | None) -> str:
     conflicts = matrix.get("conflicts", [])
     if not isinstance(conflicts, list):
         return "unknown"
-    return (
-        "failed"
-        if any(
-            isinstance(item, dict) and item.get("answer_conflict") is True
-            for item in conflicts
+    conflict_exists = any(
+        isinstance(item, dict)
+        and (
+            item.get("answer_conflict") is True
+            or item.get("assumption_conflict") is True
+            or item.get("critical_claim_conflict") is True
         )
-        else "passed"
+        for item in conflicts
+    )
+    if not conflict_exists:
+        return "passed"
+    if not isinstance(verifier, dict):
+        return "unreviewed"
+    unreviewed = verifier.get("unreviewed_targets", [])
+    if isinstance(unreviewed, list) and unreviewed:
+        return "incomplete"
+    return (
+        "reviewed"
+        if verifier.get("reviewed_targets")
+        else "unreviewed"
     )
 
 

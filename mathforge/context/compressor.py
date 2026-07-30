@@ -166,7 +166,7 @@ class ContextCompressor:
                 for item in memory
                 if isinstance(item, dict)
             ]
-        if role not in {"RepairAgent", "VerifierSkeptic"}:
+        if role != "RepairAgent":
             snapshot.claim_graph = {}
         for candidate in snapshot.candidates:
             for key in (

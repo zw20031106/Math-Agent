@@ -122,9 +122,12 @@ _ROLE_PROTOCOLS = {
     ),
     "verifier_skeptic": (
         "Return only one JSON object with findings. Each finding contains "
-        "candidate_id, claim_id, obligation_ids, status, public_rationale, "
-        "missing_condition, and counterexample_summary. Status is pass, fail, or "
-        "unknown. Pass must cite a real Claim and supported obligation; unknown is "
+        "candidate_id, claim_id, obligation_ids, review_target_ids, "
+        "review_level, status, public_rationale, missing_condition, and "
+        "counterexample_summary. Status is pass, fail, or unknown. An "
+        "obligation pass must cite a real Claim and supported obligation. An "
+        "answer- or claim-level pass must cite a real Claim and supplied review "
+        "target. Review only supplied Claim-linked public segments; unknown is "
         "not pass. Do not reconstruct full solutions or emit private reasoning."
     ),
     "repair": (

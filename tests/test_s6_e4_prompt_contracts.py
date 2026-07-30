@@ -66,9 +66,14 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
         "repair",
         "finalizer",
     )
+    expected_versions = {
+        "primary_solver": "5",
+        "alternative_solver": "3",
+        "verifier_skeptic": "3",
+    }
     for role in roles:
         contract = loader.load(role)
-        expected_version = "4" if role == "primary_solver" else "2"
+        expected_version = expected_versions.get(role, "2")
         assert contract.fields["version"] == expected_version
         assert "when possible" not in contract.body.lower()
 

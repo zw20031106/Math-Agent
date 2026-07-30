@@ -122,6 +122,8 @@ class EvidenceLedger:
         description: str,
         missing_condition: str = "",
         counterexample_summary: str = "",
+        review_level: str = "obligation",
+        review_target_ids: list[str] | tuple[str, ...] = (),
     ) -> EvidenceRecord:
         self._validate_reference(candidate_id, claim_id)
         self._reserve_record()
@@ -135,12 +137,16 @@ class EvidenceLedger:
             description=description,
             payload={
                 "obligation_ids": list(obligation_ids),
+                "review_target_ids": list(review_target_ids),
+                "review_level": str(review_level),
                 "missing_condition": str(missing_condition),
                 "counterexample_summary": str(counterexample_summary),
             },
             invocation={
                 "role": "VerifierSkeptic",
                 "obligation_ids": list(obligation_ids),
+                "review_target_ids": list(review_target_ids),
+                "review_level": str(review_level),
             },
             capability=VerificationCapability.PROOF_OBLIGATION_REVIEW.value,
         )

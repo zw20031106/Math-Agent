@@ -9,7 +9,12 @@ from mathforge.agents.verifier import VerifierSkepticAgent
 from mathforge.config import HarnessConfig
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
-from mathforge.harness.schemas import CandidateSolution, Claim, ProblemIR
+from mathforge.harness.schemas import (
+    CandidateSolution,
+    Claim,
+    ProblemIR,
+    ProofObligation,
+)
 from mathforge.harness.trace import TraceBuilder
 from mathforge.output.public_result import build_public_result
 from mathforge.runtime import MathForgeHarness
@@ -276,7 +281,16 @@ def test_verifier_expected_transport_failure_is_fail_closed():
     result = verifier.review(
         problem,
         [candidate],
-        {},
+        {
+            "candidate": [
+                ProofObligation(
+                    "candidate:sufficiency",
+                    "sufficiency",
+                    "prove the conclusion",
+                    source_claim_ids=["c1"],
+                )
+            ]
+        },
         CallBudget(1),
         max_tokens=1024,
     )

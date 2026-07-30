@@ -89,11 +89,16 @@ class PrimarySolver:
         *,
         mode: str,
     ) -> PromptCompilation:
+        context = (
+            f"\nAuthorized context view:\n{request.context_view.to_prompt_json()}"
+            if request.context_view is not None
+            else ""
+        )
         user = (
             f"Problem:\n{request.problem.normalized_problem}\n\n"
             f"Required core method family: {request.method_family}.\n"
             f"{_problem_structure_prompt(request.problem)}\n"
-            f"{request.skill_context}"
+            f"{request.skill_context}{context}"
             f"{_reasoning_state_prompt(request.reasoning_state_json)}"
         )
         return self._compiler.compile_solver_progress(

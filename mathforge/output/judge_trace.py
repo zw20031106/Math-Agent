@@ -13,11 +13,12 @@ from mathforge.output.loop_health import (
 )
 
 
-JUDGE_TRACE_SCHEMA_VERSION = "3.4"
+JUDGE_TRACE_SCHEMA_VERSION = "3.5"
 JUDGE_EVENT_STAGES = {
     "session_started": "session",
     "effective_config_snapshot": "session",
     "problem_parsed": "parsing",
+    "problem_obligations_planned": "verification",
     "route_planned": "routing",
     "reasoning_state_initialized": "reasoning",
     "long_horizon_planned": "reasoning",
@@ -25,6 +26,7 @@ JUDGE_EVENT_STAGES = {
     "reasoning_loop_completed": "reasoning",
     "skills_selected": "skill_selection",
     "tool_feedback_completed": "evidence",
+    "verifier_completed": "verification",
     "candidate_summaries": "candidate_generation",
     "evidence_summary": "evidence",
     "proof_completion_summary": "verification",
@@ -217,6 +219,38 @@ def project_judge_trace(
             ),
         ),
     )
+    problem_obligations = _last(
+        by_name,
+        "problem_obligations_planned",
+    )
+    append(
+        "problem_obligations_planned",
+        problem_obligations,
+        {
+            **_select(
+                problem_obligations,
+                ("enabled", "timing"),
+            ),
+            "obligations": [
+                _select(
+                    item,
+                    (
+                        "obligation_id",
+                        "kind",
+                        "description",
+                        "required",
+                        "origin",
+                    ),
+                )
+                for item in (
+                    problem_obligations.get("obligations", [])
+                    if isinstance(problem_obligations, dict)
+                    else []
+                )
+                if isinstance(item, dict)
+            ],
+        },
+    )
     route = _last(by_name, "route_planned")
     append(
         "route_planned",
@@ -407,6 +441,26 @@ def project_judge_trace(
             },
         )
 
+    for verifier_event in by_name.get("verifier_completed", []):
+        append(
+            "verifier_completed",
+            verifier_event,
+            _select(
+                verifier_event,
+                (
+                    "used_llm",
+                    "finding_count",
+                    "reviewed_candidates",
+                    "reason",
+                    "status",
+                    "round",
+                    "review_targets",
+                    "reviewed_targets",
+                    "unreviewed_targets",
+                ),
+            ),
+        )
+
     proof_gate = _last(by_name, "proof_completion_gate")
     graph_event = _last(by_name, "proof_graph_completed")
     proof_details = _proof_summary(
@@ -423,6 +477,18 @@ def project_judge_trace(
 
     arbitration = _last(by_name, "candidate_arbitrated")
     if arbitration is not None:
+        rank_details = arbitration.get("rank_details", [])
+        if not isinstance(rank_details, list):
+            rank_details = []
+        selected_rank = next(
+            (
+                item
+                for item in rank_details
+                if isinstance(item, dict)
+                and str(item.get("candidate_id", "")) == selected_id
+            ),
+            {},
+        )
         append(
             "candidate_arbitrated",
             arbitration,
@@ -435,6 +501,21 @@ def project_judge_trace(
                 "rejected_candidates": _rejection_summaries(arbitration),
                 "selection_reason": str(
                     arbitration.get("selection_reason", "")
+                ),
+                "tie_break_reason": str(
+                    arbitration.get("tie_break_reason", "")
+                ),
+                "selected_verification_status": str(
+                    arbitration.get(
+                        "selected_verification_status",
+                        "",
+                    )
+                ),
+                "selected_evidence_tier": str(
+                    selected_rank.get("evidence_tier", "")
+                ),
+                "selected_review_support": _signed_int(
+                    selected_rank.get("review_support", 0)
                 ),
                 "equivalence_cluster_count": len(
                     arbitration.get("equivalence_clusters", [])
@@ -897,6 +978,9 @@ def _proof_summary(
             "unresolved_obligation_ids": [],
             "failed_obligation_ids": [],
             "failed_claim_ids": [],
+            "hard_satisfied_obligation_ids": [],
+            "model_reviewed_obligation_ids": [],
+            "evidence_tier": "incomplete",
             "graph_summary": {},
             "mode": "",
             "verifier_reason": "",
@@ -947,6 +1031,21 @@ def _proof_summary(
         "failed_claim_ids": _plain_string_list(
             selected_decision.get("failed_claim_ids", [])
         ),
+        "hard_satisfied_obligation_ids": _plain_string_list(
+            selected_decision.get(
+                "hard_satisfied_obligation_ids",
+                [],
+            )
+        ),
+        "model_reviewed_obligation_ids": _plain_string_list(
+            selected_decision.get(
+                "model_reviewed_obligation_ids",
+                [],
+            )
+        ),
+        "evidence_tier": str(
+            selected_decision.get("evidence_tier", "incomplete")
+        ),
         "graph_summary": _safe_mapping(graph_summary),
         "mode": str(proof_gate.get("mode", "")) if proof_gate else "",
         "verifier_reason": (
@@ -968,6 +1067,8 @@ def _candidate_proof_status(state: dict[str, Any]) -> str:
     ]
     if not required:
         return "not_available"
+    if all(item.get("status") == "reviewed" for item in required):
+        return "model_reviewed"
     return (
         "complete"
         if all(item.get("status") == "satisfied" for item in required)
@@ -1067,7 +1168,36 @@ def _decision_summary(
                 and item.get("obligation_conflict") is True
                 for item in conflicts
             ),
+            "critical_claim_conflict_count": sum(
+                isinstance(item, dict)
+                and item.get("critical_claim_conflict") is True
+                for item in conflicts
+            ),
         }
+        verifier = _last(by_name, "verifier_completed")
+        if verifier is not None:
+            details["cross_review"].update(
+                {
+                    "review_target_count": len(
+                        _plain_string_list(
+                            verifier.get("review_targets", [])
+                        )
+                    ),
+                    "reviewed_target_count": len(
+                        _plain_string_list(
+                            verifier.get("reviewed_targets", [])
+                        )
+                    ),
+                    "unreviewed_target_count": len(
+                        _plain_string_list(
+                            verifier.get("unreviewed_targets", [])
+                        )
+                    ),
+                    "review_status": str(
+                        verifier.get("status", "unknown")
+                    ),
+                }
+            )
     return source, details
 
 
@@ -1117,9 +1247,15 @@ def _validate_closed_loop_health(
     proof_events = by_name.get("proof_completion_summary", [])
     expected_proof = "not_available"
     if proof_events and selected_id:
+        status = str(proof_events[-1].get("status", "incomplete"))
         expected_proof = (
-            "complete"
-            if proof_events[-1].get("status") == "complete"
+            status
+            if status in {
+                "complete",
+                "model_reviewed",
+                "incomplete",
+                "failed",
+            }
             else "incomplete"
         )
     if closure.get("proof_status") != expected_proof:
@@ -1634,5 +1770,12 @@ def _serialized_chars(value: Any) -> int:
 def _nonnegative_int(value: Any) -> int:
     try:
         return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _signed_int(value: Any) -> int:
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return 0

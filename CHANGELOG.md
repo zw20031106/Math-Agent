@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### 0730 stability remediation phases 0-5 (2026-07-30)
+### 0730 stability remediation phases 0-6 (2026-07-30)
 
 - Added reproducible Phase 0 reliability, general high-difficulty, and
   contract-adversarial baselines, a hash manifest builder, symbolic-equivalence
@@ -59,6 +59,24 @@
   obligation IDs. Added a hash-bound, reviewed, versioned, read-only general
   method-card store while keeping runtime RAG and Frozen Lemma Store disabled
   until controlled A/B validation.
+- Planned candidate-independent proof obligations before every Solver call,
+  then bound them to actual Candidate Claims and appended method-specific
+  theorem, boundary, and interchange obligations after generation.
+- Replaced summary-only verification with bounded Claim-linked public solution
+  segments. Answer, assumption, critical-Claim, and obligation conflicts now
+  produce explicit answer- or claim-level review targets and target coverage.
+- Separated hard completion, independent corroboration, targeted model review,
+  no-proof-required, and incomplete evidence tiers. A soft Verifier pass no
+  longer marks a proof hard-complete.
+- Removed generation order from exact arbitration ties. Candidate ranking now
+  prefers hard evidence, independent agreement, and targeted review before a
+  stable digest of public Candidate content.
+- Made post-Verifier repair contingent on an atomic Repair/Reverify call and
+  time reserve. Failed, missing, non-improving, or evidence-regressing repairs
+  retain the original Candidate and reject the proposed evidence transaction.
+- Upgraded Judge Trace to 3.5 and Effective Config Snapshot to 1.2 with bounded
+  obligation planning, review-target coverage, evidence tiers, and atomic
+  repair observability.
 
 ### 0729 remediation phase 6 (2026-07-29)
 

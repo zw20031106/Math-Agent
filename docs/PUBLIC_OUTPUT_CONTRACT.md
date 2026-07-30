@@ -1,6 +1,6 @@
 # MathForge 公共输出契约
 
-版本：3.4
+版本：3.5
 
 ## 对外字段
 
@@ -28,7 +28,7 @@ Harness、Benchmark artifact 和逐题运行清单中。
 
 ## Trace 内容
 
-公共 `trace` 使用 Judge Trace V3.4，是面向判分的有界审计叙事，不是内部
+公共 `trace` 使用 Judge Trace V3.5，是面向判分的有界审计叙事，不是内部
 框架日志或 Debug Journal：
 
 - 保留会话/配置、路由/Skill、关键 Evidence、proof completion、仲裁、
@@ -45,6 +45,18 @@ Harness、Benchmark artifact 和逐题运行清单中。
   选择原因；`tool_feedback_completed` 记录 Host 构造的工作项数量、工具结果
   状态、结果摘要、摘要哈希、对下一步策略的影响和后续协议。公共投影不包含
   工具参数、完整 payload 或模型私有推理。
+- `problem_obligations_planned` 在 Solver 之前记录题目级证明义务；Candidate
+  生成后再绑定实际 Claim 并补充方法级义务。Verifier 只接收公开且
+  Claim-linked 的解答切片，不接收私有 `solution_text`。
+- Candidate 的答案、假设、关键 Claim 或义务发生冲突时，Trace 记录
+  answer/claim 级 review target、已审阅与未审阅 target。软模型审阅只形成
+  `model_review`，不能把 Proof 标记为硬 `complete`。
+- 仲裁证据层级依次为 `hard_evidence`、`independent_corroboration`、
+  `model_review`、`not_required`、`incomplete`；实质排名完全相同时使用
+  公开 Candidate 内容摘要确定性破局，不使用生成顺序。
+- Repair 只有在 Repair 与 Reverify 的调用数和时间均可原子预留时才启动。
+  重验证缺失、验证不可用、质量下降或未严格改善时保留原 Candidate，并把
+  新 Evidence 事务标记为 rejected。
 - 选中 Candidate 保留必要公开解题步骤和最终答案，且不在 Trace 中重复
   `final_response`；二者通过内容摘要绑定并校验一致性。
 - `viable_not_selected` Candidate 额外保留受限的 `public_final_answer`、

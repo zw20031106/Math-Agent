@@ -17,6 +17,9 @@ class CompletionDecision:
     unresolved_obligation_ids: list[str]
     failed_obligation_ids: list[str]
     failed_claim_ids: list[str]
+    hard_satisfied_obligation_ids: list[str]
+    model_reviewed_obligation_ids: list[str]
+    evidence_tier: str
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -64,14 +67,19 @@ class ProofCompletionGate:
                 list(candidate.unresolved_obligations),
                 failed_obligations,
                 failed_claims,
+                [],
+                [],
+                "incomplete",
             )
 
         unresolved: list[str] = []
+        hard_satisfied: list[str] = []
+        model_reviewed: list[str] = []
         for obligation in obligations:
             if not obligation.required:
                 continue
             source_claim_ids = set(obligation.source_claim_ids)
-            matching_evidence = [
+            hard_evidence = [
                 record
                 for record in own_evidence
                 if record.status == "pass"
@@ -81,30 +89,63 @@ class ProofCompletionGate:
                     record.capability,
                     obligation.kind,
                 )
-                and (
-                    record.strength == "hard"
-                    or (
-                        record.strength == "soft"
-                        and record.capability
-                        == VerificationCapability.PROOF_OBLIGATION_REVIEW.value
-                    )
-                )
+                and record.strength == "hard"
             ]
-            if matching_evidence:
+            soft_model_evidence = [
+                record
+                for record in own_evidence
+                if record.status == "pass"
+                and record.strength == "soft"
+                and record.claim_id in source_claim_ids
+                and obligation.obligation_id
+                in record.payload.get("obligation_ids", [])
+                and record.capability
+                == VerificationCapability.PROOF_OBLIGATION_REVIEW.value
+            ]
+            if hard_evidence:
                 obligation.status = "satisfied"
                 obligation.satisfaction_evidence_ids = sorted(
-                    record.evidence_id for record in matching_evidence
+                    record.evidence_id for record in hard_evidence
                 )
+                hard_satisfied.append(obligation.obligation_id)
+            elif soft_model_evidence:
+                obligation.status = "reviewed"
+                obligation.satisfaction_evidence_ids = sorted(
+                    record.evidence_id
+                    for record in soft_model_evidence
+                )
+                model_reviewed.append(obligation.obligation_id)
+                unresolved.append(obligation.obligation_id)
             else:
                 obligation.status = "unresolved"
                 obligation.satisfaction_evidence_ids = []
                 unresolved.append(obligation.obligation_id)
 
         candidate.unresolved_obligations = sorted(unresolved)
+        required = [
+            obligation
+            for obligation in obligations
+            if obligation.required
+        ]
+        if not required:
+            status = "complete"
+            evidence_tier = "not_required"
+        elif not unresolved:
+            status = "complete"
+            evidence_tier = "hard_evidence"
+        elif set(unresolved) == set(model_reviewed):
+            status = "model_reviewed"
+            evidence_tier = "model_review"
+        else:
+            status = "incomplete"
+            evidence_tier = "incomplete"
         return CompletionDecision(
             candidate.candidate_id,
-            "incomplete" if unresolved else "complete",
+            status,
             sorted(unresolved),
             [],
             [],
+            sorted(hard_satisfied),
+            sorted(model_reviewed),
+            evidence_tier,
         )

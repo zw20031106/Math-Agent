@@ -53,9 +53,11 @@ def test_required_coverage_precedes_same_answer_agreement():
 def test_arbiter_failure_is_not_required_for_deterministic_output():
     first = _candidate("first", "x")
     second = _candidate("second", "y")
-    result = ArbitrationPolicy().select([first, second], [], {})
-    assert result.selected.candidate_id == "first"
-    assert not result.used_llm_arbiter
+    forward = ArbitrationPolicy().select([first, second], [], {})
+    reverse = ArbitrationPolicy().select([second, first], [], {})
+    assert forward.selected.candidate_id == reverse.selected.candidate_id
+    assert forward.tie_break_reason == "public_content_digest"
+    assert not forward.used_llm_arbiter
 
 
 def test_same_method_same_answer_has_zero_independent_agreement():

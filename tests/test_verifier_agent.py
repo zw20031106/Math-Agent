@@ -89,8 +89,20 @@ def test_verifier_discards_unmapped_pass_and_invalid_ids():
         }
     )
     client = CaptureVerifierClient(response)
-    candidate = CandidateSolution("c", "PrimarySolver", "direct", "QED", "text")
-    obligation = ProofObligation("c:sufficiency", "sufficiency", "prove it")
+    candidate = CandidateSolution(
+        "c",
+        "PrimarySolver",
+        "direct",
+        "QED",
+        "text",
+        claims=[Claim("claim-1", "sufficiency", check_type="sufficiency")],
+    )
+    obligation = ProofObligation(
+        "c:sufficiency",
+        "sufficiency",
+        "prove it",
+        source_claim_ids=["claim-1"],
+    )
     result = VerifierSkepticAgent(
         OfficialClientProvider(client, ModelCallGate(1))
     ).review(
