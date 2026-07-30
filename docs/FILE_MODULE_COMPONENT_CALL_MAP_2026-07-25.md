@@ -450,3 +450,32 @@ scripts/run_case_outputs.py
 | `scripts/verify_build_provenance.py` | 校验构建期静态指纹未漂移 | 本地质量门、Linux CI |
 | `scripts/formal_offline_smoke.py` | 禁网条件下验证正式注入 Client 入口 | Linux Python 3.10 CI |
 | `.github/workflows/formal-linux.yml` | Python 3.10 编译、静态检查、测试、治理和禁网门 | GitHub Actions |
+
+## 23. 0730 Phase 5：动态 Skill、工具反馈和方法卡
+
+| 文件 | 作用 | 主要调用方 |
+|---|---|---|
+| `mathforge/agents/skill_selector.py` | 按 ProblemIR、开放 Subgoal/Obligation 和 FailureCode 对角色可见的 Skill 片段动态排序、裁剪并生成可追溯选择记录 | `MathForgeHarness` |
+| `mathforge/harness/tool_feedback.py` | 把公开 Claim 转换为 Host 控制的工作项，执行本地工具并生成可回注下一轮的 typed `ToolResult` | `MathForgeHarness._run_long_horizon_primary` |
+| `mathforge/harness/reasoning_state.py` | ReasoningState 1.1；保存 Claim 的 `check_type`、公开工具结果、Evidence 引用和策略变化 | PromptCompiler、Runtime、Judge Trace |
+| `mathforge/harness/schemas.py` | 定义 Host-owned `CheckSpec`，并把 typed Claim 信息传递到问题内 LemmaCard | Parser、Tool Request Builder、Lemma Loop |
+| `mathforge/verification/tool_requests.py` | 从 Candidate/Public Claim 确定性构造九类本地工具参数并校验 Schema | Evidence、ToolFeedbackController |
+| `mathforge/agents/lemma_curator.py` | 按 Claim 类型、来源和目标义务选择问题内局部引理 | `VerifiedLemmaLoop` |
+| `mathforge/retrieval/method_card_store.py` | 只读加载并校验审核状态、版本、记录数和内容哈希的方法卡库 | 离线治理与后续 A/B |
+| `data/method_cards_manifest.json` | 将方法卡数据绑定到版本、审核状态和 SHA-256，并显式禁止 A/B 前在线启用 | `ReviewedMethodCardStore` |
+| `tests/test_phase5_0730_skill_tool_knowledge_feedback.py` | 覆盖参数可构造率、失败回注、Skill 可追溯、引理目标、方法卡门禁和跨题隔离 | Phase 5 验收 |
+
+更新后的主链路：
+
+```text
+ProblemIR + ReasoningState + FailureCode
+  → DynamicSkillSelector
+  → Primary ProgressDelta（公开 Claim + check_type）
+  → Host CheckSpec / ToolWorkItem
+  → ToolExecutor
+  → PublicToolResult
+  → ReasoningState strategy/evidence 更新
+  → continue 或 synthesize
+  → typed Lemma reuse
+  → 原 Evidence / Proof / Arbitration / Output 闭环
+```

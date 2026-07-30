@@ -50,6 +50,7 @@ class VerifiedLemmaLoop:
         lemma_memory: LemmaMemory,
         *,
         expand_round: Callable[[list[LemmaCard], int], CandidateSolution | None] | None = None,
+        target: str = "",
     ) -> LemmaLoopResult:
         if route.risk_level != "high" or not route.use_lemma_loop:
             return LemmaLoopResult([], [], "not_high_risk", [])
@@ -66,6 +67,8 @@ class VerifiedLemmaLoop:
                 working_candidates,
                 round_id=round_id,
                 excluded_statements=excluded,
+                obligations=obligations,
+                target=target,
             )
             verified: list[LemmaCard] = []
             rejected: list[LemmaCard] = []
@@ -154,7 +157,19 @@ class VerifiedLemmaLoop:
             for obligation in obligation_list:
                 if obligation.status == "satisfied":
                     continue
-                if any(obligation.kind in lemma.statement.lower() for lemma in lemmas):
+                if any(
+                    obligation.obligation_id in lemma.target_obligation_ids
+                    for lemma in lemmas
+                ):
                     obligation.status = "satisfied"
+                    obligation.satisfaction_evidence_ids.extend(
+                        evidence_id
+                        for lemma in lemmas
+                        if obligation.obligation_id
+                        in lemma.target_obligation_ids
+                        for evidence_id in lemma.evidence_ids
+                        if evidence_id
+                        not in obligation.satisfaction_evidence_ids
+                    )
                     resolved.append(obligation.obligation_id)
         return resolved

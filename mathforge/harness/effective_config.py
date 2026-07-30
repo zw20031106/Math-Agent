@@ -43,7 +43,7 @@ def build_effective_config_snapshot(
     """Build the safe final runtime limits after deterministic overrides."""
 
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "profile": config.profile,
         "prompt": {
             "configured_primary_max_tokens": config.primary_max_tokens,
@@ -97,6 +97,23 @@ def build_effective_config_snapshot(
                 "max_rounds": 3,
                 "state_max_tokens": REASONING_STATE_MAX_TOKENS,
                 "stores_public_state_only": True,
+            },
+            "skill_tool_feedback": {
+                "dynamic_skill_fragments": config.enable_skills,
+                "selection_inputs": [
+                    "ProblemIR",
+                    "SubgoalLedger",
+                    "FailureCode",
+                ],
+                "host_owned_check_spec": config.enable_tools,
+                "tool_feedback_protocol": (
+                    "work_item/local_tool/ToolResult/continue"
+                ),
+            },
+            "reviewed_method_cards": {
+                "read_only": True,
+                "runtime_rag_enabled": config.enable_rag,
+                "ab_validation_required": True,
             },
             "frozen_lemma_store": {
                 "requested": bool(frozen_lemma_store_requested),

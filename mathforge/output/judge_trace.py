@@ -13,7 +13,7 @@ from mathforge.output.loop_health import (
 )
 
 
-JUDGE_TRACE_SCHEMA_VERSION = "3.3"
+JUDGE_TRACE_SCHEMA_VERSION = "3.4"
 JUDGE_EVENT_STAGES = {
     "session_started": "session",
     "effective_config_snapshot": "session",
@@ -24,6 +24,7 @@ JUDGE_EVENT_STAGES = {
     "round_summary": "reasoning",
     "reasoning_loop_completed": "reasoning",
     "skills_selected": "skill_selection",
+    "tool_feedback_completed": "evidence",
     "candidate_summaries": "candidate_generation",
     "evidence_summary": "evidence",
     "proof_completion_summary": "verification",
@@ -45,6 +46,7 @@ _PROTECTED_EVENTS = frozenset(
         "session_started",
         "effective_config_snapshot",
         "round_summary",
+        "tool_feedback_completed",
         "evidence_summary",
         "proof_completion_summary",
         "decision_summary",
@@ -294,6 +296,45 @@ def project_judge_trace(
                     "omitted_rounds",
                 ),
             ),
+        )
+    for feedback_event in by_name.get("tool_feedback_completed", []):
+        append(
+            "tool_feedback_completed",
+            feedback_event,
+            {
+                **_select(
+                    feedback_event,
+                    (
+                        "state_id",
+                        "state_version",
+                        "round_index",
+                        "next_protocol",
+                        "constructible_count",
+                        "work_item_count",
+                        "constructibility_rate",
+                        "failure_codes",
+                        "strategy_changed",
+                    ),
+                ),
+                "results": [
+                    _select(
+                        item,
+                        (
+                            "work_item_id",
+                            "claim_id",
+                            "tool_name",
+                            "status",
+                            "strength",
+                            "summary",
+                            "result_digest",
+                            "impact",
+                            "reason_code",
+                        ),
+                    )
+                    for item in feedback_event.get("results", [])
+                    if isinstance(item, dict)
+                ],
+            },
         )
     reasoning_completed = _last(by_name, "reasoning_loop_completed")
     append(
@@ -1171,12 +1212,40 @@ def _skill_summary(event: dict[str, Any] | None) -> dict[str, Any]:
             )
     result: dict[str, Any] = {
         "skill_fingerprint": str(event.get("skill_fingerprint", "")),
+        "selection_context": str(event.get("selection_context", "")),
         "skills": [
             {
                 "name": name,
                 "version": version,
                 "reason": reason,
                 "roles": sorted(roles),
+                "rank": min(
+                    _nonnegative_int(item.get("rank", 0))
+                    for item in event.get("skills", [])
+                    if isinstance(item, dict)
+                    and str(item.get("name", "")) == name
+                    and str(item.get("version", "")) == version
+                    and str(item.get("reason", "")) == reason
+                ),
+                "score": max(
+                    _nonnegative_int(item.get("score", 0))
+                    for item in event.get("skills", [])
+                    if isinstance(item, dict)
+                    and str(item.get("name", "")) == name
+                    and str(item.get("version", "")) == version
+                    and str(item.get("reason", "")) == reason
+                ),
+                "included_sections": sorted(
+                    {
+                        str(section)
+                        for item in event.get("skills", [])
+                        if isinstance(item, dict)
+                        and str(item.get("name", "")) == name
+                        and str(item.get("version", "")) == version
+                        and str(item.get("reason", "")) == reason
+                        for section in item.get("included_sections", [])
+                    }
+                ),
             }
             for (name, version, reason), roles in sorted(grouped.items())
         ],

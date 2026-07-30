@@ -484,6 +484,70 @@ class ProblemIR:
         return problem
 
 
+@dataclass(frozen=True)
+class CheckSpec:
+    """Host-owned, typed description of one local Claim check."""
+
+    SCHEMA_VERSION: ClassVar[str] = "1.0"
+
+    tool_name: str
+    arguments: dict[str, Any]
+    status: str
+    reason_code: str
+    schema_version: str = SCHEMA_VERSION
+
+    def validate(self) -> None:
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise SchemaValidationError("invalid CheckSpec schema version")
+        if not isinstance(self.tool_name, str):
+            raise SchemaValidationError("CheckSpec.tool_name must be a string")
+        if not isinstance(self.arguments, dict):
+            raise SchemaValidationError("CheckSpec.arguments must be an object")
+        if self.status not in {
+            "ready",
+            "unsupported",
+            "route_not_selected",
+            "argument_unavailable",
+            "schema_invalid",
+        }:
+            raise SchemaValidationError("CheckSpec.status is invalid")
+        if not isinstance(self.reason_code, str) or not self.reason_code:
+            raise SchemaValidationError("CheckSpec.reason_code is required")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "schema_version": self.schema_version,
+            "tool_name": self.tool_name,
+            "arguments": dict(self.arguments),
+            "status": self.status,
+            "reason_code": self.reason_code,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "CheckSpec":
+        if not isinstance(payload, dict):
+            raise SchemaValidationError("CheckSpec payload must be an object")
+        allowed = {
+            "schema_version",
+            "tool_name",
+            "arguments",
+            "status",
+            "reason_code",
+        }
+        _reject_unknown_fields(payload, allowed, "CheckSpec")
+        _require_schema_version(payload, cls.SCHEMA_VERSION)
+        spec = cls(
+            tool_name=str(payload.get("tool_name", "")),
+            arguments=dict(payload.get("arguments", {})),
+            status=str(payload.get("status", "")),
+            reason_code=str(payload.get("reason_code", "")),
+            schema_version=cls.SCHEMA_VERSION,
+        )
+        spec.validate()
+        return spec
+
+
 @dataclass
 class Claim:
     SCHEMA_VERSION: ClassVar[str] = CORE_SCHEMA_VERSION
@@ -496,10 +560,11 @@ class Claim:
     status: str = "unverified"
     claim_kind: str = "unknown"
     verification_state: str = "unknown"
+    check_spec: CheckSpec | None = None
     schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "claim_id": self.claim_id,
             "statement": self.statement,
@@ -510,6 +575,9 @@ class Claim:
             "claim_kind": self.claim_kind,
             "verification_state": self.verification_state,
         }
+        if self.check_spec is not None:
+            payload["check_spec"] = self.check_spec.to_dict()
+        return payload
 
     def validate(self) -> None:
         if self.schema_version != self.SCHEMA_VERSION:
@@ -525,6 +593,10 @@ class Claim:
         )
         if any(not isinstance(value, str) for value in string_fields):
             raise SchemaValidationError("Claim string field has invalid type")
+        if self.check_spec is not None:
+            if not isinstance(self.check_spec, CheckSpec):
+                raise SchemaValidationError("Claim.check_spec has invalid type")
+            self.check_spec.validate()
         _require_string_list(self.depends_on, "Claim.depends_on")
         if not _CLAIM_ID.fullmatch(self.claim_id):
             raise SchemaValidationError(f"invalid claim id: {self.claim_id!r}")
@@ -550,6 +622,7 @@ class Claim:
             "status",
             "claim_kind",
             "verification_state",
+            "check_spec",
         }
         _reject_unknown_fields(payload, allowed, "Claim")
         string_fields = _require_string_fields(
@@ -577,6 +650,11 @@ class Claim:
             status=string_fields["status"],
             claim_kind=string_fields["claim_kind"],
             verification_state=string_fields["verification_state"],
+            check_spec=(
+                CheckSpec.from_dict(payload["check_spec"])
+                if payload.get("check_spec") is not None
+                else None
+            ),
             schema_version=cls.SCHEMA_VERSION,
         )
         claim.validate()
@@ -1212,6 +1290,9 @@ class LemmaCard:
     scope: str = "current_problem"
     source_candidate_id: str = ""
     source_claim_id: str = ""
+    claim_kind: str = "unknown"
+    check_spec: CheckSpec | None = None
+    target_obligation_ids: list[str] = field(default_factory=list)
     schema_version: str = CORE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -1228,6 +1309,13 @@ class LemmaCard:
             "scope": self.scope,
             "source_candidate_id": self.source_candidate_id,
             "source_claim_id": self.source_claim_id,
+            "claim_kind": self.claim_kind,
+            "check_spec": (
+                self.check_spec.to_dict()
+                if self.check_spec is not None
+                else None
+            ),
+            "target_obligation_ids": list(self.target_obligation_ids),
         }
 
     def validate(self) -> None:
@@ -1241,6 +1329,7 @@ class LemmaCard:
             (self.scope, "scope"),
             (self.source_candidate_id, "source_candidate_id"),
             (self.source_claim_id, "source_claim_id"),
+            (self.claim_kind, "claim_kind"),
         ):
             if not isinstance(string_value, str):
                 raise SchemaValidationError(f"LemmaCard.{name} must be a string")
@@ -1248,8 +1337,11 @@ class LemmaCard:
             (self.conditions, "conditions"),
             (self.dependencies, "dependencies"),
             (self.evidence_ids, "evidence_ids"),
+            (self.target_obligation_ids, "target_obligation_ids"),
         ):
             _require_string_list(list_value, f"LemmaCard.{name}")
+        if self.check_spec is not None:
+            self.check_spec.validate()
         if not self.lemma_id or "::lemma::" not in self.lemma_id:
             raise SchemaValidationError("LemmaCard.lemma_id must be namespaced")
         if not self.source_candidate_id or not self.source_claim_id:
@@ -1275,6 +1367,9 @@ class LemmaCard:
             "scope",
             "source_candidate_id",
             "source_claim_id",
+            "claim_kind",
+            "check_spec",
+            "target_obligation_ids",
         }
         _reject_unknown_fields(payload, allowed, "LemmaCard")
         strings = _require_string_fields(
@@ -1314,6 +1409,16 @@ class LemmaCard:
             scope=strings["scope"],
             source_candidate_id=strings["source_candidate_id"],
             source_claim_id=strings["source_claim_id"],
+            claim_kind=str(payload.get("claim_kind", "unknown")),
+            check_spec=(
+                CheckSpec.from_dict(payload["check_spec"])
+                if payload.get("check_spec") is not None
+                else None
+            ),
+            target_obligation_ids=_require_string_list(
+                payload.get("target_obligation_ids", []),
+                "LemmaCard.target_obligation_ids",
+            ),
             schema_version=cls.SCHEMA_VERSION,
         )
         card.validate()

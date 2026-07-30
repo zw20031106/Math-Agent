@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### 0730 stability remediation phases 0-4 (2026-07-30)
+### 0730 stability remediation phases 0-5 (2026-07-30)
 
 - Added reproducible Phase 0 reliability, general high-difficulty, and
   contract-adversarial baselines, a hash manifest builder, symbolic-equivalence
@@ -48,6 +48,17 @@
 - Upgraded Judge Trace to 3.3 with bounded round summaries, information gain,
   cross-round references, stop/degradation reasons, and per-round state token
   accounting without private reasoning transcripts.
+- Added deterministic, role-specific dynamic Skill fragment selection from
+  ProblemIR, open Subgoals, tool feedback, and safe failure codes. Included and
+  omitted fragments now carry rank, score, section, and reason metadata.
+- Added Host-owned typed `CheckSpec` generation and a public
+  `work_item -> local tool -> ToolResult -> continue` loop. Unconstructible
+  checks remain nonfatal `unknown` results, while hard tool failures can switch
+  the next-round strategy without exposing tool arguments in Judge Trace 3.4.
+- Made Lemma reuse target-driven through typed source Claims and explicit proof
+  obligation IDs. Added a hash-bound, reviewed, versioned, read-only general
+  method-card store while keeping runtime RAG and Frozen Lemma Store disabled
+  until controlled A/B validation.
 
 ### 0729 remediation phase 6 (2026-07-29)
 

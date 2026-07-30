@@ -33,30 +33,30 @@
       "path": "prompts",
       "pattern": "contract.md",
       "expected_count": 7,
-      "version": "prompt-contract-4-public-reasoning",
-      "engineering_reviewer": "codex-phase4-public-state",
+      "version": "prompt-contract-4-tool-feedback",
+      "engineering_reviewer": "codex-phase5-feedback-audit",
       "review_date": "2026-07-30",
-      "sha256": "8f28cbbfbfe7e9b3d37ea4885558061cdce5976875ba0b3e6bb71922ceb601fb"
+      "sha256": "a818a8d52747328f625648313ad291f3dfc40ad892ba047338ec489f52f09e72"
     },
     {
       "id": "prompt-compiler",
       "kind": "file",
       "path": "mathforge/agents/prompt_compiler.py",
       "expected_count": 1,
-      "version": "prompt-compiler-6-public-reasoning",
-      "engineering_reviewer": "codex-phase4-public-state",
+      "version": "prompt-compiler-7-tool-feedback",
+      "engineering_reviewer": "codex-phase5-feedback-audit",
       "review_date": "2026-07-30",
-      "sha256": "a10fe9ebdaa39129970bd329675810f7fee0c2470bee840617d4cc2263e3a5db"
+      "sha256": "5ba7a25712a68b91de0a248fd47a529c6124a14582af2402e7b08ce76dbb5ba3"
     },
     {
       "id": "reasoning-state",
       "kind": "file",
       "path": "mathforge/harness/reasoning_state.py",
       "expected_count": 1,
-      "version": "reasoning-state-1.0",
-      "engineering_reviewer": "codex-phase4-public-state",
+      "version": "reasoning-state-1.1",
+      "engineering_reviewer": "codex-phase5-feedback-audit",
       "review_date": "2026-07-30",
-      "sha256": "456417881a4774092ae0d1f3011a6dfbf980fae1747c6b442580ecd45ca027f2"
+      "sha256": "750e304e66168be34ae7eefb97e2132f9b382c82f20be21e6adc31f300b135b1"
     },
     {
       "id": "proof-obligations",
@@ -79,13 +79,52 @@
         "mathforge/tools/shadow_solver.py",
         "mathforge/verification/capabilities.py",
         "mathforge/verification/tool_requests.py",
-        "mathforge/verification/evidence.py"
+        "mathforge/verification/evidence.py",
+        "mathforge/harness/tool_feedback.py"
       ],
-      "expected_count": 8,
-      "version": "tool-contract-phase5-shadow",
-      "engineering_reviewer": "codex-phase5-shadow-audit",
-      "review_date": "2026-07-29",
-      "sha256": "977d189331693605e9cb42707eb6a3bf654ce00a1fd11ac7144934d34750664c"
+      "expected_count": 9,
+      "version": "tool-contract-phase5-feedback",
+      "engineering_reviewer": "codex-phase5-feedback-audit",
+      "review_date": "2026-07-30",
+      "sha256": "2688ddaf6a402243a273c2e7ed12f0b6f6b94c8b371803a28ffa3aef196f7019"
+    },
+    {
+      "id": "dynamic-skill-selection",
+      "kind": "file",
+      "path": "mathforge/agents/skill_selector.py",
+      "expected_count": 1,
+      "version": "dynamic-skill-selection-1",
+      "engineering_reviewer": "codex-phase5-feedback-audit",
+      "review_date": "2026-07-30",
+      "sha256": "5e501738888e6f7cca4d0c7faf168bba7c8ead969db9ba70a3af612abada4fa8"
+    },
+    {
+      "id": "typed-lemma-feedback",
+      "kind": "file_set",
+      "paths": [
+        "mathforge/agents/lemma_curator.py",
+        "mathforge/harness/lemma_loop.py",
+        "mathforge/harness/schemas.py"
+      ],
+      "expected_count": 3,
+      "version": "typed-lemma-feedback-1",
+      "engineering_reviewer": "codex-phase5-feedback-audit",
+      "review_date": "2026-07-30",
+      "sha256": "e4a72aa043ddb662c7070c6a4d7cdfb698c0eb8c956386a56f226ef22e0419be"
+    },
+    {
+      "id": "reviewed-method-cards",
+      "kind": "file_set",
+      "paths": [
+        "mathforge/retrieval/method_card_store.py",
+        "data/knowledge_cards.json",
+        "data/method_cards_manifest.json"
+      ],
+      "expected_count": 3,
+      "version": "reviewed-method-cards-1",
+      "engineering_reviewer": "codex-phase5-feedback-audit",
+      "review_date": "2026-07-30",
+      "sha256": "6a8735b40807b25f61904a6e9b223d5e22d295aab77c943b213a8be87bf95211"
     },
     {
       "id": "frozen-lemma-store",

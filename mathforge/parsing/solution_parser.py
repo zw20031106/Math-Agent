@@ -344,6 +344,7 @@ class SolutionParser:
                 "status",
                 "claim_kind",
                 "verification_state",
+                "check_spec",
                 "schema_version",
             }
             deviations.extend(

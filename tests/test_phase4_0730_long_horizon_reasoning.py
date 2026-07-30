@@ -177,7 +177,7 @@ def test_reasoning_state_round_trip_preserves_problem_and_dependencies():
     restored = ReasoningState.from_dict(advanced.to_dict())
 
     assert restored == advanced
-    assert restored.schema_version == "1.0"
+    assert restored.schema_version == "1.1"
     assert restored.problem_frame.original_problem == problem.raw_problem
     assert restored.problem_frame.target == problem.target_phrase
     assert restored.claim_ledger.items[0].subgoal_ids == ("g1",)

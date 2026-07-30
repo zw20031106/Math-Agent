@@ -12,7 +12,7 @@ from mathforge.harness.model_policy import stage_sequence_reserve_seconds
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
 
 
-REASONING_STATE_SCHEMA_VERSION = "1.0"
+REASONING_STATE_SCHEMA_VERSION = "1.1"
 REASONING_STATE_MAX_TOKENS = 32768
 _PUBLIC_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$")
 _PRIVATE_KEYS = re.compile(
@@ -249,6 +249,7 @@ class PublicClaim:
     subgoal_ids: tuple[str, ...] = ()
     status: str = "pending"
     importance: str = "supporting"
+    check_type: str = "reasoning"
 
     def validate(self) -> None:
         _public_id(self.claim_id, "PublicClaim.claim_id")
@@ -260,6 +261,7 @@ class PublicClaim:
             raise ReasoningStateValidationError(
                 "PublicClaim importance is invalid"
             )
+        _public_id(self.check_type, "PublicClaim.check_type")
         for dependency in self.depends_on:
             _public_id(dependency, "PublicClaim.depends_on")
         for subgoal_id in self.subgoal_ids:
@@ -273,6 +275,7 @@ class PublicClaim:
             "subgoal_ids": list(self.subgoal_ids),
             "status": self.status,
             "importance": self.importance,
+            "check_type": self.check_type,
         }
 
     @classmethod
@@ -288,6 +291,7 @@ class PublicClaim:
             "subgoal_ids",
             "status",
             "importance",
+            "check_type",
         }
         if set(payload) != expected:
             raise ReasoningStateValidationError(
@@ -306,6 +310,7 @@ class PublicClaim:
             ),
             status=str(payload["status"]).strip(),
             importance=str(payload["importance"]).strip(),
+            check_type=str(payload["check_type"]).strip(),
         )
         claim.validate()
         return claim
@@ -527,6 +532,117 @@ class RoundDelta:
 
 
 @dataclass(frozen=True)
+class PublicToolResult:
+    work_item_id: str
+    claim_id: str
+    tool_name: str
+    status: str
+    strength: str
+    summary: str
+    public_payload: dict[str, Any]
+    result_digest: str
+    impact: str
+    reason_code: str
+
+    def validate(self) -> None:
+        _public_id(self.work_item_id, "PublicToolResult.work_item_id")
+        _public_id(self.claim_id, "PublicToolResult.claim_id")
+        _public_id(self.tool_name, "PublicToolResult.tool_name")
+        if self.status not in {"pass", "fail", "unknown", "error"}:
+            raise ReasoningStateValidationError(
+                "PublicToolResult status is invalid"
+            )
+        if self.strength not in {"none", "soft", "medium", "hard"}:
+            raise ReasoningStateValidationError(
+                "PublicToolResult strength is invalid"
+            )
+        if not self.summary.strip() or len(self.summary) > 2048:
+            raise ReasoningStateValidationError(
+                "PublicToolResult summary is invalid"
+            )
+        if not isinstance(self.public_payload, dict):
+            raise ReasoningStateValidationError(
+                "PublicToolResult payload must be an object"
+            )
+        serialized = json.dumps(
+            self.public_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if len(serialized) > 8192 or any(
+            _PRIVATE_KEYS.fullmatch(str(key))
+            for key in _nested_keys(self.public_payload)
+        ):
+            raise ReasoningStateValidationError(
+                "PublicToolResult payload is unsafe or too large"
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", self.result_digest):
+            raise ReasoningStateValidationError(
+                "PublicToolResult digest is invalid"
+            )
+        if self.impact not in {
+            "confirm_strategy",
+            "switch_strategy",
+            "request_clarification",
+            "no_change",
+        }:
+            raise ReasoningStateValidationError(
+                "PublicToolResult impact is invalid"
+            )
+        _public_id(self.reason_code, "PublicToolResult.reason_code")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "work_item_id": self.work_item_id,
+            "claim_id": self.claim_id,
+            "tool_name": self.tool_name,
+            "status": self.status,
+            "strength": self.strength,
+            "summary": self.summary,
+            "public_payload": dict(self.public_payload),
+            "result_digest": self.result_digest,
+            "impact": self.impact,
+            "reason_code": self.reason_code,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "PublicToolResult":
+        expected = {
+            "work_item_id",
+            "claim_id",
+            "tool_name",
+            "status",
+            "strength",
+            "summary",
+            "public_payload",
+            "result_digest",
+            "impact",
+            "reason_code",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected:
+            raise ReasoningStateValidationError(
+                "PublicToolResult fields do not match the public schema"
+            )
+        result = cls(
+            work_item_id=str(payload["work_item_id"]),
+            claim_id=str(payload["claim_id"]),
+            tool_name=str(payload["tool_name"]),
+            status=str(payload["status"]),
+            strength=str(payload["strength"]),
+            summary=str(payload["summary"]),
+            public_payload=dict(payload["public_payload"]),
+            result_digest=str(payload["result_digest"]),
+            impact=str(payload["impact"]),
+            reason_code=str(payload["reason_code"]),
+        )
+        result.validate()
+        return result
+
+
+@dataclass(frozen=True)
 class ReasoningState:
     SCHEMA_VERSION: ClassVar[str] = REASONING_STATE_SCHEMA_VERSION
 
@@ -537,6 +653,7 @@ class ReasoningState:
     claim_ledger: ClaimLedger = field(default_factory=ClaimLedger)
     open_obligations: tuple[OpenObligation, ...] = ()
     evidence_refs: tuple[str, ...] = ()
+    tool_results: tuple[PublicToolResult, ...] = ()
     contradictions: tuple[str, ...] = ()
     strategy: str = ""
     rounds: tuple[RoundDelta, ...] = ()
@@ -599,6 +716,18 @@ class ReasoningState:
                 )
         for reference in self.evidence_refs:
             _public_id(reference, "ReasoningState.evidence_refs")
+        work_item_ids: set[str] = set()
+        for result in self.tool_results:
+            result.validate()
+            if result.work_item_id in work_item_ids:
+                raise ReasoningStateValidationError(
+                    "duplicate PublicToolResult work item"
+                )
+            if result.claim_id not in claim_ids:
+                raise ReasoningStateValidationError(
+                    "PublicToolResult references an unknown Claim"
+                )
+            work_item_ids.add(result.work_item_id)
         _string_list(self.contradictions, "ReasoningState.contradictions")
         for index, delta in enumerate(self.rounds, start=1):
             delta.validate()
@@ -619,6 +748,7 @@ class ReasoningState:
                 item.to_dict() for item in self.open_obligations
             ],
             "evidence_refs": list(self.evidence_refs),
+            "tool_results": [item.to_dict() for item in self.tool_results],
             "contradictions": list(self.contradictions),
             "strategy": self.strategy,
             "rounds": [item.to_dict() for item in self.rounds],
@@ -639,6 +769,7 @@ class ReasoningState:
             "claim_ledger",
             "open_obligations",
             "evidence_refs",
+            "tool_results",
             "contradictions",
             "strategy",
             "rounds",
@@ -664,6 +795,13 @@ class ReasoningState:
             evidence_refs=_string_list(
                 payload["evidence_refs"], "ReasoningState.evidence_refs"
             ),
+            tool_results=tuple(
+                PublicToolResult.from_dict(item)
+                for item in _object_list(
+                    payload["tool_results"],
+                    "ReasoningState.tool_results",
+                )
+            ),
             contradictions=_string_list(
                 payload["contradictions"],
                 "ReasoningState.contradictions",
@@ -678,6 +816,75 @@ class ReasoningState:
         )
         state.validate()
         return state
+
+    def apply_tool_results(
+        self,
+        results: tuple[PublicToolResult, ...],
+    ) -> tuple["ReasoningState", dict[str, Any]]:
+        if not results:
+            return self, {
+                "work_item_ids": [],
+                "evidence_ids": list(self.evidence_refs),
+                "strategy_changed": False,
+                "failure_codes": [],
+            }
+        existing_ids = {item.work_item_id for item in self.tool_results}
+        new_results = [
+            item for item in results if item.work_item_id not in existing_ids
+        ]
+        for item in new_results:
+            item.validate()
+        evidence_refs = tuple(
+            dict.fromkeys(
+                (
+                    *self.evidence_refs,
+                    *(f"tool-{item.work_item_id}" for item in new_results),
+                )
+            )
+        )
+        switch = next(
+            (
+                item
+                for item in new_results
+                if item.impact in {"switch_strategy", "request_clarification"}
+            ),
+            None,
+        )
+        strategy = (
+            f"tool_feedback:{switch.tool_name}:{switch.reason_code}"
+            if switch is not None
+            else self.strategy
+        )
+        contradictions = tuple(
+            dict.fromkeys(
+                (
+                    *self.contradictions,
+                    *(
+                        f"{item.claim_id}:{item.tool_name}:{item.status}"
+                        for item in new_results
+                        if item.status == "fail"
+                    ),
+                )
+            )
+        )
+        state = replace(
+            self,
+            evidence_refs=evidence_refs,
+            tool_results=(*self.tool_results, *new_results),
+            contradictions=contradictions,
+            strategy=strategy,
+        )
+        state.validate()
+        return state, {
+            "work_item_ids": [item.work_item_id for item in new_results],
+            "evidence_ids": list(evidence_refs),
+            "strategy_changed": strategy != self.strategy,
+            "failure_codes": [
+                item.reason_code
+                for item in new_results
+                if item.status in {"fail", "unknown", "error"}
+            ],
+        }
 
     def apply(self, delta: RoundDelta) -> tuple["ReasoningState", dict[str, Any]]:
         delta.validate()
@@ -850,6 +1057,7 @@ class ReasoningState:
                     ),
                     status="pending",
                     importance=item.importance,
+                    check_type=item.check_type,
                 )
             )
         delta = RoundDelta(
@@ -903,6 +1111,7 @@ class ReasoningStateCompressor:
             "subgoal_dependencies",
             "claim_dependencies",
             "open_obligations",
+            "tool_results",
         )
         if full_count.tokens <= max_tokens:
             return CompressedReasoningState(
@@ -1094,13 +1303,20 @@ class LongHorizonPolicy:
 
 
 def _progress_claim(payload: dict[str, Any]) -> PublicClaim:
-    if not isinstance(payload, dict) or set(payload) != {
+    if not isinstance(payload, dict) or set(payload) not in ({
         "claim_id",
         "statement",
         "depends_on",
         "subgoal_ids",
         "importance",
-    }:
+        "check_type",
+    }, {
+        "claim_id",
+        "statement",
+        "depends_on",
+        "subgoal_ids",
+        "importance",
+    }):
         raise ReasoningStateValidationError(
             "ProgressDelta Claim fields are invalid"
         )
@@ -1117,6 +1333,7 @@ def _progress_claim(payload: dict[str, Any]) -> PublicClaim:
         ),
         status="pending",
         importance=str(payload["importance"]).strip(),
+        check_type=str(payload.get("check_type", "reasoning")).strip(),
     )
     claim.validate()
     return claim
@@ -1202,3 +1419,21 @@ def _validate_projection_invariants(
         raise ReasoningStateValidationError(
             "ReasoningState compression changed open obligations"
         )
+    if payload["tool_results"] != [
+        item.to_dict() for item in state.tool_results
+    ]:
+        raise ReasoningStateValidationError(
+            "ReasoningState compression changed tool results"
+        )
+
+
+def _nested_keys(value: Any) -> tuple[str, ...]:
+    keys: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            keys.append(str(key))
+            keys.extend(_nested_keys(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            keys.extend(_nested_keys(item))
+    return tuple(keys)

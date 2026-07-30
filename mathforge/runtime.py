@@ -5,6 +5,7 @@ from dataclasses import replace
 from time import perf_counter
 
 from mathforge.agents.registry import PromptContractLoader, SkillRegistry
+from mathforge.agents.skill_selector import DynamicSkillSelector
 from mathforge.agents.router_planner import RouterPlanner
 from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.harness.allocation import CallAllocationPlan
@@ -77,6 +78,7 @@ from mathforge.output.loop_health import (
 from mathforge.parsing.problem_parser import ProblemParser
 from mathforge.parsing.solution_parser import SolutionParser
 from mathforge.tools.executor import ToolExecutor
+from mathforge.harness.tool_feedback import ToolFeedbackController
 from mathforge.verification.evidence import (
     EvidenceLedger,
     is_fatal_hard_failure,
@@ -206,12 +208,14 @@ class MathForgeHarness:
             RoleContextFactory(),
         )
         self._skills = SkillRegistry()
+        self._dynamic_skills = DynamicSkillSelector(self._skills)
         self._solver_executor = SolverExecutor(self._provider, self._solution_parser)
         self._candidate_orchestrator = CandidateOrchestrator(
             self._solver_executor,
             self._contracts,
         )
         self._tool_executor = ToolExecutor(use_mcp=self._config.use_mcp)
+        self._tool_feedback = ToolFeedbackController(self._tool_executor)
         self._arbitration = ArbitrationPolicy(self._tool_executor)
         self._lemma_loop = VerifiedLemmaLoop()
         self._retriever = Retriever() if self._config.enable_rag else None
@@ -679,10 +683,15 @@ class MathForgeHarness:
                 )
             skill_compositions = (
                 {
-                    role: self._skills.compose_for_role(
-                        session.route_plan.selected_skills,
-                        max_chars=self._config.skill_char_budget,
+                    role: self._dynamic_skills.compose_for_role(
+                        session.problem_ir,
                         role=role,
+                        route_skill_names=(
+                            session.route_plan.selected_skills
+                        ),
+                        max_chars=self._config.skill_char_budget,
+                        state=session.reasoning_state,
+                        selection_context="initial",
                     )
                     for role in _SKILL_RUNTIME_ROLES
                 }
@@ -802,39 +811,10 @@ class MathForgeHarness:
                 remaining_calls=pre_allocation_budget.remaining_calls,
                 remaining_seconds=pre_allocation_budget.remaining_seconds,
             )
-            skill_manifest = {
-                item["name"]: item for item in self._skills.manifest
-            }
-            trace.add(
-                "skills_selected",
-                skills=[
-                    {
-                        "name": name,
-                        "version": skill_manifest.get(name, {}).get(
-                            "version",
-                            "unknown",
-                        ),
-                        "role": role,
-                        "reason": (
-                            "domain route"
-                            if self._skills.definition(name).kind == "domain"
-                            else "role-compatible general guidance"
-                        ),
-                    }
-                    for role, composition in skill_compositions.items()
-                    for name in composition.included
-                ],
-                omitted_by_role={
-                    role: list(composition.omitted)
-                    for role, composition in skill_compositions.items()
-                    if composition.omitted
-                },
-                unknown_by_role={
-                    role: list(composition.unknown)
-                    for role, composition in skill_compositions.items()
-                    if composition.unknown
-                },
-                skill_fingerprint=self._skills.fingerprint,
+            self._trace_dynamic_skill_selection(
+                trace,
+                skill_compositions,
+                selection_context="initial",
             )
             trace.add(
                 "call_allocation_planned",
@@ -1277,6 +1257,55 @@ class MathForgeHarness:
                 for candidate_id, claims in repair_triggers.items()
                 if claims
             }
+            postcheck_failure_codes = tuple(
+                dict.fromkeys(
+                    (
+                        *(
+                            f"tool_{record.status}"
+                            for record in session.evidence
+                            if record.evidence_type.startswith("tool:")
+                            and record.status in {"fail", "unknown", "error"}
+                        ),
+                        *(
+                            str(
+                                record.invocation.get(
+                                    "request_status",
+                                    "",
+                                )
+                            )
+                            for record in session.evidence
+                            if record.evidence_type
+                            == "host:check_type_resolution"
+                        ),
+                    )
+                )
+            )
+            if self._config.enable_skills and postcheck_failure_codes:
+                postcheck_skills = {
+                    role: self._dynamic_skills.compose_for_role(
+                        session.problem_ir,
+                        role=role,
+                        route_skill_names=(
+                            session.route_plan.selected_skills
+                        ),
+                        max_chars=self._config.skill_char_budget,
+                        state=session.reasoning_state,
+                        failure_codes=postcheck_failure_codes,
+                        selection_context="candidate_tool_feedback",
+                    )
+                    for role in _SKILL_RUNTIME_ROLES
+                }
+                role_skill_contexts.update(
+                    {
+                        role: composition.text
+                        for role, composition in postcheck_skills.items()
+                    }
+                )
+                self._trace_dynamic_skill_selection(
+                    trace,
+                    postcheck_skills,
+                    selection_context="candidate_tool_feedback",
+                )
             lemma_eligible, lemma_reasons = self._lemma_eligibility(
                 session,
                 active_candidates,
@@ -1571,6 +1600,10 @@ class MathForgeHarness:
                     verified,
                     round_id,
                     role_skill_contexts.get("PrimarySolver", ""),
+                ),
+                target=(
+                    session.problem_ir.target_phrase
+                    or session.problem_ir.requested_output
                 ),
             )
             session.lemmas.extend(lemma_result.lemmas)
@@ -2917,6 +2950,8 @@ class MathForgeHarness:
     ):
         state = session.reasoning_state
         solver = PrimarySolver(self._contracts)
+        active_skill_context = skill_context
+        skill_failure_codes: tuple[str, ...] = ()
         method_families = list(session.route_plan.method_families)
         method_family = (
             method_families[0]
@@ -2956,7 +2991,7 @@ class MathForgeHarness:
                 "primary-1",
                 session.problem_ir,
                 session.route_plan,
-                skill_context,
+                active_skill_context,
                 method_family,
                 forbidden,
                 context_view,
@@ -3001,6 +3036,65 @@ class MathForgeHarness:
                 if progress_offset == 0:
                     return None, state, degraded_reason
                 break
+            added_claim_ids = set(summary["added_claim_ids"])
+            feedback_batch = None
+            if self._config.enable_tools and added_claim_ids:
+                feedback_batch = self._tool_feedback.run(
+                    tuple(
+                        claim
+                        for claim in delta.claims
+                        if claim.claim_id in added_claim_ids
+                    ),
+                    domains=session.problem_ir.domains,
+                    assumptions=session.problem_ir.assumptions,
+                    selected_tools=session.route_plan.selected_tools,
+                    budget=session.budget,
+                )
+                if feedback_batch.work_items:
+                    state, feedback_summary = state.apply_tool_results(
+                        feedback_batch.results
+                    )
+                    summary["evidence_ids"] = feedback_summary[
+                        "evidence_ids"
+                    ]
+                    skill_failure_codes = feedback_batch.failure_codes
+                    trace.add(
+                        "tool_feedback_completed",
+                        state_id=state.state_id,
+                        state_version=state.version,
+                        round_index=delta.round_index,
+                        next_protocol=(
+                            "continue"
+                            if progress_offset
+                            < plan.planned_rounds - 2
+                            else "synthesize"
+                        ),
+                        **feedback_batch.to_trace_dict(),
+                    )
+                    if skill_failure_codes:
+                        dynamic_primary = (
+                            self._dynamic_skills.compose_for_role(
+                                session.problem_ir,
+                                role="PrimarySolver",
+                                route_skill_names=(
+                                    session.route_plan.selected_skills
+                                ),
+                                max_chars=self._config.skill_char_budget,
+                                state=state,
+                                failure_codes=skill_failure_codes,
+                                selection_context=(
+                                    f"tool_feedback_round_{delta.round_index}"
+                                ),
+                            )
+                        )
+                        active_skill_context = dynamic_primary.text
+                        self._trace_dynamic_skill_selection(
+                            trace,
+                            {"PrimarySolver": dynamic_primary},
+                            selection_context=(
+                                f"tool_feedback_round_{delta.round_index}"
+                            ),
+                        )
             try:
                 committed_state = self._compress_reasoning_state(
                     state,
@@ -3038,7 +3132,7 @@ class MathForgeHarness:
             "primary-1",
             session.problem_ir,
             session.route_plan,
-            skill_context,
+            active_skill_context,
             method_family,
             forbidden,
             context_view,
@@ -3080,6 +3174,50 @@ class MathForgeHarness:
             preserved_invariants=list(compressed.semantic_invariants),
         )
         return compressed
+
+    def _trace_dynamic_skill_selection(
+        self,
+        trace: TraceBuilder,
+        compositions,
+        *,
+        selection_context: str,
+    ) -> None:
+        trace.add(
+            "skills_selected",
+            selection_context=selection_context,
+            skills=[
+                {
+                    "name": decision.name,
+                    "version": decision.version,
+                    "role": role,
+                    "rank": decision.rank,
+                    "score": decision.score,
+                    "reason": ";".join(decision.reasons),
+                    "included_sections": list(
+                        decision.included_sections
+                    ),
+                    "omitted_sections": list(
+                        decision.omitted_sections
+                    ),
+                }
+                for role, composition in compositions.items()
+                for decision in composition.included
+            ],
+            omitted_by_role={
+                role: [
+                    {
+                        "name": decision.name,
+                        "rank": decision.rank,
+                        "score": decision.score,
+                        "reasons": list(decision.reasons),
+                    }
+                    for decision in composition.omitted
+                ]
+                for role, composition in compositions.items()
+                if composition.omitted
+            },
+            skill_fingerprint=self._skills.fingerprint,
+        )
 
     @staticmethod
     def _reasoning_failure_code(error: Exception) -> str:

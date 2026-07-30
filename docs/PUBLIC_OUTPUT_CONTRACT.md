@@ -1,6 +1,6 @@
 # MathForge 公共输出契约
 
-版本：3.3
+版本：3.4
 
 ## 对外字段
 
@@ -28,7 +28,7 @@ Harness、Benchmark artifact 和逐题运行清单中。
 
 ## Trace 内容
 
-公共 `trace` 使用 Judge Trace V3.3，是面向判分的有界审计叙事，不是内部
+公共 `trace` 使用 Judge Trace V3.4，是面向判分的有界审计叙事，不是内部
 框架日志或 Debug Journal：
 
 - 保留会话/配置、路由/Skill、关键 Evidence、proof completion、仲裁、
@@ -41,6 +41,10 @@ Harness、Benchmark artifact 和逐题运行清单中。
   Subgoal/Claim/Obligation ID 变化、信息增益、下一步、停止及降级原因。
   `round_summary` 不包含私有思维链、原始响应或失败候选全文；高难度题只在
   调用数与 p95 时间储备均可行时进入 2–3 轮，简单题保持单轮。
+- `skills_selected` 记录每个角色动态纳入和省略的 Skill 片段、排序、评分及
+  选择原因；`tool_feedback_completed` 记录 Host 构造的工作项数量、工具结果
+  状态、结果摘要、摘要哈希、对下一步策略的影响和后续协议。公共投影不包含
+  工具参数、完整 payload 或模型私有推理。
 - 选中 Candidate 保留必要公开解题步骤和最终答案，且不在 Trace 中重复
   `final_response`；二者通过内容摘要绑定并校验一致性。
 - `viable_not_selected` Candidate 额外保留受限的 `public_final_answer`、

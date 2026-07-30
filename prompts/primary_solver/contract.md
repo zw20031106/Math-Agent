@@ -9,7 +9,7 @@ allowed_tools: host_executed_checks_only
 failure_policy: return_unresolved_obligations
 stop_condition: complete_candidate
 max_context_chars: 160000
-version: 3
+version: 4
 ---
 Output protocol:
 
@@ -30,10 +30,11 @@ Output protocol:
 5. Do not output Host-owned fields: `candidate_id`, `role`, `answer_type`,
    `planned_method_family`, `version`, `schema_version`, `parse_status`,
    `parse_tier`, `source`, `method_steps`, `is_method_duplicate`,
-   `contract_deviations`, or any Claim verification status.
+   `contract_deviations`, Claim `check_spec`, or any Claim verification status.
 6. The model has no native tool-calling interface. Never emit a tool call or
    tool arguments. A Claim `check_type` is only a suggestion to the Host, which
-   reconstructs safe arguments and decides whether a check is available.
+   constructs the typed `check_spec`, validates safe arguments, executes the
+   local tool, and may return a public ToolResult in a later continuation.
 7. Avoid irrelevant repetition. If output capacity becomes tight, preserve in
    this order: `final_answer`, `public_solution_steps`, critical Claims, and
    `unresolved_obligations`.

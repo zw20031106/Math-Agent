@@ -294,7 +294,7 @@ class PromptContractLoader:
             {
                 "name": "host_prompt_compiler",
                 "role": "Host",
-                "version": "3",
+                "version": "4",
                 "sha256": semantic_fingerprint(
                     {
                         "compiler": _normalized_file_hash(compiler_path),
