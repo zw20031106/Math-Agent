@@ -5,7 +5,6 @@ from collections import Counter
 from hashlib import sha256
 import json
 from pathlib import Path
-import statistics
 import sys
 from typing import Any
 
@@ -48,6 +47,7 @@ def profile_run(
     selected_cases = sum(bool(item["selected_candidate_id"]) for item in cases)
     calls_per_case = [item["used_calls"] for item in cases]
     latencies = [item["elapsed_seconds"] for item in cases]
+    scheduler_peaks = [item["provider_scheduler_peak"] for item in cases]
     public_matches = [
         item["answer_matches_expected"]
         for item in cases
@@ -100,6 +100,7 @@ def profile_run(
             "p95": _percentile(latencies, 95),
             "max": max(latencies, default=0.0),
         },
+        "max_peak_concurrency": max(scheduler_peaks, default=0),
         "answer_match_rate_on_persisted_cases": _ratio(
             sum(public_matches),
             len(public_matches),
@@ -188,6 +189,9 @@ def _profile_case(
         ),
         "used_calls": int(budget.get("used_calls", 0)),
         "elapsed_seconds": float(budget.get("elapsed_seconds", 0.0)),
+        "provider_scheduler_peak": int(
+            budget.get("provider_scheduler_peak", 0)
+        ),
         "model_call_records": list(budget.get("model_calls", [])),
         "expected_answer": expected,
         "public_answer": answer,

@@ -996,6 +996,7 @@ def _budget_summary(event: dict[str, Any] | None) -> dict[str, Any]:
         "provider_health_state",
         "provider_active_tails",
         "provider_peak_tails",
+        "provider_scheduler_peak",
         "provider_circuit_trips",
         "provider_fast_failures",
         "used_tool_calls",

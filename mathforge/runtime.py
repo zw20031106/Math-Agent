@@ -20,6 +20,10 @@ from mathforge.harness.fallback import FallbackSolver
 from mathforge.harness.fingerprints import request_fingerprint
 from mathforge.harness.context_budget import ModelContextBudget
 from mathforge.harness.metrics import collect_run_metrics
+from mathforge.harness.model_policy import (
+    stage_sequence_feasible,
+    stage_sequence_reserve_seconds,
+)
 from mathforge.harness.proof_graph import build_claim_evidence_graph
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.harness.orchestration import (
@@ -1570,16 +1574,36 @@ class MathForgeHarness:
                     verifier_result.findings
                 )
             atomic_repair_budget = session.budget.snapshot()
+            repair_pair_time_reserve = stage_sequence_reserve_seconds(
+                ("repair", "verifier"),
+                session.budget.model_queue_budget_seconds,
+            )
+            repair_pair_time_available = stage_sequence_feasible(
+                ("repair", "verifier"),
+                remaining_seconds=(
+                    session.budget.deadline.remaining_for_model_call()
+                ),
+                maximum_queue_seconds=(
+                    session.budget.model_queue_budget_seconds
+                ),
+            )
             repair_pair_available = (
                 atomic_repair_budget.remaining_calls >= 2
                 and atomic_repair_budget.stage_remaining.get("repair", 0) >= 1
                 and atomic_repair_budget.stage_remaining.get("verifier", 0) >= 1
                 and atomic_repair_budget.exploration_open
+                and repair_pair_time_available
             )
             trace.add(
                 "repair_actionability_gate",
                 actionable_claims=verifier_triggers,
                 atomic_budget_pair_available=repair_pair_available,
+                atomic_time_pair_available=repair_pair_time_available,
+                required_pair_seconds=round(repair_pair_time_reserve, 6),
+                remaining_model_seconds=round(
+                    session.budget.deadline.remaining_for_model_call(),
+                    6,
+                ),
                 budget=atomic_repair_budget.to_dict(),
             )
             if (

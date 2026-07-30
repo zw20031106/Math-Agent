@@ -18,8 +18,10 @@ def create_session(
     from mathforge.memory.lemma_memory import LemmaMemory
 
     memory = SessionMemory()
+    session_id = uuid4().hex
+    budget.bind_scheduler_case(session_id)
     return MathSession(
-        session_id=uuid4().hex,
+        session_id=session_id,
         problem=problem,
         metadata=dict(metadata),
         budget=budget,

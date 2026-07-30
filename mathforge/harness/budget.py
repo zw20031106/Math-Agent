@@ -58,6 +58,7 @@ class CallBudget:
             raise ValueError("model queue budget must be positive")
         self._lock = Lock()
         self._frozen = False
+        self._scheduler_case_id = ""
         self._stage_calls: dict[str, int] = {}
         self._allocation_plan: CallAllocationPlan | None = None
         self.used_claims = 0
@@ -88,6 +89,7 @@ class CallBudget:
         self.provider_health_state = "healthy"
         self.provider_active_tails = 0
         self.provider_peak_tails = 0
+        self.provider_scheduler_peak = 0
         self.provider_circuit_trips = 0
         self.provider_fast_failures = 0
         self.model_call_records: list[dict] = []
@@ -102,6 +104,21 @@ class CallBudget:
             ),
             model_call_start_margin_seconds=self.model_call_start_margin_seconds,
         )
+
+    def bind_scheduler_case(self, case_id: str) -> None:
+        normalized = str(case_id).strip()
+        if not normalized:
+            raise ValueError("scheduler case id must be non-empty")
+        with self._lock:
+            self._ensure_mutable_locked()
+            if self._scheduler_case_id and self._scheduler_case_id != normalized:
+                raise RuntimeError("scheduler case id is already bound")
+            self._scheduler_case_id = normalized
+
+    @property
+    def scheduler_case_id(self) -> str:
+        with self._lock:
+            return self._scheduler_case_id
 
     def set_allocation_plan(self, plan: CallAllocationPlan) -> None:
         with self._lock:
@@ -378,6 +395,12 @@ class CallBudget:
                 self.provider_fast_failures,
                 int(snapshot.get("fast_failures", 0)),
             )
+            scheduler = snapshot.get("scheduler", {})
+            if isinstance(scheduler, dict):
+                self.provider_scheduler_peak = max(
+                    self.provider_scheduler_peak,
+                    int(scheduler.get("peak", 0)),
+                )
 
     def freeze(self) -> None:
         with self._lock:
@@ -511,6 +534,7 @@ class CallBudget:
                     6,
                 ),
                 "model_queue_budget_seconds": self.model_queue_budget_seconds,
+                "scheduler_case_bound": bool(self._scheduler_case_id),
                 "model_queue_wait_seconds": round(
                     self.model_queue_wait_seconds,
                     6,
@@ -538,6 +562,7 @@ class CallBudget:
                 "provider_health_state": self.provider_health_state,
                 "provider_active_tails": self.provider_active_tails,
                 "provider_peak_tails": self.provider_peak_tails,
+                "provider_scheduler_peak": self.provider_scheduler_peak,
                 "provider_circuit_trips": self.provider_circuit_trips,
                 "provider_fast_failures": self.provider_fast_failures,
                 "final_response_tokens": self.final_response_tokens,

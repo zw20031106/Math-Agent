@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### 0730 stability remediation phases 0-1 (2026-07-30)
+### 0730 stability remediation phases 0-2 (2026-07-30)
 
 - Added reproducible Phase 0 reliability, general high-difficulty, and
   contract-adversarial baselines, a hash manifest builder, symbolic-equivalence
@@ -19,6 +19,15 @@
 - Added Phase 0 and Phase 1 execution reports and offline regressions for
   baseline determinism, taxonomy, monotonic budgets, standby recovery,
   degraded scheduling, candidate salvage, and hard-gate rejection.
+- Added answer-first scheduler aging and per-session case round-robin while
+  preserving the shared physical concurrency bound. Verifier work no longer
+  preempts a queued Primary or Alternative before an answer has formed.
+- Replaced unconditional queue waiting with a stage-p95/deadline feasibility
+  budget recorded on every model-call ledger entry. Post-verifier
+  Repair/Reverify now requires both call-count and time-atomic reserves.
+- Added a deterministic concurrency 1/2/4 capacity-profile comparator with
+  frozen formation, answer-production, accuracy-drop, and peak-concurrency
+  gates, plus Phase 2 stress/regression coverage.
 
 ### 0729 remediation phase 6 (2026-07-29)
 

@@ -13,8 +13,10 @@ from mathforge.harness.errors import ModelCallRejected
 from mathforge.harness.errors import ModelTransportError
 from mathforge.harness.model_policy import (
     effective_output_tokens,
+    feasible_queue_budget,
     stage_call_timeout,
     stage_output_cap,
+    stage_p95_seconds,
 )
 from mathforge.harness.priority_scheduler import PriorityCallScheduler
 from mathforge.harness.transport import (
@@ -75,6 +77,7 @@ class ModelCallGate:
         deadline=None,
         background_tail_callback=None,
         stage: str = "unallocated",
+        case_id: str = "",
         queue_budget_seconds: float | None = None,
         stage_timeout_seconds: float | None = None,
         timing_callback=None,
@@ -83,7 +86,7 @@ class ModelCallGate:
     ):
         if deadline is None:
             self._reject_open_circuit(timing_callback)
-            self._scheduler.acquire(stage)
+            self._scheduler.acquire(stage, case_id=case_id)
             try:
                 if dispatch_callback is not None:
                     dispatch_callback()
@@ -111,9 +114,10 @@ class ModelCallGate:
                 deadline.remaining_for_model_call(),
             ),
         )
-        if acquire_timeout <= 0 or not self._scheduler.acquire(
+        if not self._scheduler.acquire(
             stage,
             acquire_timeout,
+            case_id=case_id,
         ):
             queue_elapsed = perf_counter() - started
             self._emit_timing(
@@ -407,6 +411,16 @@ class OfficialClientProvider:
         stage: str = "unallocated",
     ) -> str:
         effective_max_tokens = effective_output_tokens(stage, max_tokens)
+        active_deadline = budget.deadline if budget is not None else deadline
+        queue_budget = (
+            feasible_queue_budget(
+                stage,
+                active_deadline.remaining_for_model_call(),
+                budget.model_queue_budget_seconds,
+            )
+            if budget is not None and active_deadline is not None
+            else None
+        )
         allocation = self._context_budget.allocate(
             messages,
             configured_max_output_tokens=effective_max_tokens,
@@ -415,24 +429,22 @@ class OfficialClientProvider:
             **allocation.to_dict(),
             "configured_output_tokens": max_tokens,
             "stage_output_cap_tokens": stage_output_cap(stage),
+            "stage_p95_seconds": stage_p95_seconds(stage),
+            "effective_queue_budget_seconds": queue_budget,
         }
         call_index = (
             budget.record_model_call_started(stage, allocation_payload)
             if budget is not None
             else None
         )
-        active_deadline = budget.deadline if budget is not None else deadline
         started = perf_counter()
         try:
             response = self._gate.call(
                 self._chat,
                 deadline=active_deadline,
                 stage=stage,
-                queue_budget_seconds=(
-                    budget.model_queue_budget_seconds
-                    if budget is not None
-                    else None
-                ),
+                case_id=(budget.scheduler_case_id if budget is not None else ""),
+                queue_budget_seconds=queue_budget,
                 background_tail_callback=(
                     budget.record_background_tail
                     if budget is not None
