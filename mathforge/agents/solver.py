@@ -352,6 +352,8 @@ class SolverExecutor:
 
 def _problem_structure_prompt(problem: ProblemIR) -> str:
     fields = (
+        ("Response mode", [problem.response_mode]),
+        ("Answer type", [problem.answer_type]),
         ("Target kind", [problem.target_kind]),
         ("Definitions", problem.definitions),
         ("Quantifiers", problem.quantifiers),

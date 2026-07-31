@@ -30,7 +30,7 @@ class FinalizerClient:
         del messages, temperature, max_tokens
         return json.dumps(
             {
-                "method": "presentation",
+                "method": "direct",
                 "method_steps": [
                     {
                         "step_id": "s1",
@@ -116,6 +116,9 @@ def test_finalizer_rolls_back_same_answer_with_changed_mathematical_content():
         (r"Proof with a new formula x^2=1.", None),
         ("Proof", {"assumptions": ["x > 0"]}),
         ("Proof", {"theorems": ["Invented theorem"]}),
+        ("Proof", {"method": "different-method"}),
+        ("Proof", {"public_solution_steps": ["Changed public proof."]}),
+        ("Proof", {"unresolved_obligations": ["New open obligation"]}),
     ],
 )
 def test_finalizer_rolls_back_new_entities_assumptions_and_theorems(

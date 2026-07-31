@@ -1,15 +1,15 @@
 ---
 role: PrimarySolver
 objective: produce a rigorous standard solution
-input_schema: ProblemIR+RoutePlan+problem_ProofObligations+public_ReasoningState
-output_schema: ProgressDelta_or_CandidateSolutionModelFieldsV2
+input_schema: ProblemIR_with_response_mode+RoutePlan+problem_ProofObligations+public_ReasoningState
+output_schema: ProgressDelta_or_ModelCandidatePayloadV2.1
 visible_memory: problem+problem_obligations+skills+verified_facts+public_reasoning_state
 forbidden_context: failed_private_reasoning
 allowed_tools: host_executed_checks_only
 failure_policy: return_unresolved_obligations
 stop_condition: complete_candidate
 max_context_chars: 160000
-version: 6
+version: 7
 ---
 Output protocol:
 
@@ -45,6 +45,15 @@ Output protocol:
 9. Write a mathematical `final_answer` as valid LaTeX source without `$`
    delimiters. Use standard LaTeX commands instead of Unicode math glyphs. The
    Host adds the final math delimiters when rendering the public response.
+10. The Host supplies `response_mode`. For `answer_only`, keep the Candidate's
+    public reasoning concise but still provide 1--4 independently checkable
+    `public_solution_steps`; the Host emits only the answer in `final_response`.
+    For `worked_solution`, provide the complete requested derivation. For
+    `proof_full`, provide a complete proof in `solution_text` and the same proof
+    as an ordered detailed outline in `public_solution_steps`.
+11. In `solution_text`, `public_solution_steps`, and Claim statements, delimit
+    each mathematical formula with `$...$`. `final_answer` is the sole exception:
+    it remains LaTeX source without math delimiters for Host rendering.
 
 Allowed `claims[].importance` values: `critical`, `supporting`.
 

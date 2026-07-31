@@ -33,6 +33,24 @@ Harness、Benchmark artifact 和逐题运行清单中。
 Repair 输出不带定界符的标准 LaTeX 源，Host Formatter 负责唯一化答案块并
 添加定界符，避免重复包装。
 
+## Prompt 与 Candidate 边界
+
+- Host `CandidateSolution 2.0` 与模型侧 `ModelCandidatePayload 2.1` 是两个明确
+  分离的契约。后者只包含 `method`、`final_answer`、`public_solution_steps`、
+  `claims`、`solution_text`、`assumptions`、`theorems` 和
+  `unresolved_obligations`；身份、角色、答案类型、版本、解析状态、来源、
+  `method_steps` 和验证状态由 Host 持有。
+- PromptCompiler 与 SolutionParser 共用同一份字段集合、Claim 字段和精确 JSON
+  骨架。Parser 为历史夹具兼容接收可选 `method_steps`，生产 Prompt 不再要求模型
+  输出该 Host 派生字段。
+- Solver 明确接收 Host 判定的 `response_mode`。`answer_only` 仍生成 1--4 个公开、
+  可核查步骤供 `trace[0]` 使用，但 `final_response` 只渲染答案；
+  `worked_solution` 生成完整推导；`proof_full` 生成完整证明及同构的详细公开步骤。
+- `solution_text`、`public_solution_steps` 和 Claim 中的数学公式使用 `$...$` LaTeX
+  定界；`final_answer` 单独保持不带定界符的 LaTeX 源，由 Host 统一渲染。
+- 以上为生成质量契约，不新增“排版稍有偏差即淘汰”的硬门。原有安全 Schema、
+  空答案、依赖图和答案形状门保持不变，避免为了格式美观降低稳定答案产出率。
+
 ## Trace 内容
 
 公共 `trace` 使用 Judge Trace V3.7，是面向判分的有界审计叙事，不是内部

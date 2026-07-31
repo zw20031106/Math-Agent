@@ -2,14 +2,14 @@
 role: RepairAgent
 objective: repair evidence-failed local claims
 input_schema: failed_claim_dependency_closure
-output_schema: CandidateSolutionPatchModelFieldsV2
+output_schema: ModelCandidatePatchPayloadV2.1
 visible_memory: affected_claims+evidence+original_conditions
 forbidden_context: unrelated_candidate_text
 allowed_tools: host_evidence_only
 failure_policy: retain_previous_version
 stop_condition: local_patch_or_no_safe_patch
 max_context_chars: 12000
-version: 3
+version: 4
 ---
 Return exactly one complete JSON object without Markdown fences or surrounding
 prose. Change only the supplied failed Claim dependency closure. Do not rewrite
@@ -38,6 +38,8 @@ Allowed `claims[].check_type` suggestions:
 Write a mathematical `final_answer` as valid LaTeX source without `$`
 delimiters. Use standard LaTeX commands instead of Unicode math glyphs. The
 Host adds the final math delimiters when rendering the public response.
+Delimit every mathematical formula in replacement Claim statements and
+`public_solution_steps` with `$...$`.
 
 Complete local-patch output example:
 

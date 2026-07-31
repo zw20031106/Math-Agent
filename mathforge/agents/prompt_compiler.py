@@ -5,6 +5,11 @@ import json
 
 from mathforge.agents.registry import PromptContract, PromptContractLoader
 from mathforge.context.errors import ContextBudgetExceeded
+from mathforge.harness.model_candidate_contract import (
+    MODEL_CANDIDATE_PATCH_STRUCTURAL_SHAPE,
+    MODEL_CANDIDATE_PAYLOAD_VERSION,
+    MODEL_CANDIDATE_STRUCTURAL_SHAPE,
+)
 from mathforge.harness.model_policy import stage_output_cap
 from mathforge.harness.schemas import ProblemIR, RoutePlan
 from mathforge.tool_prompt_examples import claim_prompt_examples
@@ -37,7 +42,8 @@ _SOLVER_OUTPUT_TOKENS = {
     },
 }
 _CANDIDATE_CORE_PROTOCOL = (
-    "Return exactly one complete JSON object, with no prose or Markdown fence. "
+    f"Use ModelCandidatePayload {MODEL_CANDIDATE_PAYLOAD_VERSION}. Return "
+    "exactly one complete JSON object, with no prose or Markdown fence. "
     "Put the durable core fields first in this order: method, final_answer, "
     "public_solution_steps, claims. Then include solution_text, assumptions, "
     "theorems, and unresolved_obligations. All eight fields are required; list "
@@ -65,14 +71,14 @@ _CANDIDATE_CORE_PROTOCOL = (
     "verification state). "
     "Do not emit tool calls, tool arguments, private "
     "reasoning, scratchpads, or hidden chain-of-thought. Use this exact structural "
-    'shape: {"method":"<assigned>","final_answer":"<answer>",'
-    '"public_solution_steps":["<step>"],"claims":[{"claim_id":"c1",'
-    '"statement":"<claim>","depends_on":[],"check_type":"reasoning",'
-    '"importance":"critical"}],"solution_text":"<public derivation>",'
-    '"assumptions":[],"theorems":[],'
-    '"unresolved_obligations":[]}. Default check_type to reasoning. Use a '
+    f"shape: {MODEL_CANDIDATE_STRUCTURAL_SHAPE}. Default check_type to "
+    "reasoning. Use a "
     "tool-named check_type only when that check is selected in the authorized "
-    "context and the Claim states its exact mathematical inputs. Prioritize a "
+    "context and the Claim states its exact mathematical inputs. In "
+    "solution_text, public_solution_steps, and Claim statements, delimit every "
+    "mathematical formula with $...$ and use standard LaTeX rather than Unicode "
+    "math glyphs. Keep final_answer as LaTeX source without $ delimiters because "
+    "the Host renders its delimiters. Prioritize a "
     "complete valid object over verbosity and finish within 8,192 output tokens."
 )
 _PROGRESS_DELTA_PROTOCOL = (
@@ -112,7 +118,11 @@ _REPAIR_PATCH_PROTOCOL = (
     "exactly claim_id, statement, depends_on, check_type, and importance. "
     "Do not return method, method_steps, solution_text, unrelated Claims, or "
     "Host-owned fields. The Host applies the patch to the prior Candidate, "
-    "re-verifies the affected dependency closure, and rolls back regressions."
+    "re-verifies the affected dependency closure, and rolls back regressions. "
+    "Use this exact structural shape: "
+    f"{MODEL_CANDIDATE_PATCH_STRUCTURAL_SHAPE}. Delimit formulas in public "
+    "steps and Claim statements with $...$; keep final_answer free of $ "
+    "delimiters."
 )
 _ROLE_PROTOCOLS = {
     "router_planner": (
@@ -136,9 +146,9 @@ _ROLE_PROTOCOLS = {
         "terminal Claim proves it must change."
     ),
     "finalizer": (
-        f"{_CANDIDATE_CORE_PROTOCOL} Improve public exposition only. Preserve the "
-        "verified Claims, assumptions, theorems, and exact final answer; introduce "
-        "no new mathematical conclusion."
+        f"{_CANDIDATE_CORE_PROTOCOL} Normalize presentation only. Preserve the "
+        "method, public exposition, verified Claims, assumptions, theorems, open "
+        "obligations, and exact final answer; introduce no new mathematical content."
     ),
 }
 
@@ -174,6 +184,7 @@ class PromptCompiler:
         profile = self.solver_profile(problem, route)
         instructions = [
             _CANDIDATE_CORE_PROTOCOL,
+            self._response_mode_protocol(problem),
             self._solver_profile_protocol(profile),
         ]
         if role_directory == "alternative_solver":
@@ -317,6 +328,32 @@ class PromptCompiler:
         return (
             "Provide a complete public derivation with concise Claims and explicit "
             "conditions; avoid repeated restatement of the contract."
+        )
+
+    @staticmethod
+    def _response_mode_protocol(problem: ProblemIR) -> str:
+        if problem.response_mode == "proof_full":
+            return (
+                "Host response mode is proof_full. solution_text must be a complete "
+                "proof suitable for the final response, including every essential "
+                "inference, theorem hypothesis, boundary case, and conclusion. "
+                "public_solution_steps must give the same proof as an ordered, "
+                "detailed public outline for trace[0]. Keep the complete exposition "
+                "within approximately 18,000 characters by compressing wording, not "
+                "by omitting proof steps."
+            )
+        if problem.response_mode == "worked_solution":
+            return (
+                "Host response mode is worked_solution. solution_text must contain "
+                "the complete derivation requested by the problem, and "
+                "public_solution_steps must provide an ordered, independently "
+                "checkable derivation for trace[0]."
+            )
+        return (
+            "Host response mode is answer_only. The Host will render final_response "
+            "as only the canonical final answer, but public_solution_steps must still "
+            "contain 1-4 concise, independently checkable steps for trace[0]. Do not "
+            "replace those steps with a bare answer or private analysis."
         )
 
     def _compile(

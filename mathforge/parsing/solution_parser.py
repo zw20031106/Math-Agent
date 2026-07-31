@@ -5,6 +5,14 @@ import json
 import re
 from typing import Any
 
+from mathforge.harness.model_candidate_contract import (
+    MODEL_CANDIDATE_COMPATIBILITY_FIELDS,
+    MODEL_CANDIDATE_HOST_FIELDS,
+    MODEL_CANDIDATE_NONEMPTY_FIELDS,
+    MODEL_CANDIDATE_REQUIRED_FIELDS,
+    MODEL_CLAIM_FIELDS,
+    MODEL_CLAIM_HOST_FIELDS,
+)
 from mathforge.harness.schemas import (
     MAX_CLAIMS,
     MAX_METHOD_STEPS,
@@ -24,27 +32,8 @@ _ANSWER_PATTERNS = (
     re.compile(r"(?:最终答案|答案)\s*[:：]\s*(.+)$", re.MULTILINE),
     re.compile(r"\\boxed\{([^{}]+)\}"),
 )
-_REQUIRED_MODEL_FIELDS = frozenset(
-    {
-        "method",
-        "solution_text",
-        "public_solution_steps",
-        "final_answer",
-        "assumptions",
-        "theorems",
-        "claims",
-        "unresolved_obligations",
-    }
-)
-_NONEMPTY_MODEL_FIELDS = frozenset(
-    {
-        "method",
-        "solution_text",
-        "public_solution_steps",
-        "final_answer",
-        "claims",
-    }
-)
+_REQUIRED_MODEL_FIELDS = MODEL_CANDIDATE_REQUIRED_FIELDS
+_NONEMPTY_MODEL_FIELDS = MODEL_CANDIDATE_NONEMPTY_FIELDS
 _TOP_LEVEL_ALIASES = {
     "structured_method_steps": "method_steps",
     "public_steps": "public_solution_steps",
@@ -294,30 +283,15 @@ class SolutionParser:
                 if status == "strict_json"
                 else f"{status}:incomplete_candidate"
             )
-        host_fields = {
-            "candidate_id",
-            "role",
-            "answer_type",
-            "planned_method_family",
-            "version",
-            "schema_version",
-            "source",
-            "parse_tier",
-        }
+        host_fields = MODEL_CANDIDATE_HOST_FIELDS
         deviations.extend(
             f"{name}:host_owned" for name in sorted(host_fields.intersection(payload))
         )
-        allowed_fields = host_fields | {
-            "method",
-            "method_steps",
-            "public_solution_steps",
-            "solution_text",
-            "final_answer",
-            "assumptions",
-            "theorems",
-            "claims",
-            "unresolved_obligations",
-        }
+        allowed_fields = (
+            host_fields
+            | MODEL_CANDIDATE_REQUIRED_FIELDS
+            | MODEL_CANDIDATE_COMPATIBILITY_FIELDS
+        )
         deviations.extend(
             f"{name}:ignored" for name in sorted(set(payload) - allowed_fields)
         )
@@ -333,20 +307,8 @@ class SolutionParser:
             if not isinstance(item, dict):
                 deviations.append(f"{prefix}:type")
                 continue
-            claim_model_fields = {
-                "claim_id",
-                "statement",
-                "depends_on",
-                "check_type",
-                "importance",
-            }
-            claim_host_fields = {
-                "status",
-                "claim_kind",
-                "verification_state",
-                "check_spec",
-                "schema_version",
-            }
+            claim_model_fields = MODEL_CLAIM_FIELDS
+            claim_host_fields = MODEL_CLAIM_HOST_FIELDS
             deviations.extend(
                 f"{prefix}.{name}:host_owned"
                 for name in sorted(claim_host_fields.intersection(item))

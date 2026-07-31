@@ -171,10 +171,12 @@ def test_runtime_accepts_fully_reverified_repair_and_rebuilds_solution_text():
     assert attempt["rolled_back"] is False
     assert attempt["proposed_candidate_id"] == "primary-1-v2"
     assert any("x = x" in str(step) for step in attempt["public_solution_steps"])
-    repair_prompt = next(
-        messages[-1]["content"]
+    repair_messages = next(
+        messages
         for messages in client.calls
         if messages[0]["content"].startswith("You are RepairAgent")
     )
+    repair_prompt = repair_messages[-1]["content"]
     assert "context_snapshot_id" in repair_prompt
+    assert "Host response mode is answer_only" in repair_messages[0]["content"]
     assert "UNRELATED_SAFE_CLAIM" not in repair_prompt

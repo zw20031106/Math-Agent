@@ -67,10 +67,11 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
         "finalizer",
     )
     expected_versions = {
-        "primary_solver": "6",
-        "alternative_solver": "4",
-        "repair": "3",
-        "verifier_skeptic": "3",
+        "primary_solver": "7",
+        "alternative_solver": "5",
+        "repair": "4",
+        "verifier_skeptic": "4",
+        "finalizer": "3",
     }
     for role in roles:
         contract = loader.load(role)
@@ -311,6 +312,8 @@ def test_verifier_receives_public_steps_method_steps_and_evidence_not_private_so
     assert "PUBLIC-STEP" in prompt
     assert "method_steps" in prompt
     assert "evidence-id" in prompt
+    assert '"response_mode":"proof_full"' in prompt
+    assert '"answer_type":"text"' in prompt
     assert "PRIVATE-SOLUTION" not in prompt
     assert result.findings[0].missing_condition == "A boundary condition is missing."
     assert (

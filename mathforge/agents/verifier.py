@@ -114,6 +114,8 @@ class VerifierSkepticAgent:
             visible["unreviewable_obligation_ids"] = payload[
                 "unreviewable_obligation_ids"
             ]
+            visible["response_mode"] = problem.response_mode
+            visible["answer_type"] = problem.answer_type
             visible_payload = json.dumps(
                 visible,
                 ensure_ascii=False,
@@ -142,6 +144,9 @@ class VerifierSkepticAgent:
                     "must name a real claim_id and supplied review_target_ids. "
                     "Classify every supplied conflict target for both candidates. "
                     "Unknown is not pass. "
+                    "For proof_full, treat an omitted essential proof step or theorem "
+                    "hypothesis as fail or unknown, never pass. Write formulas in "
+                    "public fields using $...$ LaTeX delimiters. "
                     "Do not emit native tool calls or private reasoning."
                 ),
             )
@@ -194,6 +199,8 @@ class VerifierSkepticAgent:
         }
         return {
             "problem": problem.normalized_problem,
+            "response_mode": problem.response_mode,
+            "answer_type": problem.answer_type,
             "conditions": list(problem.assumptions),
             "candidate_review_summaries": [
                 summary.to_dict() for summary in summaries

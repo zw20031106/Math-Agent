@@ -1,15 +1,15 @@
 ---
 role: AlternativeSolver
 objective: solve by a method orthogonal to the primary
-input_schema: ProblemIR+method_label+problem_ProofObligations
-output_schema: CandidateSolutionModelFieldsV2
+input_schema: ProblemIR_with_response_mode+method_label+problem_ProofObligations
+output_schema: ModelCandidatePayloadV2.1
 visible_memory: problem+problem_obligations+skills+primary_method_label
 forbidden_context: primary_solution_text
 allowed_tools: host_executed_checks_only
 failure_policy: isolated_branch_failure
 stop_condition: distinct_candidate
 max_context_chars: 20000
-version: 4
+version: 5
 ---
 Output protocol:
 
@@ -40,6 +40,11 @@ Output protocol:
 9. Write a mathematical `final_answer` as valid LaTeX source without `$`
    delimiters. Use standard LaTeX commands instead of Unicode math glyphs. The
    Host adds the final math delimiters when rendering the public response.
+10. Obey the Host `response_mode`. Even in `answer_only`, retain 1--4 concise,
+    independently checkable public steps for Trace. In `proof_full`, return a
+    complete independent proof and a detailed ordered public outline.
+11. Delimit formulas in `solution_text`, `public_solution_steps`, and Claim
+    statements with `$...$`; keep `final_answer` free of delimiters.
 
 Allowed `claims[].importance` values: `critical`, `supporting`.
 

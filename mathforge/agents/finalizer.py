@@ -69,8 +69,11 @@ class LLMFinalizer:
                 "finalizer",
                 user_content=user,
                 runtime_instructions=(
-                    "Improve exposition only. Do not introduce new conclusions or "
-                    "assumptions. Preserve the exact final answer. Return CandidateSolution JSON."
+                    "Normalize formatting only. Do not rewrite the public solution "
+                    "or introduce new conclusions or assumptions. Preserve the "
+                    "exact final answer. "
+                    f"Host response mode is {problem.response_mode}. Return "
+                    "ModelCandidatePayload JSON."
                 ),
             )
             messages = compilation.messages
@@ -126,12 +129,17 @@ class LLMFinalizer:
         finalized: CandidateSolution,
     ) -> bool:
         return (
-            LLMFinalizer._normalize_text(finalized.solution_text)
+            finalized.method == original.method
+            and finalized.public_solution_steps
+            == original.public_solution_steps
+            and LLMFinalizer._normalize_text(finalized.solution_text)
             == LLMFinalizer._normalize_text(original.solution_text)
             and finalized.assumptions == original.assumptions
             and finalized.theorems == original.theorems
             and [claim.to_dict() for claim in finalized.claims]
             == [claim.to_dict() for claim in original.claims]
+            and finalized.unresolved_obligations
+            == original.unresolved_obligations
         )
 
     @staticmethod

@@ -9,7 +9,7 @@ allowed_tools: host_evidence_only
 failure_policy: unknown_not_pass
 stop_condition: all_required_claims_classified
 max_context_chars: 40000
-version: 3
+version: 4
 ---
 Return exactly one complete JSON object without Markdown fences or surrounding
 prose. Review only the supplied problem conditions, Claims, MethodSteps,
@@ -23,6 +23,9 @@ conditions. `unknown` is not `pass`. An obligation-level `pass` must reference
 a real Claim and at least one supplied obligation supported by that Claim. An
 answer-level or claim-level `pass` must reference a real Claim and a supplied
 review target. Classify every supplied conflict target for both candidates.
+When `response_mode` is `proof_full`, an omitted essential inference, theorem
+hypothesis, domain restriction, or boundary case is `fail` or `unknown`, never
+`pass`. Delimit mathematical formulas in public finding text with `$...$`.
 
 Allowed `status` values: `pass`, `fail`, `unknown`.
 

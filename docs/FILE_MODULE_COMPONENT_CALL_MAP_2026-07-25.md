@@ -109,7 +109,7 @@
 |---|---|---|
 | `mathforge/agents/__init__.py` | 导出 Router 相关公共类 | 包级导入 |
 | `mathforge/agents/registry.py` | 解析 Prompt/Skill frontmatter，加载版本、角色、章节、指纹；渲染 system/user messages | Router、Solver、Verifier、Repair、Finalizer、Provenance |
-| `mathforge/agents/prompt_compiler.py` | 按题型/角色编译 minimal/standard/tool/proof Prompt，统一核心 Candidate 协议和动态输出预算 | Router、Solver、Verifier、Repair、Finalizer、Provenance |
+| `mathforge/agents/prompt_compiler.py` | 按题型/角色与 response mode 编译 Prompt，统一 ModelCandidatePayload 2.1、公开 LaTeX/步骤要求和动态输出预算 | Router、Solver、Verifier、Repair、Finalizer、Provenance |
 | `mathforge/agents/router_planner.py` | 硬编码领域信号、风险分析、方法族、Skill/Tool 选择；低置信度时可发 Router LLM 请求 | Runtime 调用；Prompt Contract、ProblemIR |
 | `mathforge/agents/solver.py` | `PrimarySolver`/`AlternativeSolver` 构造消息；`SolverExecutor` 消耗预算、调用 Provider、解析 Candidate | CandidateOrchestrator、Runtime |
 | `mathforge/agents/verifier.py` | VerifierSkeptic 批量审查 Claims/义务；解析 pass/fail/unknown；含 LemmaVerifier | Runtime、Lemma Loop、EvidenceLedger |
@@ -153,6 +153,7 @@
 | `mathforge/harness/provider.py` | 唯一模型访问边界；`ModelCallGate` 限并发，`OfficialClientProvider` 做 Context 分配和计量 | Runtime、所有 LLM 角色 |
 | `mathforge/harness/transport.py` | 将 Provider 异常归类为安全 Transport failure code，并记录外层尝试次数 | Provider、Runner、Trace Summary |
 | `mathforge/harness/repair.py` | `ClaimRepairService`：失败 Claim 影响闭包、版本化候选、局部再验证、回滚 | Runtime、RepairAgent、Evidence |
+| `mathforge/harness/model_candidate_contract.py` | 模型侧 ModelCandidatePayload/Patch 2.1 的字段所有权、必填集、兼容字段和精确 JSON 骨架 | PromptCompiler、SolutionParser、RepairAgent、契约测试 |
 | `mathforge/harness/schemas.py` | ProblemIR、RoutePlan、Candidate、Claim、Evidence、ProofObligation、Lemma、Session 等核心 Schema | 几乎所有组件 |
 | `mathforge/harness/session.py` | 每题创建 UUID Session、CallBudget、SessionMemory、LemmaMemory、RawContextStore | Runtime |
 | `mathforge/harness/state.py` | RuntimePhase 枚举和合法状态转换 | MathSession、Runtime、测试 |
@@ -179,7 +180,7 @@
 | `mathforge/parsing/latex.py` | 基础 LaTeX 花括号平衡检查 | ProblemParser、Formatting Tool |
 | `mathforge/parsing/normalization.py` | Unicode/数学符号/空白/换行规范化 | ProblemParser |
 | `mathforge/parsing/problem_parser.py` | 从自然语言识别 problem type、answer type、目标短语、假设、领域和风险标志 | Runtime、Benchmark、Router |
-| `mathforge/parsing/solution_parser.py` | 解析 Candidate，并区分完整、Schema 违约、截断、畸形、自然语言和空响应；拒绝 JSON wrapper 泄漏 | SolverExecutor、RepairAgent、Finalizer |
+| `mathforge/parsing/solution_parser.py` | 使用共享 ModelCandidatePayload 2.1 边界解析 Candidate，并区分完整、Schema 违约、截断、畸形、自然语言和空响应 | SolverExecutor、RepairAgent、Finalizer |
 
 ## 11. `mathforge.output`
 
@@ -368,6 +369,7 @@
 | `tests/test_public_interface.py` | Public Result 四字段/status/Trace | `output.public_result` |
 | `tests/test_repair.py` | Repair Scope 和局部 Patch | `harness.repair/verification.repair_scope` |
 | `tests/test_repair_runtime.py` | Runtime Repair 事务 | `runtime.py` |
+| `tests/test_t5_prompt_candidate_alignment.py` | response mode、LaTeX 公开步骤、共享模型 Candidate 边界和 Finalizer 所有权验收 | Phase T5 回归门 |
 | `tests/test_retrieval.py` | KnowledgeCard、SQLite 建库和检索状态 | `retrieval.*` |
 | `tests/test_role_context_runtime.py` | 角色 View、权限和 Runtime Context | `context.role_views` |
 | `tests/test_routing.py` | Router signals、Risk、Skill/Tool 选择 | `agents.router_planner` |

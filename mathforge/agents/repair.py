@@ -7,6 +7,10 @@ from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import ModelResponseError
+from mathforge.harness.model_candidate_contract import (
+    MODEL_CANDIDATE_HOST_FIELDS,
+    MODEL_CANDIDATE_PATCH_FIELDS,
+)
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import (
     CandidatePatch,
@@ -75,7 +79,7 @@ class RepairAgent:
                 "Return only replacement_claims, corrected local public steps, "
                 "the corrected or unchanged exact final answer, and unresolved "
                 "obligations. Do not rewrite unrelated content or emit native "
-                "tool calls."
+                f"tool calls. Host response mode is {problem.response_mode}."
             ),
         )
         messages = compilation.messages
@@ -126,6 +130,30 @@ class RepairAgent:
         if raw_replacements is None and "claims" in payload:
             raw_replacements = payload["claims"]
             deviations.append("claims:legacy_patch_alias")
+        normalized_patch_fields = set(payload)
+        if "claims" in normalized_patch_fields:
+            normalized_patch_fields.add("replacement_claims")
+            normalized_patch_fields.remove("claims")
+        deviations.extend(
+            f"{name}:missing"
+            for name in sorted(
+                MODEL_CANDIDATE_PATCH_FIELDS - normalized_patch_fields
+            )
+        )
+        deviations.extend(
+            f"{name}:host_owned"
+            for name in sorted(
+                MODEL_CANDIDATE_HOST_FIELDS.intersection(payload)
+            )
+        )
+        deviations.extend(
+            f"{name}:ignored"
+            for name in sorted(
+                normalized_patch_fields
+                - MODEL_CANDIDATE_PATCH_FIELDS
+                - MODEL_CANDIDATE_HOST_FIELDS
+            )
+        )
         if not isinstance(raw_replacements, list):
             raise ModelResponseError("repair_patch_invalid")
 

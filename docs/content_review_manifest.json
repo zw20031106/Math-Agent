@@ -33,20 +33,38 @@
       "path": "prompts",
       "pattern": "contract.md",
       "expected_count": 7,
-      "version": "prompt-contract-6-latex-output",
-      "engineering_reviewer": "codex-phase7-calibration-audit",
+      "version": "prompt-contract-7-response-mode-candidate-2.1",
+      "engineering_reviewer": "codex-phase-t5-prompt-audit",
       "review_date": "2026-07-31",
-      "sha256": "60cbd6e778c203e9cb3a3483edad1b7356ce914704ceec446d9464eba4fcb95e"
+      "sha256": "4778b9fe970aec42da4ec4baa2dbd3187bb1832867753842bc29c3f4fdfc4e74"
     },
     {
       "id": "prompt-compiler",
       "kind": "file",
       "path": "mathforge/agents/prompt_compiler.py",
       "expected_count": 1,
-      "version": "prompt-compiler-8-verification-targets",
-      "engineering_reviewer": "codex-phase6-verification-audit",
-      "review_date": "2026-07-30",
-      "sha256": "d7074d164bdb69d615bba01a28b8a081ee47162ab256fb788c32bbf2fd546d86"
+      "version": "prompt-compiler-9-response-mode-candidate-2.1",
+      "engineering_reviewer": "codex-phase-t5-prompt-audit",
+      "review_date": "2026-07-31",
+      "sha256": "a2a0644878499ddafce2528f80a3b1a883ceafa58c7084ca19c98e0b053e259a"
+    },
+    {
+      "id": "model-candidate-boundary",
+      "kind": "file_set",
+      "paths": [
+        "mathforge/harness/model_candidate_contract.py",
+        "mathforge/agents/prompt_compiler.py",
+        "mathforge/agents/solver.py",
+        "mathforge/agents/verifier.py",
+        "mathforge/agents/repair.py",
+        "mathforge/agents/finalizer.py",
+        "mathforge/parsing/solution_parser.py"
+      ],
+      "expected_count": 7,
+      "version": "model-candidate-boundary-2.1",
+      "engineering_reviewer": "codex-phase-t5-prompt-audit",
+      "review_date": "2026-07-31",
+      "sha256": "533bdb673f0c2b56cf6860c44c1ab1cc08b576977bead24011c8e10a4b363f70"
     },
     {
       "id": "reasoning-state",
@@ -132,10 +150,10 @@
         "mathforge/verification/proof_obligations.py"
       ],
       "expected_count": 14,
-      "version": "verification-closure-phase-t4-trace-3.7",
-      "engineering_reviewer": "codex-phase-t4-trace-audit",
+      "version": "verification-closure-phase-t5-response-mode",
+      "engineering_reviewer": "codex-phase-t5-prompt-audit",
       "review_date": "2026-07-31",
-      "sha256": "4c7a883e3ceb84a407c540803b9c86fd71b363516d2a65f228ad108165b77faa"
+      "sha256": "05754489b1fd86c789ea6a6f648462ad055433fe53c5cd2dff2d2982237bd428"
     },
     {
       "id": "reviewed-method-cards",

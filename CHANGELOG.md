@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added the shared executable `ModelCandidatePayload 2.1` boundary used by
+  Prompt compilation and Candidate parsing. Solver prompts now receive the
+  Host-owned response mode, require LaTeX-delimited public mathematics, retain
+  concise auditable steps for answer-only questions, and require a complete
+  bounded proof for proof questions. Aligned Verifier, Repair, and Finalizer
+  contracts and made Finalizer roll back any public-content rewrite.
 - Upgraded Judge Trace to 3.7 as a solution-first logical narrative: a new
   `workflow_overview` follows the detailed solution, model calls are attributed
   to fixed roles and candidate IDs in call order, successful alternatives keep
