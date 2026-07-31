@@ -9,10 +9,7 @@ from mathforge.config import (
     load_competition_config,
 )
 from mathforge.harness.lemma_loop import VerifiedLemmaLoop
-from mathforge.harness.reasoning_state import (
-    ProgressDeltaParser,
-    ReasoningState,
-)
+from mathforge.harness.reasoning_state import ReasoningState
 from mathforge.harness.schemas import (
     CandidateSolution,
     CheckSpec,

@@ -447,8 +447,8 @@ def test_competition_deadline_profile_is_explicit_and_preserves_terminal_reserve
     assert config.exploration_deadline_seconds == 720.0
     assert config.deterministic_finalize_reserve_seconds == 50.0
     assert config.model_queue_budget_seconds > 0
-    assert config.model_max_concurrency == 4
-    assert config.max_background_model_tails == 4
+    assert config.model_max_concurrency == 16
+    assert config.max_background_model_tails == 16
     assert config.hard_deadline_seconds < config.outer_platform_limit_seconds
 
     now = [0.0]

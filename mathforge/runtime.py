@@ -70,6 +70,7 @@ from mathforge.output.answer_validator import AnswerValidator
 from mathforge.output.deterministic_formatter import (
     DeterministicFormatter,
     bound_final_response,
+    canonical_final_response,
 )
 from mathforge.output.loop_health import (
     build_closed_loop_health,
@@ -2545,6 +2546,7 @@ class MathForgeHarness:
             final_response, final_count = self._validated_final_response(
                 final_response,
                 exact_answer=candidate.final_answer,
+                answer_type=candidate.answer_type,
             )
             trace.add(
                 "final_answer_selected",
@@ -2651,6 +2653,7 @@ class MathForgeHarness:
                             session.problem_ir,
                         ),
                         exact_answer=last_safe_candidate.final_answer,
+                        answer_type=last_safe_candidate.answer_type,
                     )[0],
                     last_safe_candidate.final_answer,
                 )
@@ -3371,11 +3374,23 @@ class MathForgeHarness:
             else "conflict"
         )
 
-    def _validated_final_response(self, text: str, *, exact_answer: str):
+    def _validated_final_response(
+        self,
+        text: str,
+        *,
+        exact_answer: str,
+        answer_type: str,
+    ):
+        text = canonical_final_response(
+            text,
+            exact_answer=exact_answer,
+            answer_type=answer_type,
+        )
         text = bound_final_response(
             text,
             exact_answer=exact_answer,
             max_chars=self._config.final_response_max_chars,
+            answer_type=answer_type,
         )
         try:
             return text, self._context_budget.ensure_text_within_window(text)

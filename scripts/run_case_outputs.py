@@ -35,6 +35,7 @@ from mathforge.benchmark import (  # noqa: E402
     run_benchmark,
     summarize,
 )
+from mathforge.evaluation.scoring import score_response  # noqa: E402
 from mathforge.harness.orchestration import candidate_trace_payload  # noqa: E402
 from mathforge.harness.budget import CallBudget  # noqa: E402
 from mathforge.harness.errors import (  # noqa: E402
@@ -1108,7 +1109,36 @@ def _safe_print(message: str) -> None:
 def write_case_output(record: BenchmarkRecord, output_dir: Path) -> Path:
     identifier = record.case.idx
     _validate_identifier(identifier)
-    payload = build_public_result(_json_identifier(identifier), record.result)
+    try:
+        payload = build_public_result(
+            _json_identifier(identifier),
+            record.result,
+        )
+    except ValueError:
+        failure_result = PerCaseWallClockRunner._failure_result(
+            record.case.problem,
+            {"idx": identifier},
+            record.latency_seconds,
+            "PublicOutputContractError",
+        )
+        answer_type = record.case.answer_type or ProblemParser().parse(
+            record.case.problem
+        ).answer_type
+        record.result = failure_result
+        record.json_valid = False
+        record.run_metrics = RunMetrics.from_dict(
+            failure_result["run_metrics"]
+        )
+        record.score = score_response(
+            record.case.expected_answer,
+            failure_result["final_response"],
+            answer_type=answer_type,
+            scorer=record.case.scorer,
+        )
+        payload = build_public_result(
+            _json_identifier(identifier),
+            failure_result,
+        )
     _validate_public_payload(payload, identifier)
     destination = _contained_case_path(output_dir, identifier)
     _atomic_write_json(destination, payload)

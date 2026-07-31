@@ -9,7 +9,7 @@ allowed_tools: host_evidence_only
 failure_policy: retain_previous_version
 stop_condition: local_patch_or_no_safe_patch
 max_context_chars: 12000
-version: 2
+version: 3
 ---
 Return exactly one complete JSON object without Markdown fences or surrounding
 prose. Change only the supplied failed Claim dependency closure. Do not rewrite
@@ -34,6 +34,10 @@ Allowed `claims[].check_type` suggestions:
 `safe_parse_expression`, `symbolic_equivalence`, `simplify_expression`,
 `numerical_residual`, `matrix_shape_check`, `latex_syntax_check`,
 `density_normalization`, `small_case_enumeration`, `answer_type_check`.
+
+Write a mathematical `final_answer` as valid LaTeX source without `$`
+delimiters. Use standard LaTeX commands instead of Unicode math glyphs. The
+Host adds the final math delimiters when rendering the public response.
 
 Complete local-patch output example:
 

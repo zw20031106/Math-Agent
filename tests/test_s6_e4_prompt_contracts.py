@@ -67,8 +67,9 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
         "finalizer",
     )
     expected_versions = {
-        "primary_solver": "5",
-        "alternative_solver": "3",
+        "primary_solver": "6",
+        "alternative_solver": "4",
+        "repair": "3",
         "verifier_skeptic": "3",
     }
     for role in roles:

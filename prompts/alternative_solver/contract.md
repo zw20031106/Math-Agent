@@ -9,7 +9,7 @@ allowed_tools: host_executed_checks_only
 failure_policy: isolated_branch_failure
 stop_condition: distinct_candidate
 max_context_chars: 20000
-version: 3
+version: 4
 ---
 Output protocol:
 
@@ -37,6 +37,9 @@ Output protocol:
 8. Address every applicable Host-planned problem obligation with public
    Claims and Claim-linked solution steps while preserving independence from
    the Primary method.
+9. Write a mathematical `final_answer` as valid LaTeX source without `$`
+   delimiters. Use standard LaTeX commands instead of Unicode math glyphs. The
+   Host adds the final math delimiters when rendering the public response.
 
 Allowed `claims[].importance` values: `critical`, `supporting`.
 

@@ -5,8 +5,6 @@ import json
 from pathlib import Path
 from threading import Barrier, Lock
 
-import pytest
-
 from mathforge.agents.router_planner import RouterRuleEngine
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.harness.budget import CallBudget

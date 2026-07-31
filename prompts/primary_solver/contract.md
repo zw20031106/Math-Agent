@@ -9,7 +9,7 @@ allowed_tools: host_executed_checks_only
 failure_policy: return_unresolved_obligations
 stop_condition: complete_candidate
 max_context_chars: 160000
-version: 5
+version: 6
 ---
 Output protocol:
 
@@ -42,6 +42,9 @@ Output protocol:
    this Solver call. Address each applicable obligation with a public Claim and
    Claim-linked solution step; do not merely copy an obligation into
    `unresolved_obligations`.
+9. Write a mathematical `final_answer` as valid LaTeX source without `$`
+   delimiters. Use standard LaTeX commands instead of Unicode math glyphs. The
+   Host adds the final math delimiters when rendering the public response.
 
 Allowed `claims[].importance` values: `critical`, `supporting`.
 

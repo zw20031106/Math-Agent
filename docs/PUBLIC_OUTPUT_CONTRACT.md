@@ -26,6 +26,12 @@
 公共结果没有 `result` 包装，也不暴露 `run_metrics`。后者只保留在内部
 Harness、Benchmark artifact 和逐题运行清单中。
 
+数学型答案（表达式、整数、分数、区间、集合、向量、元组、矩阵、多项式和
+代数结构）在 `final_response` 的唯一 `Final answer:` 块中统一使用
+`$...$` LaTeX 定界符；选择题字母和纯文本/证明结论不强制包装。Solver 与
+Repair 输出不带定界符的标准 LaTeX 源，Host Formatter 负责唯一化答案块并
+添加定界符，避免重复包装。
+
 ## Trace 内容
 
 公共 `trace` 使用 Judge Trace V3.5，是面向判分的有界审计叙事，不是内部
@@ -104,7 +110,7 @@ Formatter、Trace 和公共输出契约完整验证。只有三级全部通过�
 才允许重试一次；空响应、读超时、不完整 JSON 和 Schema 违约不重复发送同一
 大 Prompt。
 官方 Client 的内部尝试数固定为 1，外层每次尝试均进入结构化 Metrics。
-竞赛配置的模型调用 Gate 并发数为 4；`ReasoningAgent` 同时把活跃题目限制
+竞赛配置的模型调用 Gate 并发数为 16；`ReasoningAgent` 同时把活跃题目限制
 为 4，每题先调度 Primary，再启动可选 Alternative。本地逐题 runner 使用
 滚动 4 题窗口，不会一次性提交完整数据集。
 本地运行通过显式参数
@@ -125,7 +131,12 @@ Alternative 24,576、Primary 32,768 Token；总上下文仍为 262,144 Token，
 
 成功、失败和超时都会形成非空、可解析、带终态 Trace 的逐题 JSON。竞赛配置
 watchdog 为 900 秒，其中 Harness 最迟在 850 秒交还控制权，预留 50 秒
-完成序列化和写盘。每次模型排队最多使用 15 秒，角色调用超时从排队开始计算。
+完成序列化和写盘。Candidate 的精确答案最多 16,384 字符；
+`answer_recovered` 路径最多 4,096 字符。该限制始终是 Admission 硬门禁，
+不会因题型置信度较低而降为警告。如果仍有单题结果违反公共字符、Trace 或
+字节契约，runner 会把该题转换为带终态 Trace 的 `failed` JSON 并继续其他
+题，不会让一个异常答案中止整个批次。
+每次模型排队最多使用 15 秒，角色调用超时从排队开始计算。
 模型调用超时后，Python daemon thread 不会被伪称为已取消；它进入有上限的
 provider background tail，达到上限后 circuit-open，后续调用快速失败。迟到线程
 只能更新不含题目、Candidate 或 Session 引用的 provider 级登记，不能改写已经

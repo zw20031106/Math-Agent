@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from mathforge.verification.answer_normalization import canonical_answer  # noqa: E402
+from mathforge.evaluation.scoring import score_response  # noqa: E402
 
 
 def profile_run(
@@ -28,7 +28,7 @@ def profile_run(
         (
             path
             for path in run_dir.glob("*.json")
-            if path.name != "run_manifest.json"
+            if path.name != "run_manifest.json" and path.stem in dataset
         ),
         key=lambda path: path.stem,
     )
@@ -53,13 +53,24 @@ def profile_run(
         for item in cases
         if item["answer_matches_expected"] is not None
     ]
+    correct_answers = sum(public_matches)
     manifest_path = run_dir / "run_manifest.json"
     manifest = _read_json(manifest_path) if manifest_path.is_file() else {}
+    config_path = ROOT / "config" / "competition.json"
+    profiled_config_sha256 = _file_sha256(config_path)
+    run_config_sha256 = str(manifest.get("config_sha256", ""))
+    config_binding = {
+        "run_config_sha256": run_config_sha256,
+        "profiled_config_sha256": profiled_config_sha256,
+        "matches_current": bool(run_config_sha256)
+        and run_config_sha256 == profiled_config_sha256,
+    }
 
     profile = {
         "schema_version": "1.0",
-        "run_dir": str(run_dir.resolve()),
+        "run_dir": _public_path(run_dir),
         "dataset_sha256": _file_sha256(dataset_path),
+        "config_binding": config_binding,
         "expected_case_count": expected_cases,
         "persisted_case_count": len(cases),
         "output_coverage": _ratio(len(cases), expected_cases),
@@ -101,9 +112,19 @@ def profile_run(
             "max": max(latencies, default=0.0),
         },
         "max_peak_concurrency": max(scheduler_peaks, default=0),
+        "answer_scoring": {
+            "persisted_cases": len(cases),
+            "scored_outputs": len(public_matches),
+            "correct_outputs": correct_answers,
+            "coverage": _ratio(len(public_matches), len(cases)),
+            "accuracy_on_scored_outputs": _ratio(
+                correct_answers,
+                len(public_matches),
+            ),
+        },
         "answer_match_rate_on_persisted_cases": _ratio(
-            sum(public_matches),
-            len(public_matches),
+            correct_answers,
+            len(cases),
         ),
         "manifest": {
             "schema_version": manifest.get("schema_version", ""),
@@ -114,13 +135,15 @@ def profile_run(
         },
         "cases": cases,
         "comparisons": [
-            _comparison_summary(path) for path in comparison_dirs
+            _comparison_summary(path, expected_ids=set(dataset))
+            for path in comparison_dirs
         ],
     }
     evidence = {
         "schema_version": "1.0",
         "dataset": _file_record(dataset_path),
-        "config": _file_record(ROOT / "config" / "competition.json"),
+        "config": _file_record(config_path),
+        "config_binding": config_binding,
         "run_manifest": (
             _file_record(manifest_path) if manifest_path.is_file() else {}
         ),
@@ -144,12 +167,30 @@ def _profile_case(
     budget = _last_event(trace, "budget_summary")
     final = _last_event(trace, "final_answer_selected")
     terminal = _last_event(trace, "run_completed")
+    parsed = _last_event(trace, "problem_parsed")
     identifier = str(payload.get("id", path.stem))
-    expected = str(dataset.get(identifier, {}).get("answer", ""))
+    dataset_case = dataset.get(identifier, {})
+    expected = str(dataset_case.get("answer", ""))
     answer = str(
         final.get("public_solution", {}).get("final_answer", "")
         if isinstance(final.get("public_solution"), dict)
         else ""
+    )
+    answer_type = str(
+        parsed.get(
+            "answer_type",
+            dataset_case.get("answer_type", "expression"),
+        )
+    )
+    score = (
+        score_response(
+            expected,
+            f"Final answer: {answer}",
+            answer_type=answer_type,
+            scorer=dataset_case.get("scorer"),
+        )
+        if expected and answer
+        else None
     )
     return {
         "id": payload.get("id"),
@@ -195,18 +236,26 @@ def _profile_case(
         "model_call_records": list(budget.get("model_calls", [])),
         "expected_answer": expected,
         "public_answer": answer,
+        "answer_type": answer_type,
         "answer_matches_expected": (
-            _answers_match(expected, answer) if expected and answer else None
+            score.correct
+            if score is not None and score.scored and not score.error
+            else None
         ),
+        "answer_score": score.to_dict() if score is not None else {},
         "output_sha256": _file_sha256(path),
     }
 
 
-def _comparison_summary(directory: Path) -> dict[str, Any]:
+def _comparison_summary(
+    directory: Path,
+    *,
+    expected_ids: set[str],
+) -> dict[str, Any]:
     paths = [
         path
         for path in directory.glob("*.json")
-        if path.name != "run_manifest.json"
+        if path.name != "run_manifest.json" and path.stem in expected_ids
     ]
     statuses = Counter()
     for path in paths:
@@ -219,19 +268,12 @@ def _comparison_summary(directory: Path) -> dict[str, Any]:
     manifest_path = directory / "run_manifest.json"
     manifest = _read_json(manifest_path) if manifest_path.is_file() else {}
     return {
-        "run_dir": str(directory.resolve()),
+        "run_dir": _public_path(directory),
         "persisted_case_count": len(paths),
         "status_counts": dict(sorted(statuses.items())),
         "manifest_status": manifest.get("status", "missing"),
         "attempt_count": manifest.get("attempt_count", 0),
     }
-
-
-def _answers_match(expected: str, actual: str) -> bool:
-    return canonical_answer(expected, "expression") == canonical_answer(
-        actual,
-        "expression",
-    )
 
 
 def _load_dataset(path: Path) -> dict[str, dict[str, Any]]:
@@ -296,10 +338,18 @@ def _file_sha256(path: Path) -> str:
 
 def _file_record(path: Path) -> dict[str, Any]:
     return {
-        "path": str(path.resolve()),
+        "path": _public_path(path),
         "bytes": path.stat().st_size,
         "sha256": _file_sha256(path),
     }
+
+
+def _public_path(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        return f"<external>/{resolved.name}"
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -332,7 +382,21 @@ def main() -> int:
     )
     _write_json(args.output, profile)
     _write_json(args.evidence_output, evidence)
-    print(json.dumps(profile, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "output": _public_path(args.output),
+                "evidence_output": _public_path(args.evidence_output),
+                "persisted_case_count": profile["persisted_case_count"],
+                "output_coverage": profile["output_coverage"],
+                "success_rate": profile["success_rate"],
+                "freeze_config_match": profile["config_binding"][
+                    "matches_current"
+                ],
+            },
+            ensure_ascii=True,
+        )
+    )
     return 0
 
 

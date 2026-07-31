@@ -21,7 +21,7 @@ class HarnessConfig:
     schema_version: str = CONFIG_SCHEMA_VERSION
     profile: str = "custom"
     status: str = "custom"
-    model_max_concurrency: int = 4
+    model_max_concurrency: int = 16
     primary_temperature: float = 0.2
     primary_max_tokens: int = 0
     max_model_calls: int = 6
@@ -38,7 +38,7 @@ class HarnessConfig:
     model_call_start_margin_seconds: float = 135.0
     outer_platform_limit_seconds: float = 1200.0
     model_queue_budget_seconds: float = 15.0
-    max_background_model_tails: int = 4
+    max_background_model_tails: int = 16
     late_result_registry_max_entries: int = 64
     trace_max_chars: int = 0
     trace_max_events: int = 0

@@ -263,6 +263,41 @@ def test_live_model_latex_and_unicode_forms_score_symbolically(
     assert result.reason == "symbolic_equivalent"
 
 
+@pytest.mark.parametrize(
+    ("expected", "actual", "answer_type", "reason"),
+    [
+        (r"-\pi i", r"-i\pi", "expression", "symbolic_equivalent"),
+        (
+            r"\{\lambda\in\mathbb C:|\lambda|\le1\}",
+            "{λ ∈ ℂ : |λ| ≤ 1}",
+            "set",
+            "set_equivalent",
+        ),
+        (
+            r"(16/19,15/19)^T",
+            r"\begin{pmatrix}16/19\\15/19\end{pmatrix}",
+            "vector",
+            "vector_equivalent",
+        ),
+    ],
+)
+def test_live_equivalent_answer_forms_are_not_false_negatives(
+    expected,
+    actual,
+    answer_type,
+    reason,
+):
+    result = score_response(
+        expected,
+        f"Final answer: {actual}",
+        answer_type=answer_type,
+    )
+
+    assert result.scored is True
+    assert result.correct is True
+    assert result.reason == reason
+
+
 def test_runtime_trace_records_parser_target_and_confidence():
     config = HarnessConfig(
         profile="test",

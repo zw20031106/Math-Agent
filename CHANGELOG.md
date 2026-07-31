@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Raised the default and Competition physical model-call concurrency limit from
+  4 to 16 while retaining the four-case runner window, and raised the
+  background-tail capacity to the same bound.
+- Canonicalized mathematical final answers as LaTeX-delimited public output,
+  with matching Solver/Repair prompt contracts and deterministic formatting.
+- Bound live profiles to the exact run configuration, redacted external
+  absolute paths, and replaced string-only answer comparison with the official
+  type-aware scorer before configuration freeze decisions.
+- Rejected oversized exact or regex-recovered answers during Candidate
+  admission and contained a public-output contract failure to the affected
+  case, preventing one malformed answer from aborting concurrent peer outputs.
+- Extended type-aware scoring for commuted imaginary products, Unicode number
+  fields, and LaTeX row/column vectors discovered in the Phase 7 live run.
+
 ### 0730 stability remediation phases 0-6 (2026-07-30)
 
 - Added reproducible Phase 0 reliability, general high-difficulty, and

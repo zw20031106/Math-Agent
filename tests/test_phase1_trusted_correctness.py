@@ -141,6 +141,31 @@ def test_candidate_admission_rejects_fatal_answer_contract_errors():
     assert "invalid_integer" in decision.rejection_codes
 
 
+def test_candidate_admission_rejects_overlong_recovered_answer_at_low_confidence():
+    problem = ProblemIR(
+        raw_problem="Return an expression.",
+        normalized_problem="Return an expression.",
+        problem_type="calculation",
+        answer_type="expression",
+        answer_type_confidence=0.78,
+    )
+    candidate = CandidateSolution(
+        "candidate",
+        "PrimarySolver",
+        "direct-deduction",
+        "x" * 5000,
+        "expression",
+        claims=[Claim("c1", "The expression is the answer")],
+        parse_status="regex_answer",
+        parse_tier="answer_recovered",
+    )
+
+    decision = CandidateAdmissionGate().evaluate(candidate, problem)
+
+    assert decision.accepted is False
+    assert "recovered_answer_too_long" in decision.rejection_codes
+
+
 def test_candidate_admission_treats_method_text_deviation_as_diversity_signal():
     problem = ProblemIR(
         raw_problem="Return an integer.",

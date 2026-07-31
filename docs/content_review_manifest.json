@@ -33,10 +33,10 @@
       "path": "prompts",
       "pattern": "contract.md",
       "expected_count": 7,
-      "version": "prompt-contract-5-verification-closure",
-      "engineering_reviewer": "codex-phase6-verification-audit",
-      "review_date": "2026-07-30",
-      "sha256": "6862d9d1b3bf33c947162e6f4904b73497e351348ed2355e3f918095acd4a1a7"
+      "version": "prompt-contract-6-latex-output",
+      "engineering_reviewer": "codex-phase7-calibration-audit",
+      "review_date": "2026-07-31",
+      "sha256": "60cbd6e778c203e9cb3a3483edad1b7356ce914704ceec446d9464eba4fcb95e"
     },
     {
       "id": "prompt-compiler",
@@ -125,16 +125,17 @@
         "mathforge/output/loop_health.py",
         "mathforge/runtime.py",
         "mathforge/verification/arbitration.py",
+        "mathforge/verification/admission.py",
         "mathforge/verification/completion.py",
         "mathforge/verification/cross_review.py",
         "mathforge/verification/evidence.py",
         "mathforge/verification/proof_obligations.py"
       ],
-      "expected_count": 13,
-      "version": "verification-closure-phase6",
-      "engineering_reviewer": "codex-phase6-verification-audit",
-      "review_date": "2026-07-30",
-      "sha256": "e1c5907ecfa816950b7e28939a9eee3b6eae8d457a35eeba0b97e204cc8b27ce"
+      "expected_count": 14,
+      "version": "verification-closure-phase7-output",
+      "engineering_reviewer": "codex-phase7-calibration-audit",
+      "review_date": "2026-07-31",
+      "sha256": "46bed013ed2e3c30106e8044371b9713710b6ed148a6c9ef1e33e9238a1d3267"
     },
     {
       "id": "reviewed-method-cards",
@@ -170,15 +171,32 @@
       "kind": "file_set",
       "paths": [
         "mathforge/verification/answer_normalization.py",
+        "mathforge/evaluation/scoring.py",
         "mathforge/tools/formatting.py",
         "mathforge/output/answer_validator.py",
+        "mathforge/output/deterministic_formatter.py",
         "mathforge/verification/equivalence.py"
       ],
+      "expected_count": 6,
+      "version": "answer-normalization-2-latex-output",
+      "engineering_reviewer": "codex-phase7-calibration-audit",
+      "review_date": "2026-07-31",
+      "sha256": "4d926ed79588348f6d6b89fde44e62443159448874c6a09784db3d99ce3303b1"
+    },
+    {
+      "id": "phase7-live-calibration",
+      "kind": "file_set",
+      "paths": [
+        "config/competition.json",
+        "scripts/run_case_outputs.py",
+        "scripts/profile_live_runs.py",
+        "scripts/propose_competition_config.py"
+      ],
       "expected_count": 4,
-      "version": "answer-normalization-1",
-      "engineering_reviewer": "codex-phase4-evidence-audit",
-      "review_date": "2026-07-26",
-      "sha256": "6b0be93ffcc18959369ee9206017d4d99dbbc71c53077a120a3f1e4629251892"
+      "version": "phase7-live-calibration-1",
+      "engineering_reviewer": "codex-phase7-calibration-audit",
+      "review_date": "2026-07-31",
+      "sha256": "25a84835451e11a8fd983042fc108134148c59e3363a7b36876a528df54060bd"
     },
     {
       "id": "router-calibration",

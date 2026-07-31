@@ -71,3 +71,33 @@ def test_completed_case_is_written_before_a_slow_peer_finishes(tmp_path):
         worker.join(timeout=3)
     assert run_finished.is_set()
     assert (tmp_path / "1.json").exists()
+
+
+def test_oversized_case_becomes_failed_output_without_aborting_peer(tmp_path):
+    def solve(problem, _metadata):
+        response = "x" * 21000 if problem == "oversized" else "Final answer: 2"
+        return {
+            "final_response": response,
+            "trace": [{"event": "run_completed", "outcome": "primary"}],
+        }
+
+    records, _ = run_benchmark(
+        [
+            BenchmarkCase("1", "oversized"),
+            BenchmarkCase("2", "normal"),
+        ],
+        solve,
+        concurrency=2,
+        on_record_completed=lambda record: write_case_output(
+            record,
+            tmp_path,
+        ),
+    )
+
+    oversized = json.loads((tmp_path / "1.json").read_text(encoding="utf-8"))
+    normal = json.loads((tmp_path / "2.json").read_text(encoding="utf-8"))
+    assert oversized["status"] == "failed"
+    assert oversized["trace"][-1]["event"] == "run_completed"
+    assert normal["status"] == "success"
+    assert records[0].run_metrics.outcome == "error"
+    assert records[1].run_metrics.outcome == "primary"

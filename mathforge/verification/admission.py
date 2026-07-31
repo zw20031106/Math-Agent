@@ -71,7 +71,11 @@ class CandidateAdmissionGate:
             rejection_codes.extend(answer_errors)
         else:
             for error in answer_errors:
-                if error == "empty_answer":
+                if error in {
+                    "empty_answer",
+                    "final_answer_too_long",
+                    "recovered_answer_too_long",
+                }:
                     rejection_codes.append(error)
                 else:
                     warning_codes.append(

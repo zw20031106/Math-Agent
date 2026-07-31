@@ -53,8 +53,8 @@
   ],
   "config": {
     "path": "config/competition.json",
-    "bytes": 1619,
-    "sha256": "07d134f6836295f205cc22a24875ae0ef45b988aab892ecc75c9f87d71642225"
+    "bytes": 1621,
+    "sha256": "9d8bc2668735dd56f6483e4cd6f57493b6ec6705a0586e65434f8c50e54db194"
   },
   "metrics": {
     "answer_equivalence_accuracy": "correct symbolic-equivalence canaries / all canaries",

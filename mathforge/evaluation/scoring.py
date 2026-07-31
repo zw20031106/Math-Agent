@@ -382,6 +382,24 @@ def _parse_sequence(
     expected: bool,
 ) -> tuple[sympy.Expr, ...]:
     normalized = _normalize_scalar(value)
+    latex = re.fullmatch(
+        r"\\begin\{(?:p|b|v)?matrix\}(.*?)\\end\{(?:p|b|v)?matrix\}",
+        normalized,
+        re.DOTALL,
+    )
+    if latex:
+        rows = [
+            [item.strip() for item in row.split("&") if item.strip()]
+            for row in re.split(r"\\\\", latex.group(1))
+            if row.strip()
+        ]
+        if rows and all(len(row) == 1 for row in rows):
+            parts = [row[0] for row in rows]
+        elif len(rows) == 1:
+            parts = rows[0]
+        else:
+            parts = []
+        return _parse_sequence_parts(parts, expected=expected)
     normalized = re.sub(
         r"(?:\^\{?(?:T|\\top)\}?|[′'])\s*$",
         "",
@@ -395,6 +413,14 @@ def _parse_sequence(
     ):
         normalized = normalized[1:-1].strip()
     parts = _split_top_level(normalized.replace("，", ","), ",")
+    return _parse_sequence_parts(parts, expected=expected)
+
+
+def _parse_sequence_parts(
+    parts: list[str],
+    *,
+    expected: bool,
+) -> tuple[sympy.Expr, ...]:
     try:
         if len(parts) < 2 or any(not part for part in parts):
             raise ValueError("invalid sequence")
@@ -509,6 +535,7 @@ def _normalize_expression(value: str) -> str:
     normalized = normalized.replace(r"\alpha", "alpha")
     normalized = normalized.replace(r"\beta", "beta")
     normalized = re.sub(r"(?<![A-Za-z])e(?![A-Za-z])", "E", normalized)
+    normalized = re.sub(r"(?<![A-Za-z])i(?=pi)", "I*", normalized)
     normalized = re.sub(r"(?<![A-Za-z])i(?![A-Za-z])", "I", normalized)
     normalized = re.sub(r"\^\{([^{}]+)\}", r"^(\1)", normalized)
     normalized = normalized.replace("{", "(").replace("}", ")")
@@ -516,6 +543,7 @@ def _normalize_expression(value: str) -> str:
     normalized = re.sub(r"(?<=\d)(?=[A-Za-z])", "*", normalized)
     normalized = re.sub(r"(?<=\d)(?=\()", "*", normalized)
     normalized = normalized.replace("piI", "pi*I")
+    normalized = normalized.replace("Ipi", "I*pi")
     normalized = normalized.replace("I(", "I*(")
     normalized = re.sub(r"(?<=\))(?=[A-Za-z0-9(])", "*", normalized)
     return normalized.strip()
@@ -580,6 +608,11 @@ def _normalize_math_structure(value: str) -> str:
         r"\mathbb": "",
         r"\{": "{",
         r"\}": "}",
+        "ℂ": "C",
+        "ℝ": "R",
+        "ℚ": "Q",
+        "ℤ": "Z",
+        "ℕ": "N",
     }
     for source, target in replacements.items():
         normalized = normalized.replace(source, target)
