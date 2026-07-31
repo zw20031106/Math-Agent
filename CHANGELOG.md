@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added a reproducible, path-safe T0 public-output baseline over the sixth
+  88-case live run, covering final-response shape, Judge Trace size and event
+  distribution, first-event semantics, candidate-content coverage, and output
+  contract integrity without storing prompts, credentials, or problem text.
 - Raised the default and Competition physical model-call concurrency limit from
   4 to 16 while retaining the four-case runner window, and raised the
   background-tail capacity to the same bound.

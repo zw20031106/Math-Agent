@@ -1,0 +1,143 @@
+{
+  "schema_version": "1.0",
+  "purpose": "pre-T1 public output contract baseline",
+  "source": {
+    "run": "<external>/第六次测试",
+    "dataset": "<external>/dev_set_2.jsonl",
+    "dataset_sha256": "e46832a0c1231204601bbcd8855f870a84a6110eaf83243096da6b04e5902d9b",
+    "run_manifest_sha256": "822b107bab8da8d38b012bea7826dd5869b34edb9f071d5a013552f9c91aad64",
+    "case_outputs_sha256": "7eebe8ffa6a01de97d51ebe976e9d9a0c3822f2db13f35195486f10cc95c88e4"
+  },
+  "coverage": {
+    "expected_cases": 88,
+    "persisted_cases": 88,
+    "public_contract_valid_cases": 88,
+    "status_counts": {
+      "failed": 2,
+      "success": 86
+    }
+  },
+  "final_response": {
+    "characters": {
+      "p50": 564.5,
+      "p95": 1050.6,
+      "max": 1770
+    },
+    "multiline_cases": 86,
+    "canonical_answer_block_cases": 86,
+    "latex_cases": 86
+  },
+  "trace": {
+    "characters": {
+      "p50": 24517.0,
+      "p95": 27990.45,
+      "max": 31703
+    },
+    "events_per_case": {
+      "p50": 19.0,
+      "p95": 20.0,
+      "max": 22
+    },
+    "first_event_counts": {
+      "session_started": 88
+    },
+    "solution_process_first_cases": 0,
+    "candidate_content_cases": 24,
+    "event_counts": {
+      "budget_summary": 88,
+      "candidate_arbitrated": 86,
+      "candidate_summaries": 47,
+      "closed_loop_health": 88,
+      "decision_summary": 88,
+      "effective_config_snapshot": 88,
+      "evidence_summary": 88,
+      "fallback_used": 2,
+      "final_answer_selected": 86,
+      "long_horizon_planned": 88,
+      "problem_obligations_planned": 88,
+      "problem_parsed": 88,
+      "proof_completion_summary": 88,
+      "reasoning_loop_completed": 88,
+      "reasoning_state_initialized": 88,
+      "round_summary": 77,
+      "route_planned": 88,
+      "run_completed": 88,
+      "session_started": 88,
+      "skills_selected": 88,
+      "tool_feedback_completed": 1,
+      "verifier_completed": 39
+    },
+    "largest_event_types": [
+      {
+        "event": "skills_selected",
+        "count": 88,
+        "p50_chars": 11181.5,
+        "p95_chars": 11406.7,
+        "max_chars": 11588
+      },
+      {
+        "event": "budget_summary",
+        "count": 88,
+        "p50_chars": 2034.5,
+        "p95_chars": 3518.9,
+        "max_chars": 3734
+      },
+      {
+        "event": "effective_config_snapshot",
+        "count": 88,
+        "p50_chars": 2288.0,
+        "p95_chars": 2288.0,
+        "max_chars": 2288
+      },
+      {
+        "event": "candidate_summaries",
+        "count": 47,
+        "p50_chars": 1008.0,
+        "p95_chars": 1960.1,
+        "max_chars": 2121
+      },
+      {
+        "event": "final_answer_selected",
+        "count": 86,
+        "p50_chars": 1003.5,
+        "p95_chars": 1597.75,
+        "max_chars": 1815
+      },
+      {
+        "event": "tool_feedback_completed",
+        "count": 1,
+        "p50_chars": 1732.0,
+        "p95_chars": 1732.0,
+        "max_chars": 1732
+      },
+      {
+        "event": "decision_summary",
+        "count": 88,
+        "p50_chars": 1108.5,
+        "p95_chars": 1217.9,
+        "max_chars": 1245
+      },
+      {
+        "event": "session_started",
+        "count": 88,
+        "p50_chars": 973.0,
+        "p95_chars": 973.0,
+        "max_chars": 973
+      },
+      {
+        "event": "round_summary",
+        "count": 77,
+        "p50_chars": 676.0,
+        "p95_chars": 750.0,
+        "max_chars": 924
+      },
+      {
+        "event": "closed_loop_health",
+        "count": 88,
+        "p50_chars": 818.0,
+        "p95_chars": 876.0,
+        "max_chars": 907
+      }
+    ]
+  }
+}
