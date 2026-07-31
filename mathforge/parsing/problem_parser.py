@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
-from mathforge.harness.schemas import ProblemIR
+from mathforge.harness.schemas import (
+    AnswerType,
+    ProblemIR,
+    ProblemType,
+    ResponseMode,
+)
 from mathforge.parsing.latex import braces_balanced
 from mathforge.parsing.normalization import normalize_problem
 
@@ -67,7 +73,11 @@ _SCALAR_TARGETS = (
 
 
 class ProblemParser:
-    def parse(self, problem: str) -> ProblemIR:
+    def parse(
+        self,
+        problem: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> ProblemIR:
         raw = problem if isinstance(problem, str) else str(problem)
         normalized = normalize_problem(raw)
         lowered = normalized.lower()
@@ -75,12 +85,29 @@ class ProblemParser:
         requested_output = self._requested_output(normalized)
         target_phrase, target_confidence = self._target_phrase(requested_output)
         target_lowered = target_phrase.lower()
-        problem_type = self._problem_type(target_lowered, options)
+        problem_type = self._metadata_enum(
+            metadata,
+            "problem_type",
+            ProblemType,
+        ) or self._problem_type(target_lowered, options)
         answer_type, type_confidence = self._answer_type(
             target_lowered,
             problem_type,
             lowered,
         )
+        metadata_answer_type = self._metadata_enum(
+            metadata,
+            "answer_type",
+            AnswerType,
+        )
+        if metadata_answer_type:
+            answer_type = metadata_answer_type
+            type_confidence = 1.0
+        response_mode = self._metadata_enum(
+            metadata,
+            "response_mode",
+            ResponseMode,
+        ) or self._response_mode(problem_type, lowered)
         parser_confidence = round(
             min(target_confidence, type_confidence),
             4,
@@ -126,6 +153,7 @@ class ProblemParser:
             normalized_problem=normalized,
             problem_type=problem_type,
             answer_type=answer_type,
+            response_mode=response_mode,
             symbols=sorted(set(_SYMBOL_PATTERN.findall(normalized))),
             assumptions=assumptions,
             domains=domains,
@@ -148,6 +176,59 @@ class ProblemParser:
         )
         parsed.validate()
         return parsed
+
+    @staticmethod
+    def _metadata_enum(
+        metadata: dict[str, Any] | None,
+        key: str,
+        enum_type,
+    ) -> str:
+        if not isinstance(metadata, dict):
+            return ""
+        value = metadata.get(key)
+        if not isinstance(value, str):
+            return ""
+        normalized = value.strip().lower()
+        return (
+            normalized
+            if normalized in {item.value for item in enum_type}
+            else ""
+        )
+
+    @staticmethod
+    def _response_mode(problem_type: str, lowered: str) -> str:
+        if problem_type == ProblemType.PROOF.value or any(
+            marker in lowered
+            for marker in (
+                "证明",
+                "证实",
+                "试证",
+                "prove ",
+                "prove that",
+                "show that",
+            )
+        ):
+            return ResponseMode.PROOF_FULL.value
+        if problem_type in {
+            ProblemType.DERIVATION.value,
+            ProblemType.EXPLANATION.value,
+        } or any(
+            marker in lowered
+            for marker in (
+                "写出过程",
+                "给出过程",
+                "推导",
+                "说明理由",
+                "解释原因",
+                "show your work",
+                "derive",
+                "deduce",
+                "explain",
+                "justify",
+            )
+        ):
+            return ResponseMode.WORKED_SOLUTION.value
+        return ResponseMode.ANSWER_ONLY.value
 
     @staticmethod
     def _problem_type(lowered: str, options: list[str]) -> str:

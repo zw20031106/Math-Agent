@@ -107,7 +107,7 @@ def test_problem_ir_v2_round_trip_has_structural_fields():
     )
     restored = ProblemIR.from_dict(problem.to_dict())
 
-    assert restored.schema_version == "2.0"
+    assert restored.schema_version == ProblemIR.SCHEMA_VERSION
     assert restored.definitions
     assert restored.quantifiers
     assert len(restored.constraints) >= 3

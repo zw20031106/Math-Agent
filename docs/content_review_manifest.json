@@ -107,10 +107,10 @@
         "mathforge/harness/schemas.py"
       ],
       "expected_count": 3,
-      "version": "typed-lemma-feedback-2-proof-origin",
-      "engineering_reviewer": "codex-phase6-verification-audit",
-      "review_date": "2026-07-30",
-      "sha256": "b633e81640963f1f33caa90e8ef4bad764ad55520a6f2c4061bb10ab87e1ebdd"
+      "version": "typed-lemma-feedback-3-response-mode",
+      "engineering_reviewer": "codex-phase-t1-response-mode-audit",
+      "review_date": "2026-07-31",
+      "sha256": "d1f0f01fab51655e76cb8d7376f2b579297baeb9dc893786b38e1858aa712f3b"
     },
     {
       "id": "verification-closure",
@@ -132,10 +132,10 @@
         "mathforge/verification/proof_obligations.py"
       ],
       "expected_count": 14,
-      "version": "verification-closure-phase7-output",
-      "engineering_reviewer": "codex-phase7-calibration-audit",
+      "version": "verification-closure-phase-t1-response-mode",
+      "engineering_reviewer": "codex-phase-t1-response-mode-audit",
       "review_date": "2026-07-31",
-      "sha256": "46bed013ed2e3c30106e8044371b9713710b6ed148a6c9ef1e33e9238a1d3267"
+      "sha256": "bd34a82eefeb1f9cb385ae65ed4b40feada2519389fda7973e2d662aa13c13ad"
     },
     {
       "id": "reviewed-method-cards",

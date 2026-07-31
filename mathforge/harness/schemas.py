@@ -14,7 +14,7 @@ from mathforge.harness.state import (
 
 
 CORE_SCHEMA_VERSION = "1.2"
-PROBLEM_IR_SCHEMA_VERSION = "2.0"
+PROBLEM_IR_SCHEMA_VERSION = "2.1"
 CANDIDATE_SCHEMA_VERSION = "2.0"
 MAX_CLAIMS = 64
 MAX_METHOD_STEPS = 64
@@ -87,6 +87,12 @@ class AnswerType(str, Enum):
     POLYNOMIAL = "polynomial"
     ALGEBRAIC_STRUCTURE = "algebraic_structure"
     TEXT = "text"
+
+
+class ResponseMode(str, Enum):
+    ANSWER_ONLY = "answer_only"
+    WORKED_SOLUTION = "worked_solution"
+    PROOF_FULL = "proof_full"
 
 
 class TargetKind(str, Enum):
@@ -257,6 +263,7 @@ class ProblemIR:
     normalized_problem: str
     problem_type: str
     answer_type: str
+    response_mode: str = ResponseMode.ANSWER_ONLY.value
     subject_candidates: list[tuple[str, float]] = field(default_factory=list)
     symbols: list[str] = field(default_factory=list)
     assumptions: list[str] = field(default_factory=list)
@@ -283,6 +290,7 @@ class ProblemIR:
             "normalized_problem": self.normalized_problem,
             "problem_type": self.problem_type,
             "answer_type": self.answer_type,
+            "response_mode": self.response_mode,
             "subject_candidates": [list(item) for item in self.subject_candidates],
             "symbols": list(self.symbols),
             "assumptions": list(self.assumptions),
@@ -310,6 +318,7 @@ class ProblemIR:
             self.normalized_problem,
             self.problem_type,
             self.answer_type,
+            self.response_mode,
             self.requested_output,
             self.target_phrase,
             self.target_kind,
@@ -320,6 +329,10 @@ class ProblemIR:
             raise SchemaValidationError(f"invalid problem type: {self.problem_type}")
         if self.answer_type not in {item.value for item in AnswerType}:
             raise SchemaValidationError(f"invalid answer type: {self.answer_type}")
+        if self.response_mode not in {item.value for item in ResponseMode}:
+            raise SchemaValidationError(
+                f"invalid response mode: {self.response_mode}"
+            )
         if self.target_kind not in {item.value for item in TargetKind}:
             raise SchemaValidationError(f"invalid target kind: {self.target_kind}")
         if (
@@ -375,6 +388,7 @@ class ProblemIR:
             "normalized_problem",
             "problem_type",
             "answer_type",
+            "response_mode",
             "subject_candidates",
             "symbols",
             "assumptions",
@@ -401,6 +415,7 @@ class ProblemIR:
                 "normalized_problem",
                 "problem_type",
                 "answer_type",
+                "response_mode",
                 "requested_output",
                 "target_phrase",
                 "target_kind",
@@ -434,6 +449,7 @@ class ProblemIR:
             normalized_problem=strings["normalized_problem"],
             problem_type=strings["problem_type"],
             answer_type=strings["answer_type"],
+            response_mode=strings["response_mode"],
             subject_candidates=[
                 tuple(item) if isinstance(item, list) else item
                 for item in raw_subjects

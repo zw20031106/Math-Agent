@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Upgraded ProblemIR to 2.1 with a Host-owned `response_mode` contract
+  (`answer_only`, `worked_solution`, or `proof_full`), deterministic Chinese
+  and English instruction classification, and validated public-metadata
+  overrides without consuming another model call.
 - Added a reproducible, path-safe T0 public-output baseline over the sixth
   88-case live run, covering final-response shape, Judge Trace size and event
   distribution, first-event semantics, candidate-content coverage, and output

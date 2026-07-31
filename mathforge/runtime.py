@@ -141,6 +141,9 @@ _PUBLIC_METADATA_KEYS = (
     "id",
     "benchmark_nonce",
     "case_id",
+    "problem_type",
+    "answer_type",
+    "response_mode",
 )
 
 
@@ -436,7 +439,10 @@ class MathForgeHarness:
 
         try:
             session.budget.ensure_stage("problem_parser")
-            session.problem_ir = self._problem_parser.parse(normalized_problem)
+            session.problem_ir = self._problem_parser.parse(
+                normalized_problem,
+                metadata=safe_metadata,
+            )
             session.problem_ir.validate()
             blackboard = MemoryBlackboard(session.working_memory)
             if self._shadow_executor is not None:
@@ -505,6 +511,7 @@ class MathForgeHarness:
                 "problem_parsed",
                 problem_type=session.problem_ir.problem_type,
                 answer_type=session.problem_ir.answer_type,
+                response_mode=session.problem_ir.response_mode,
                 answer_type_confidence=(
                     session.problem_ir.answer_type_confidence
                 ),
