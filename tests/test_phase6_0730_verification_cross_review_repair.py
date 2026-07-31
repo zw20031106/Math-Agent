@@ -18,7 +18,10 @@ from mathforge.harness.schemas import (
     ProofObligation,
 )
 from mathforge.parsing.problem_parser import ProblemParser
-from mathforge.output.judge_trace import project_judge_trace
+from mathforge.output.judge_trace import (
+    JUDGE_TRACE_SCHEMA_VERSION,
+    project_judge_trace,
+)
 from mathforge.runtime import MathForgeHarness
 from mathforge.verification.arbitration import ArbitrationPolicy
 from mathforge.verification.cross_review import (
@@ -513,7 +516,7 @@ def test_runtime_does_not_start_repair_without_atomic_call_pair():
         "selected_evidence_tier"
     ] == "incomplete"
     assert all(
-        event["schema_version"] == "3.5"
+        event["schema_version"] == JUDGE_TRACE_SCHEMA_VERSION
         for event in public_trace
     )
     assert "PRIVATE-" not in json.dumps(

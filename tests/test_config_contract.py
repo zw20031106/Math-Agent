@@ -120,16 +120,19 @@ def test_public_and_benchmark_use_the_same_semantic_config_hash(
     monkeypatch.setattr(config_module, "COMPETITION_CONFIG_PATH", config_path)
 
     result = ReasoningAgent(FakeClient()).solve("1 + 1", {})
-    public_hash = result["trace"][0]["config_hash"]
+    session = next(
+        event for event in result["trace"] if event["event"] == "session_started"
+    )
+    public_hash = session["config_hash"]
     metadata = build_benchmark_metadata(dataset, config_path)
     benchmark_hash = metadata["config_sha256"]
 
     assert public_hash == benchmark_hash == config.fingerprint
-    assert result["trace"][0]["config_schema_version"] == HarnessConfig.SCHEMA_VERSION
-    assert result["trace"][0]["prompt_hash"] == metadata["prompt_sha256"]
-    assert result["trace"][0]["skill_hash"] == metadata["skill_sha256"]
-    assert result["trace"][0]["rag_hash"] == metadata["rag_sha256"]
-    assert result["trace"][0]["tool_hash"] == metadata["tool_sha256"]
+    assert session["config_schema_version"] == HarnessConfig.SCHEMA_VERSION
+    assert session["prompt_hash"] == metadata["prompt_sha256"]
+    assert session["skill_hash"] == metadata["skill_sha256"]
+    assert session["rag_hash"] == metadata["rag_sha256"]
+    assert session["tool_hash"] == metadata["tool_sha256"]
     assert len(metadata["prompt_sha256"]) == 64
     assert len(metadata["skill_sha256"]) == 64
     assert len(metadata["rag_sha256"]) == 64
@@ -168,10 +171,23 @@ def test_changing_competition_config_changes_public_behavior(
         for event in with_tools_internal["trace"]
     )
     assert all(event["event"] != "tool_checks" for event in with_tools["trace"])
-    assert without_tools["trace"][0]["config_hash"] != with_tools["trace"][0]["config_hash"]
+    without_hash = next(
+        event["config_hash"]
+        for event in without_tools["trace"]
+        if event["event"] == "session_started"
+    )
+    with_hash = next(
+        event["config_hash"]
+        for event in with_tools["trace"]
+        if event["event"] == "session_started"
+    )
+    assert without_hash != with_hash
 
 
 def test_tests_can_inject_validated_config_without_an_external_path():
     config = _minimal_config()
     result = ReasoningAgent(FakeClient(), config=config).solve("x", {})
-    assert result["trace"][0]["config_hash"] == config.fingerprint
+    session = next(
+        event for event in result["trace"] if event["event"] == "session_started"
+    )
+    assert session["config_hash"] == config.fingerprint

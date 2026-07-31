@@ -72,7 +72,9 @@ def test_public_trace_keeps_selected_solution_and_omits_framework_noise() -> Non
     assert "phase_transition" not in names
     assert "context_view_built" not in names
     assert "candidate_generated" not in names
-    assert selected["public_solution"]["public_solution_steps"]
+    assert result["trace"][0]["event"] == "solution_process"
+    assert result["trace"][0]["steps"]
+    assert selected["public_solution"]["solution_process_ref"] == "trace[0]"
     assert selected["public_solution"]["final_answer"]
     assert result["trace"][-1]["event"] == "run_completed"
     assert build_public_result(result["id"], result) == result

@@ -11,10 +11,12 @@ from mathforge.output.loop_health import (
     build_closed_loop_health,
     minimal_closed_loop_health,
 )
+from mathforge.output.deterministic_formatter import latex_final_answer
 
 
-JUDGE_TRACE_SCHEMA_VERSION = "3.5"
+JUDGE_TRACE_SCHEMA_VERSION = "3.6"
 JUDGE_EVENT_STAGES = {
+    "solution_process": "solution",
     "session_started": "session",
     "effective_config_snapshot": "session",
     "problem_parsed": "parsing",
@@ -45,8 +47,8 @@ JUDGE_EVENT_STAGES = {
 }
 _PROTECTED_EVENTS = frozenset(
     {
+        "solution_process",
         "session_started",
-        "effective_config_snapshot",
         "round_summary",
         "tool_feedback_completed",
         "evidence_summary",
@@ -140,11 +142,17 @@ def project_judge_trace(
         name: str,
         source: dict[str, Any] | None,
         details: dict[str, Any],
+        *,
+        elapsed_override: int | None = None,
     ) -> None:
         nonlocal last_elapsed
         if source is None:
             return
-        elapsed = _nonnegative_int(source.get("elapsed_ms", last_elapsed))
+        elapsed = (
+            _nonnegative_int(elapsed_override)
+            if elapsed_override is not None
+            else _nonnegative_int(source.get("elapsed_ms", last_elapsed))
+        )
         last_elapsed = max(last_elapsed, elapsed)
         event = {
             "schema_version": JUDGE_TRACE_SCHEMA_VERSION,
@@ -157,6 +165,51 @@ def project_judge_trace(
         events.append(_bound_event(event, active_limits))
 
     session = _first(by_name, "session_started")
+    problem = _last(by_name, "problem_parsed")
+    final_event = _last(by_name, "final_answer_selected")
+    public_solution = (
+        final_event.get("public_solution", {})
+        if isinstance(final_event, dict)
+        else {}
+    )
+    if not isinstance(public_solution, dict):
+        public_solution = {}
+    solution_source = (
+        final_event
+        or _last(by_name, "run_completed")
+        or _last(by_name, "fallback_used")
+        or session
+    )
+    append(
+        "solution_process",
+        solution_source,
+        {
+            "status": "complete" if selected_id else "unavailable",
+            "response_mode": str(
+                problem.get("response_mode", "answer_only")
+                if isinstance(problem, dict)
+                else "answer_only"
+            ),
+            "candidate_id": selected_id,
+            "method": _selected_candidate_method(by_name, selected_id),
+            "steps": _selected_steps(
+                public_solution.get("public_solution_steps", []),
+                active_limits,
+            ),
+            "conclusion": _compact_text(
+                latex_final_answer(
+                    str(public_solution.get("final_answer", "")),
+                    str(
+                        problem.get("answer_type", "text")
+                        if isinstance(problem, dict)
+                        else "text"
+                    ),
+                ),
+                max(256, active_limits.judge_trace_event_max_chars // 4),
+            ),
+        },
+        elapsed_override=0,
+    )
     append(
         "session_started",
         session,
@@ -182,19 +235,6 @@ def project_judge_trace(
             ),
         ),
     )
-    effective_config = _last(by_name, "effective_config_snapshot")
-    append(
-        "effective_config_snapshot",
-        effective_config,
-        {
-            "snapshot": _safe_mapping(
-                effective_config.get("snapshot", {})
-                if effective_config
-                else {}
-            )
-        },
-    )
-    problem = _last(by_name, "problem_parsed")
     append(
         "problem_parsed",
         problem,
@@ -203,6 +243,7 @@ def project_judge_trace(
             (
                 "problem_type",
                 "answer_type",
+                "response_mode",
                 "answer_type_confidence",
                 "target_phrase",
                 "target_kind",
@@ -531,11 +572,7 @@ def project_judge_trace(
             },
         )
 
-    final_event = _last(by_name, "final_answer_selected")
     if final_event is not None:
-        public_solution = final_event.get("public_solution", {})
-        if not isinstance(public_solution, dict):
-            public_solution = {}
         append(
             "final_answer_selected",
             final_event,
@@ -545,10 +582,7 @@ def project_judge_trace(
                     final_event.get("selection_reason", "")
                 ),
                 "public_solution": {
-                    "public_solution_steps": _selected_steps(
-                        public_solution.get("public_solution_steps", []),
-                        active_limits,
-                    ),
+                    "solution_process_ref": "trace[0]",
                     "final_answer": _compact_text(
                         str(public_solution.get("final_answer", "")),
                         max(256, active_limits.judge_trace_event_max_chars // 4),
@@ -700,9 +734,12 @@ def validate_judge_trace(
             errors.append(f"event {index} is not JSON serializable")
     if elapsed != sorted(elapsed):
         errors.append("Judge Trace elapsed time is not monotonic")
+    if trace[0].get("event") != "solution_process":
+        errors.append("solution_process must be the first Judge Trace event")
     if trace[-1].get("event") != "run_completed":
         errors.append("run_completed must be the final Judge Trace event")
     for required in (
+        "solution_process",
         "session_started",
         "closed_loop_health",
         "budget_summary",
@@ -734,6 +771,16 @@ def validate_judge_trace(
 
     selected_event = by_name.get("final_answer_selected", [{}])[-1]
     selected_id = str(selected_event.get("candidate_id", ""))
+    process = by_name.get("solution_process", [{}])[-1]
+    if outcome == "primary":
+        if process.get("status") != "complete":
+            errors.append("primary Judge Trace solution process is incomplete")
+        if str(process.get("candidate_id", "")) != selected_id:
+            errors.append("solution process candidate is inconsistent")
+        if not isinstance(process.get("steps"), list) or not process.get("steps"):
+            errors.append("primary Judge Trace lacks public solution steps")
+        if not process.get("conclusion"):
+            errors.append("primary Judge Trace lacks a public conclusion")
     if by_name.get("final_answer_selected"):
         solution = selected_event.get("public_solution")
         if not isinstance(solution, dict):
@@ -791,27 +838,37 @@ def minimal_judge_trace(
     events = [
         _judge_event(
             1,
+            "solution_process",
+            status="unavailable",
+            response_mode="answer_only",
+            candidate_id="",
+            method="",
+            steps=[],
+            conclusion="",
+        ),
+        _judge_event(
+            2,
             "session_started",
             request_source="official_client_injected",
         ),
         _judge_event(
-            2,
+            3,
             "fallback_used",
             reason=error_code,
             error_code=error_code,
             failed_phase="created",
         ),
         _judge_event(
-            3,
+            4,
             "closed_loop_health",
             **minimal_closed_loop_health(
                 health="timeout" if outcome == "timeout" else "failed",
                 root_failure_code=error_code,
             ),
         ),
-        _judge_event(4, "budget_summary", outcome=outcome),
+        _judge_event(5, "budget_summary", outcome=outcome),
         _judge_event(
-            5,
+            6,
             "run_completed",
             outcome=outcome,
             error_code=error_code,
@@ -1371,24 +1428,10 @@ def _skill_summary(event: dict[str, Any] | None) -> dict[str, Any]:
                     and str(item.get("version", "")) == version
                     and str(item.get("reason", "")) == reason
                 ),
-                "included_sections": sorted(
-                    {
-                        str(section)
-                        for item in event.get("skills", [])
-                        if isinstance(item, dict)
-                        and str(item.get("name", "")) == name
-                        and str(item.get("version", "")) == version
-                        and str(item.get("reason", "")) == reason
-                        for section in item.get("included_sections", [])
-                    }
-                ),
             }
             for (name, version, reason), roles in sorted(grouped.items())
         ],
     }
-    for output_key in ("omitted_by_role", "unknown_by_role"):
-        if event.get(output_key):
-            result[output_key] = event[output_key]
     return result
 
 
@@ -1650,6 +1693,22 @@ def _selected_candidate_id(
         return str(arbitration["selected"])
     final_event = _last(by_name, "final_answer_selected")
     return str(final_event.get("candidate_id", "")) if final_event else ""
+
+
+def _selected_candidate_method(
+    by_name: dict[str, list[dict[str, Any]]],
+    candidate_id: str,
+) -> str:
+    if not candidate_id:
+        return ""
+    for event in reversed(by_name.get("candidate_generated", [])):
+        if str(event.get("candidate_id", "")) == candidate_id:
+            return str(
+                event.get("method")
+                or event.get("planned_method_family")
+                or ""
+            )
+    return ""
 
 
 def _events_by_name(

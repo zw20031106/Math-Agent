@@ -65,7 +65,9 @@ def test_caller_cannot_replace_environment_model_with_a_display_label():
         FakeClient(),
         model_identifier="intern-latest",
     ).solve("1 + 1", {})
-    session_started = result["trace"][0]
+    session_started = next(
+        event for event in result["trace"] if event["event"] == "session_started"
+    )
 
     assert session_started["requested_model"] == "unreported"
     assert session_started["request_source"] == "official_client_injected"

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Upgraded Judge Trace to 3.6 with a mandatory first `solution_process` event
+  containing the selected Candidate's public method, ordered steps, response
+  mode, and LaTeX conclusion. Removed the full effective-config snapshot and
+  omitted-Skill catalog from public projection, and replaced duplicated final
+  solution steps with a `trace[0]` reference.
 - Made final-response formatting consume `ProblemIR.response_mode`: ordinary
   direct-answer questions now return one LaTeX answer line, explicit exposition
   requests retain their worked solution, and proof requests retain the complete

@@ -21,6 +21,7 @@ from mathforge.harness.deadline import DeadlineController
 from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
 from mathforge.harness.trace import TraceBuilder
+from mathforge.output.judge_trace import JUDGE_TRACE_SCHEMA_VERSION
 from mathforge.runtime import MathForgeHarness
 from scripts.run_case_outputs import PerCaseWallClockRunner, write_case_output
 
@@ -365,7 +366,7 @@ def test_runner_timeout_is_terminal_atomic_and_late_result_cannot_overwrite(tmp_
         == "per_case_wall_clock_exceeded"
     )
     assert all(
-        event["schema_version"] == "3.5"
+        event["schema_version"] == JUDGE_TRACE_SCHEMA_VERSION
         for event in payload["trace"]
     )
     assert records[0].run_metrics.per_case_wall_clock_timeout_count == 1

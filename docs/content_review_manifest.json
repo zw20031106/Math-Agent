@@ -132,10 +132,10 @@
         "mathforge/verification/proof_obligations.py"
       ],
       "expected_count": 14,
-      "version": "verification-closure-phase-t2-response-formatting",
-      "engineering_reviewer": "codex-phase-t2-output-audit",
+      "version": "verification-closure-phase-t3-trace-3.6",
+      "engineering_reviewer": "codex-phase-t3-trace-audit",
       "review_date": "2026-07-31",
-      "sha256": "80bc1b05f1863351f4aa3260a36be6388130389ba95db091f50e4b6d6a76c7c9"
+      "sha256": "e04eb270de48c9c52e9ccbf2362463def2bc2b2a8d4c72aed166b20ebe448884"
     },
     {
       "id": "reviewed-method-cards",
