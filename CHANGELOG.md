@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Upgraded Judge Trace to 3.7 as a solution-first logical narrative: a new
+  `workflow_overview` follows the detailed solution, model calls are attributed
+  to fixed roles and candidate IDs in call order, successful alternatives keep
+  bounded public solution content, and claim-local repair attempts expose their
+  public proposal and accept/rollback result without leaking private reasoning.
 - Upgraded Judge Trace to 3.6 with a mandatory first `solution_process` event
   containing the selected Candidate's public method, ordered steps, response
   mode, and LaTeX conclusion. Removed the full effective-config snapshot and

@@ -184,6 +184,8 @@ def test_viable_candidate_public_answer_and_steps_enter_judge_trace():
             "public_solution_steps",
             "proof_status",
             "selection_reason",
+            "selected",
+            "solution_process_ref",
         }
         for item in summaries["candidates"]
     )
@@ -193,6 +195,12 @@ def test_viable_candidate_public_answer_and_steps_enter_judge_trace():
         and item["public_solution_steps"]
         for item in summaries["candidates"]
     )
+    selected_summary = next(
+        item for item in summaries["candidates"] if item["selected"]
+    )
+    assert selected_summary["candidate_id"] == selected["candidate_id"]
+    assert selected_summary["solution_process_ref"] == "trace[0]"
+    assert selected_summary["public_solution_steps"] == []
 
 
 def test_long_proof_and_sixty_four_claims_have_bounded_structured_judge_output():

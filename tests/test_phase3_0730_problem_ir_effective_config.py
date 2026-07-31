@@ -256,6 +256,11 @@ def test_effective_config_is_public_and_empty_frozen_store_is_disabled():
         for event in public_trace
         if event["event"] == "budget_summary"
     )
+    model_activity = next(
+        event
+        for event in public_trace
+        if event["event"] == "model_activity"
+    )
 
     assert effective["provider"]["interface"] == "injected_client.chat"
     assert effective["provider"]["max_physical_concurrency"] == 16
@@ -268,8 +273,8 @@ def test_effective_config_is_public_and_empty_frozen_store_is_disabled():
         "disabled_reason": "empty_store",
     }
     assert harness._frozen_lemma_store is None
-    assert budget["model_calls"]
-    call = budget["model_calls"][0]
+    assert budget["model_calls"] == model_activity["call_count"]
+    call = model_activity["calls"][0]
     assert {
         "prompt_tokens",
         "configured_output_tokens",

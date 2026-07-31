@@ -132,10 +132,10 @@
         "mathforge/verification/proof_obligations.py"
       ],
       "expected_count": 14,
-      "version": "verification-closure-phase-t3-trace-3.6",
-      "engineering_reviewer": "codex-phase-t3-trace-audit",
+      "version": "verification-closure-phase-t4-trace-3.7",
+      "engineering_reviewer": "codex-phase-t4-trace-audit",
       "review_date": "2026-07-31",
-      "sha256": "e04eb270de48c9c52e9ccbf2362463def2bc2b2a8d4c72aed166b20ebe448884"
+      "sha256": "4c7a883e3ceb84a407c540803b9c86fd71b363516d2a65f228ad108165b77faa"
     },
     {
       "id": "reviewed-method-cards",
@@ -193,10 +193,10 @@
         "scripts/propose_competition_config.py"
       ],
       "expected_count": 4,
-      "version": "phase7-live-calibration-1",
-      "engineering_reviewer": "codex-phase7-calibration-audit",
+      "version": "phase7-live-calibration-2-trace-3.7",
+      "engineering_reviewer": "codex-phase-t4-trace-audit",
       "review_date": "2026-07-31",
-      "sha256": "25a84835451e11a8fd983042fc108134148c59e3363a7b36876a528df54060bd"
+      "sha256": "adc79e391ab3fa4f7732796b5f59e7b171c756e5dcc6c0b0f39a104530f3f535"
     },
     {
       "id": "router-calibration",

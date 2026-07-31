@@ -5,6 +5,7 @@ import re
 
 from mathforge.config import HarnessConfig
 from mathforge.runtime import MathForgeHarness
+from mathforge.output.public_result import build_public_result
 
 
 def _config() -> HarnessConfig:
@@ -161,6 +162,15 @@ def test_runtime_accepts_fully_reverified_repair_and_rebuilds_solution_text():
         for step in proposal["proposed_content"]["public_solution_steps"]
     )
     assert "STALE BAD DERIVATION" not in str(proposal["proposed_content"])
+    public = build_public_result("repair-audit", result)
+    history = next(
+        event for event in public["trace"] if event["event"] == "repair_history"
+    )
+    attempt = history["attempts"][0]
+    assert attempt["accepted"] is True
+    assert attempt["rolled_back"] is False
+    assert attempt["proposed_candidate_id"] == "primary-1-v2"
+    assert any("x = x" in str(step) for step in attempt["public_solution_steps"])
     repair_prompt = next(
         messages[-1]["content"]
         for messages in client.calls

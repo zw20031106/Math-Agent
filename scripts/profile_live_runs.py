@@ -165,6 +165,7 @@ def _profile_case(
     trace = payload.get("trace", [])
     health = _last_event(trace, "closed_loop_health")
     budget = _last_event(trace, "budget_summary")
+    model_activity = _last_event(trace, "model_activity")
     final = _last_event(trace, "final_answer_selected")
     terminal = _last_event(trace, "run_completed")
     parsed = _last_event(trace, "problem_parsed")
@@ -233,7 +234,9 @@ def _profile_case(
         "provider_scheduler_peak": int(
             budget.get("provider_scheduler_peak", 0)
         ),
-        "model_call_records": list(budget.get("model_calls", [])),
+        "model_call_records": list(
+            model_activity.get("calls", budget.get("model_calls", []))
+        ),
         "expected_answer": expected,
         "public_answer": answer,
         "answer_type": answer_type,

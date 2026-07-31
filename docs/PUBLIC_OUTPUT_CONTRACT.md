@@ -1,6 +1,6 @@
 # MathForge 公共输出契约
 
-版本：3.6
+版本：3.7
 
 ## 对外字段
 
@@ -35,12 +35,24 @@ Repair 输出不带定界符的标准 LaTeX 源，Host Formatter 负责唯一化
 
 ## Trace 内容
 
-公共 `trace` 使用 Judge Trace V3.6，是面向判分的有界审计叙事，不是内部
+公共 `trace` 使用 Judge Trace V3.7，是面向判分的有界审计叙事，不是内部
 框架日志或 Debug Journal：
 
 - `trace[0]` 固定为 `solution_process`，记录选中 Candidate 的公开方法、
   分步数学过程、LaTeX 结论和 `response_mode`；失败结果以 `unavailable`
   明确标记，不伪造解题过程。
+- `trace[1]` 固定为 `workflow_overview`，按“题意解析、路线规划、候选生成、
+  验证、必要修复、仲裁、最终格式化”的实际执行顺序汇总结果，并引用后续
+  审计事件。Trace 的首要目标是呈现连贯的解题与闭环逻辑，不以压缩字符数
+  作为质量目标。
+- `model_activity` 按实际调用序号记录固定 LLM 角色、调用目的、关联 Candidate、
+  成败状态、Schema 校验结果、Transport 尝试次数、Token 和耗时；不记录 Prompt、
+  原始响应或异常正文。
+- `candidate_summaries` 必须包含选中 Candidate 的 `trace[0]` 引用，并为每个成功
+  生成但未选中的 Candidate 保留有界 `public_final_answer` 与
+  `public_solution_steps`，使候选对比可审计；生成失败的候选不伪造内容。
+- 发生修复时，`repair_history` 按尝试记录源 Candidate、修复 Candidate、受影响
+  Claim、公开修复步骤、重新验证证据以及 accepted/rolled_back 结果。
 - 保留会话/配置、路由/Skill、关键 Evidence、proof completion、仲裁、
   最终选择、预算和终态摘要。
 - 公共投影不再复制完整 `effective_config_snapshot`；配置 profile、哈希和模型

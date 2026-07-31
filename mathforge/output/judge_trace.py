@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from hashlib import sha256
 import json
@@ -7,16 +8,17 @@ import math
 import re
 from typing import Any, Iterable, Mapping
 
+from mathforge.output.deterministic_formatter import latex_final_answer
 from mathforge.output.loop_health import (
     build_closed_loop_health,
     minimal_closed_loop_health,
 )
-from mathforge.output.deterministic_formatter import latex_final_answer
 
 
-JUDGE_TRACE_SCHEMA_VERSION = "3.6"
+JUDGE_TRACE_SCHEMA_VERSION = "3.7"
 JUDGE_EVENT_STAGES = {
     "solution_process": "solution",
+    "workflow_overview": "workflow",
     "session_started": "session",
     "effective_config_snapshot": "session",
     "problem_parsed": "parsing",
@@ -27,6 +29,7 @@ JUDGE_EVENT_STAGES = {
     "round_summary": "reasoning",
     "reasoning_loop_completed": "reasoning",
     "skills_selected": "skill_selection",
+    "model_activity": "model_activity",
     "tool_feedback_completed": "evidence",
     "verifier_completed": "verification",
     "candidate_summaries": "candidate_generation",
@@ -35,6 +38,7 @@ JUDGE_EVENT_STAGES = {
     "decision_summary": "arbitration",
     "candidate_arbitrated": "arbitration",
     "candidate_salvaged": "arbitration",
+    "repair_history": "repair",
     "final_answer_selected": "finalization",
     "fallback_used": "fallback",
     "deadline_finalize": "deadline",
@@ -48,14 +52,15 @@ JUDGE_EVENT_STAGES = {
 _PROTECTED_EVENTS = frozenset(
     {
         "solution_process",
+        "workflow_overview",
         "session_started",
-        "round_summary",
         "tool_feedback_completed",
         "evidence_summary",
         "proof_completion_summary",
         "decision_summary",
         "candidate_arbitrated",
         "candidate_salvaged",
+        "repair_history",
         "final_answer_selected",
         "fallback_used",
         "deadline_finalize",
@@ -208,6 +213,12 @@ def project_judge_trace(
                 max(256, active_limits.judge_trace_event_max_chars // 4),
             ),
         },
+        elapsed_override=0,
+    )
+    append(
+        "workflow_overview",
+        solution_source,
+        _workflow_overview(by_name, selected_id),
         elapsed_override=0,
     )
     append(
@@ -435,6 +446,18 @@ def project_judge_trace(
         _skill_summary(skills),
     )
 
+    budget = _last(by_name, "budget_summary")
+    model_calls = _model_activity(by_name, budget)
+    if model_calls:
+        append(
+            "model_activity",
+            budget,
+            {
+                "call_count": len(model_calls),
+                "calls": model_calls,
+            },
+        )
+
     case_summary_event = _last(by_name, "case_trace_summary")
     case_summary = (
         case_summary_event.get("summary", {})
@@ -500,6 +523,14 @@ def project_judge_trace(
                     "unreviewed_targets",
                 ),
             ),
+        )
+
+    repair_source, repair_attempts = _repair_history(by_name, active_limits)
+    if repair_attempts:
+        append(
+            "repair_history",
+            repair_source,
+            {"attempts": repair_attempts},
         )
 
     proof_gate = _last(by_name, "proof_completion_gate")
@@ -572,6 +603,13 @@ def project_judge_trace(
             },
         )
 
+    decision_source, decision_details = _decision_summary(by_name)
+    append(
+        "decision_summary",
+        decision_source,
+        decision_details,
+    )
+
     if final_event is not None:
         append(
             "final_answer_selected",
@@ -624,13 +662,6 @@ def project_judge_trace(
                 ),
             )
 
-    budget = _last(by_name, "budget_summary")
-    decision_source, decision_details = _decision_summary(by_name)
-    append(
-        "decision_summary",
-        decision_source,
-        decision_details,
-    )
     completed = _last(by_name, "run_completed")
     health = _last(by_name, "closed_loop_health")
     if health is None:
@@ -736,10 +767,13 @@ def validate_judge_trace(
         errors.append("Judge Trace elapsed time is not monotonic")
     if trace[0].get("event") != "solution_process":
         errors.append("solution_process must be the first Judge Trace event")
+    if len(trace) < 2 or trace[1].get("event") != "workflow_overview":
+        errors.append("workflow_overview must follow solution_process")
     if trace[-1].get("event") != "run_completed":
         errors.append("run_completed must be the final Judge Trace event")
     for required in (
         "solution_process",
+        "workflow_overview",
         "session_started",
         "closed_loop_health",
         "budget_summary",
@@ -797,6 +831,12 @@ def validate_judge_trace(
             continue
         if len(candidates) > active_limits.candidate_summary_max_count:
             errors.append("candidate summary count exceeded")
+        if selected_id and sum(
+            isinstance(candidate, dict)
+            and str(candidate.get("candidate_id", "")) == selected_id
+            for candidate in candidates
+        ) != 1:
+            errors.append("candidate summaries lack the selected candidate")
         expected = {
             "candidate_id",
             "role",
@@ -809,18 +849,30 @@ def validate_judge_trace(
             "public_solution_steps",
             "proof_status",
             "selection_reason",
+            "selected",
+            "solution_process_ref",
         }
         for candidate in candidates:
             if not isinstance(candidate, dict) or set(candidate) != expected:
                 errors.append("candidate summary schema is invalid")
                 continue
-            if str(candidate.get("candidate_id", "")) == selected_id:
-                errors.append("selected candidate appears in rejected summaries")
-            if candidate.get("status") != "viable_not_selected" and (
-                candidate.get("public_final_answer")
-                or candidate.get("public_solution_steps")
-            ):
-                errors.append("rejected candidate exposes public answer content")
+            is_selected = str(candidate.get("candidate_id", "")) == selected_id
+            if bool(candidate.get("selected")) != is_selected:
+                errors.append("candidate selected marker is inconsistent")
+            if is_selected:
+                if candidate.get("solution_process_ref") != "trace[0]":
+                    errors.append("selected candidate lacks solution process reference")
+                if (
+                    candidate.get("public_final_answer")
+                    or candidate.get("public_solution_steps")
+                ):
+                    errors.append("selected candidate duplicates solution process")
+            elif candidate.get("solution_process_ref"):
+                errors.append("unselected candidate has a solution process reference")
+
+    _validate_model_activity(by_name, errors)
+    _validate_repair_history(by_name, errors)
+    _validate_workflow_overview(by_name, selected_id, errors)
 
     _validate_closed_loop_health(by_name, outcome, selected_id, errors)
 
@@ -848,27 +900,42 @@ def minimal_judge_trace(
         ),
         _judge_event(
             2,
+            "workflow_overview",
+            outcome=outcome,
+            selected_candidate_id="",
+            steps=[
+                {
+                    "step_index": 1,
+                    "phase": "fallback",
+                    "outcome": "used",
+                    "summary": error_code,
+                    "related_events": ["fallback_used"],
+                }
+            ],
+        ),
+        _judge_event(
+            3,
             "session_started",
             request_source="official_client_injected",
         ),
         _judge_event(
-            3,
+            4,
             "fallback_used",
             reason=error_code,
             error_code=error_code,
             failed_phase="created",
         ),
         _judge_event(
-            4,
+            5,
             "closed_loop_health",
             **minimal_closed_loop_health(
                 health="timeout" if outcome == "timeout" else "failed",
                 root_failure_code=error_code,
             ),
         ),
-        _judge_event(5, "budget_summary", outcome=outcome),
+        _judge_event(6, "budget_summary", outcome=outcome),
         _judge_event(
-            6,
+            7,
             "run_completed",
             outcome=outcome,
             error_code=error_code,
@@ -896,6 +963,18 @@ def _candidate_summaries(
         for event in by_name.get("candidate_generated", [])
         if event.get("candidate_id")
     }
+    for event in by_name.get("repair_proposed", []):
+        candidate_id = str(event.get("proposed_candidate_id", ""))
+        content = event.get("proposed_content", {})
+        if candidate_id and isinstance(content, dict):
+            generated[candidate_id] = {
+                "candidate_id": candidate_id,
+                "role": "RepairAgent",
+                "planned_method_family": "claim-local-repair",
+                "status": "generated",
+                "content": content,
+                "content_digest": str(event.get("content_digest", "")),
+            }
     failed = {
         str(event.get("candidate_id", "")): event
         for event in by_name.get("candidate_generation_failed", [])
@@ -929,11 +1008,15 @@ def _candidate_summaries(
         }
         for candidate_id in set(summary_states) | set(final_states)
     }
-    order = list(dict.fromkeys([*starts, *generated, *failed, *states]))
+    order = list(
+        dict.fromkeys(
+            [selected_id, *starts, *generated, *failed, *states]
+        )
+    )
     summaries: list[dict[str, Any]] = []
     omitted_source: list[dict[str, Any]] = []
     for candidate_id in order:
-        if not candidate_id or candidate_id == selected_id:
+        if not candidate_id:
             continue
         start = starts.get(candidate_id, {})
         candidate = generated.get(candidate_id, {})
@@ -945,7 +1028,8 @@ def _candidate_summaries(
             if isinstance(reason_codes, list) and reason_codes
             else str(failure.get("reason", "not_selected_by_arbitration"))
         )
-        viable = state.get("status") == "viable_not_selected"
+        selected = candidate_id == selected_id
+        generated_content = bool(candidate)
         content = candidate.get("content", {})
         if not isinstance(content, dict):
             content = {}
@@ -967,7 +1051,9 @@ def _candidate_summaries(
                 or "unavailable"
             ),
             "status": str(
-                state.get("status")
+                "selected"
+                if selected
+                else state.get("status")
                 or failure.get("status")
                 or candidate.get("status")
                 or "unknown"
@@ -981,7 +1067,7 @@ def _candidate_summaries(
                     }
                 )
             ),
-            "rejection_category": rejection,
+            "rejection_category": "" if selected else rejection,
             "evidence_summary": _status_counts(
                 state.get("evidence", {})
                 if isinstance(state, dict)
@@ -992,7 +1078,7 @@ def _candidate_summaries(
                     str(content.get("final_answer", "")),
                     max(128, candidate_char_share // 4),
                 )
-                if viable
+                if generated_content and not selected
                 else ""
             ),
             "public_solution_steps": (
@@ -1000,13 +1086,21 @@ def _candidate_summaries(
                     content.get("public_solution_steps", []),
                     candidate_char_share,
                 )
-                if viable
+                if generated_content and not selected
                 else []
             ),
             "proof_status": _candidate_proof_status(state),
             "selection_reason": (
-                rejection if viable else f"rejected:{rejection}"
+                "selected_by_arbitration"
+                if selected
+                else (
+                    rejection
+                    if state.get("status") == "viable_not_selected"
+                    else f"rejected:{rejection}"
+                )
             ),
+            "selected": selected,
+            "solution_process_ref": "trace[0]" if selected else "",
         }
         if len(summaries) < limit:
             summaries.append(summary)
@@ -1319,6 +1413,433 @@ def _validate_closed_loop_health(
         errors.append("closed-loop health proof status is inconsistent")
 
 
+def _validate_model_activity(
+    by_name: dict[str, list[dict[str, Any]]],
+    errors: list[str],
+) -> None:
+    for event in by_name.get("model_activity", []):
+        calls = event.get("calls")
+        if not isinstance(calls, list):
+            errors.append("model activity calls must be a list")
+            continue
+        if event.get("call_count") != len(calls):
+            errors.append("model activity call count is inconsistent")
+        indexes = [
+            call.get("call_index")
+            for call in calls
+            if isinstance(call, dict)
+        ]
+        if indexes != list(range(1, len(calls) + 1)):
+            errors.append("model activity call indexes are not contiguous")
+        for call in calls:
+            if not isinstance(call, dict):
+                errors.append("model activity call must be an object")
+                continue
+            if not isinstance(call.get("candidate_ids"), list):
+                errors.append("model activity candidate IDs must be a list")
+            if not str(call.get("role", "")) or not str(
+                call.get("purpose", "")
+            ):
+                errors.append("model activity attribution is incomplete")
+
+
+def _validate_repair_history(
+    by_name: dict[str, list[dict[str, Any]]],
+    errors: list[str],
+) -> None:
+    for event in by_name.get("repair_history", []):
+        attempts = event.get("attempts")
+        if not isinstance(attempts, list) or not attempts:
+            errors.append("repair history attempts are invalid")
+            continue
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                errors.append("repair history attempt must be an object")
+                continue
+            if attempt.get("accepted") is True and attempt.get("rolled_back") is True:
+                errors.append("rolled-back repair cannot be accepted")
+            if not isinstance(attempt.get("public_solution_steps"), list):
+                errors.append("repair history public steps must be a list")
+
+
+def _validate_workflow_overview(
+    by_name: dict[str, list[dict[str, Any]]],
+    selected_id: str,
+    errors: list[str],
+) -> None:
+    for event in by_name.get("workflow_overview", []):
+        steps = event.get("steps")
+        if not isinstance(steps, list) or not steps:
+            errors.append("workflow overview steps are invalid")
+            continue
+        if event.get("selected_candidate_id") != selected_id:
+            errors.append("workflow overview selected candidate is inconsistent")
+        for index, step in enumerate(steps, start=1):
+            if not isinstance(step, dict):
+                errors.append("workflow overview step must be an object")
+                continue
+            if step.get("step_index") != index:
+                errors.append("workflow overview indexes are not contiguous")
+            if not str(step.get("phase", "")) or not str(
+                step.get("outcome", "")
+            ) or not str(step.get("summary", "")):
+                errors.append("workflow overview step is incomplete")
+            if not isinstance(step.get("related_events"), list):
+                errors.append("workflow overview references are invalid")
+
+
+def _workflow_overview(
+    by_name: dict[str, list[dict[str, Any]]],
+    selected_id: str,
+) -> dict[str, Any]:
+    steps: list[dict[str, Any]] = []
+
+    def add(
+        phase: str,
+        outcome: str,
+        summary: str,
+        related_events: list[str],
+    ) -> None:
+        steps.append(
+            {
+                "step_index": len(steps) + 1,
+                "phase": phase,
+                "outcome": outcome,
+                "summary": summary,
+                "related_events": related_events,
+            }
+        )
+
+    problem = _last(by_name, "problem_parsed") or {}
+    add(
+        "problem_understanding",
+        "completed" if problem else "unavailable",
+        (
+            "Parsed the task as "
+            f"{problem.get('problem_type', 'unknown')} with response mode "
+            f"{problem.get('response_mode', 'answer_only')}."
+        ),
+        ["problem_parsed"],
+    )
+
+    route = _last(by_name, "route_planned") or {}
+    add(
+        "planning",
+        "completed" if route else "deterministic_default",
+        (
+            "Selected the reasoning route for domain "
+            f"{route.get('primary_subject', problem.get('domain', 'unknown'))}."
+        ),
+        ["route_planned", "skills_selected"],
+    )
+
+    generated_ids = list(
+        dict.fromkeys(
+            str(event.get("candidate_id", ""))
+            for event in by_name.get("candidate_generated", [])
+            if event.get("candidate_id")
+        )
+    )
+    failed_ids = list(
+        dict.fromkeys(
+            str(event.get("candidate_id", ""))
+            for event in by_name.get("candidate_generation_failed", [])
+            if event.get("candidate_id")
+        )
+    )
+    add(
+        "candidate_generation",
+        "completed" if generated_ids else "failed",
+        (
+            f"Generated {len(generated_ids)} candidate solution(s); "
+            f"{len(failed_ids)} candidate attempt(s) failed."
+        ),
+        ["model_activity", "candidate_summaries"],
+    )
+
+    hard_gate = _last(by_name, "hard_evidence_gate") or {}
+    verifier = _last(by_name, "verifier_completed") or {}
+    accepted_ids = _plain_string_list(hard_gate.get("accepted", []))
+    rejected_ids = _plain_string_list(hard_gate.get("rejected", []))
+    verification_outcome = (
+        "accepted"
+        if selected_id and selected_id in accepted_ids
+        else ("completed" if hard_gate or verifier else "not_requested")
+    )
+    add(
+        "verification",
+        verification_outcome,
+        (
+            f"Evidence gates accepted {len(accepted_ids)} and rejected "
+            f"{len(rejected_ids)} candidate(s); verifier status is "
+            f"{verifier.get('status', 'not_used')}."
+        ),
+        ["evidence_summary", "verifier_completed", "proof_completion_summary"],
+    )
+
+    repairs = [
+        event
+        for event in by_name.get("repair_completed", [])
+        if isinstance(event, dict)
+    ]
+    if repairs:
+        accepted_repairs = sum(
+            bool(event.get("proposed_candidate_id"))
+            and not bool(event.get("rolled_back", False))
+            for event in repairs
+        )
+        add(
+            "repair",
+            "accepted" if accepted_repairs else "rolled_back",
+            (
+                f"Completed {len(repairs)} claim-local repair attempt(s); "
+                f"{accepted_repairs} improved candidate(s) were retained."
+            ),
+            ["repair_history"],
+        )
+
+    arbitration = _last(by_name, "candidate_arbitrated") or {}
+    add(
+        "arbitration",
+        "selected" if selected_id else "no_selection",
+        (
+            f"Selected candidate {selected_id}."
+            if selected_id
+            else "No candidate passed final arbitration."
+        ),
+        ["candidate_arbitrated"],
+    )
+
+    run_completed = _last(by_name, "run_completed") or {}
+    run_outcome = str(run_completed.get("outcome", "fallback"))
+    add(
+        "finalization",
+        run_outcome,
+        (
+            "Formatted the selected candidate as the final response."
+            if selected_id
+            else "Returned the deterministic fallback response."
+        ),
+        ["final_answer_selected" if selected_id else "fallback_used"],
+    )
+    return {
+        "outcome": run_outcome,
+        "selected_candidate_id": selected_id,
+        "steps": steps,
+    }
+
+
+def _model_activity(
+    by_name: dict[str, list[dict[str, Any]]],
+    budget: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    records = budget.get("model_call_records", []) if budget else []
+    if not isinstance(records, list):
+        return []
+    starts = [
+        event
+        for event in by_name.get("candidate_generation_started", [])
+        if isinstance(event, dict)
+    ]
+    primary_ids = [
+        str(event.get("candidate_id", ""))
+        for event in starts
+        if event.get("role") == "PrimarySolver" and event.get("candidate_id")
+    ]
+    alternative_ids = [
+        str(event.get("candidate_id", ""))
+        for event in starts
+        if event.get("role") == "AlternativeSolver" and event.get("candidate_id")
+    ]
+    proposed_ids = [
+        str(event.get("proposed_candidate_id", ""))
+        for event in by_name.get("repair_proposed", [])
+        if event.get("proposed_candidate_id")
+    ]
+    verifier = _last(by_name, "verifier_completed") or {}
+    verifier_ids = _plain_string_list(verifier.get("reviewed_candidates", []))
+    selected_id = _selected_candidate_id(by_name)
+    stage_counts: Counter[str] = Counter()
+    calls: list[dict[str, Any]] = []
+    for call_index, record in enumerate(records, start=1):
+        if not isinstance(record, dict):
+            continue
+        stage = str(record.get("stage", "unknown"))
+        stage_index = stage_counts[stage]
+        stage_counts[stage] += 1
+        candidate_ids: list[str] = []
+        if stage == "primary" and primary_ids:
+            candidate_ids = [primary_ids[0]]
+        elif stage == "alternative" and alternative_ids:
+            candidate_ids = [
+                alternative_ids[min(stage_index, len(alternative_ids) - 1)]
+            ]
+        elif stage == "repair" and proposed_ids:
+            candidate_ids = [
+                proposed_ids[min(stage_index, len(proposed_ids) - 1)]
+            ]
+        elif stage == "verifier":
+            candidate_ids = verifier_ids
+        elif stage == "finalizer" and selected_id:
+            candidate_ids = [selected_id]
+        calls.append(
+            {
+                "call_index": call_index,
+                "stage": stage,
+                "role": _model_role(stage),
+                "purpose": _model_purpose(stage),
+                "candidate_ids": candidate_ids,
+                "status": str(record.get("status", "unknown")),
+                "failure_code": str(record.get("failure_code", "")),
+                "response_validation": str(
+                    record.get("response_validation", "not_applicable")
+                ),
+                "transport_attempts": _nonnegative_int(
+                    record.get("transport_attempts", 0)
+                ),
+                "prompt_tokens": _nonnegative_int(
+                    record.get("prompt_tokens", 0)
+                ),
+                "available_input_tokens": _nonnegative_int(
+                    record.get("available_input_tokens", 0)
+                ),
+                "configured_output_tokens": _nonnegative_int(
+                    record.get("configured_output_tokens", 0)
+                ),
+                "stage_output_cap_tokens": _nonnegative_int(
+                    record.get("stage_output_cap_tokens", 0)
+                ),
+                "max_output_tokens": _nonnegative_int(
+                    record.get("max_output_tokens", 0)
+                ),
+                "context_window_tokens": _nonnegative_int(
+                    record.get("context_window_tokens", 0)
+                ),
+                "safety_margin_tokens": _nonnegative_int(
+                    record.get("safety_margin_tokens", 0)
+                ),
+                "counting_mode": str(record.get("counting_mode", "")),
+                "observed_output_tokens": _nonnegative_int(
+                    record.get("observed_output_tokens", 0)
+                ),
+                "output_chars": _nonnegative_int(
+                    record.get("output_chars", 0)
+                ),
+                "queue_elapsed_seconds": _nonnegative_float(
+                    record.get("queue_elapsed_seconds", 0.0)
+                ),
+                "stage_p95_seconds": _nonnegative_float(
+                    record.get("stage_p95_seconds", 0.0)
+                ),
+                "effective_queue_budget_seconds": _nonnegative_float(
+                    record.get("effective_queue_budget_seconds", 0.0)
+                ),
+                "execution_elapsed_seconds": _nonnegative_float(
+                    record.get(
+                        "execution_elapsed_seconds",
+                        record.get("elapsed_seconds", 0.0),
+                    )
+                ),
+                "total_elapsed_seconds": _nonnegative_float(
+                    record.get(
+                        "total_elapsed_seconds",
+                        record.get("elapsed_seconds", 0.0),
+                    )
+                ),
+            }
+        )
+    return calls
+
+
+def _model_role(stage: str) -> str:
+    return {
+        "router": "RouterPlanner",
+        "primary": "PrimarySolver",
+        "alternative": "AlternativeSolver",
+        "lemma": "LemmaCurator",
+        "verifier": "VerifierSkeptic",
+        "repair": "RepairAgent",
+        "finalizer": "LLMFinalizer",
+    }.get(stage, "UnknownRole")
+
+
+def _model_purpose(stage: str) -> str:
+    return {
+        "router": "route_planning",
+        "primary": "candidate_reasoning",
+        "alternative": "alternative_candidate_reasoning",
+        "lemma": "lemma_curation",
+        "verifier": "candidate_cross_review",
+        "repair": "claim_local_repair",
+        "finalizer": "verified_exposition_finalization",
+    }.get(stage, "model_work")
+
+
+def _repair_history(
+    by_name: dict[str, list[dict[str, Any]]],
+    limits: JudgeTraceLimits,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    proposals = {
+        str(event.get("proposed_candidate_id", "")): event
+        for event in by_name.get("repair_proposed", [])
+        if event.get("proposed_candidate_id")
+    }
+    completions = by_name.get("repair_completed", [])
+    attempts: list[dict[str, Any]] = []
+    char_budget = max(
+        512,
+        limits.judge_trace_event_max_chars // max(1, len(completions)),
+    )
+    for completion in completions:
+        if not isinstance(completion, dict):
+            continue
+        proposed_id = str(completion.get("proposed_candidate_id", ""))
+        proposal = proposals.get(proposed_id, {})
+        content = proposal.get("proposed_content", {})
+        if not isinstance(content, dict):
+            content = {}
+        rolled_back = bool(completion.get("rolled_back", False))
+        attempts.append(
+            {
+                "source_candidate_id": str(
+                    completion.get("source_candidate_id", "")
+                ),
+                "proposed_candidate_id": proposed_id,
+                "selected_candidate_id": str(
+                    completion.get("selected_candidate_id", "")
+                ),
+                "affected_claim_ids": _plain_string_list(
+                    completion.get("affected_claim_ids", [])
+                ),
+                "reverified_claim_ids": _plain_string_list(
+                    completion.get("reverified_claim_ids", [])
+                ),
+                "evidence_ids": _plain_string_list(
+                    completion.get("evidence_ids", [])
+                ),
+                "rolled_back": rolled_back,
+                "accepted": bool(proposed_id) and not rolled_back,
+                "reason": str(completion.get("reason", "")),
+                "repair_stage": str(completion.get("repair_stage", "")),
+                "public_final_answer": _compact_text(
+                    str(content.get("final_answer", "")),
+                    max(128, char_budget // 4),
+                ),
+                "public_solution_steps": _candidate_steps(
+                    content.get("public_solution_steps", []),
+                    char_budget,
+                ),
+                "content_digest": str(proposal.get("content_digest", "")),
+            }
+        )
+    source = (
+        completions[-1]
+        if completions
+        else (next(reversed(proposals.values())) if proposals else None)
+    )
+    return source, attempts
+
+
 def _budget_summary(event: dict[str, Any] | None) -> dict[str, Any]:
     fields = (
         "max_calls",
@@ -1351,39 +1872,7 @@ def _budget_summary(event: dict[str, Any] | None) -> dict[str, Any]:
         "deadline_phase",
         "outcome",
     )
-    result = _select(event, fields)
-    records = event.get("model_call_records", []) if event else []
-    if isinstance(records, list):
-        result["model_calls"] = [
-            _select(
-                record,
-                (
-                    "stage",
-                    "status",
-                    "failure_code",
-                    "response_validation",
-                    "transport_attempts",
-                    "queue_elapsed_seconds",
-                    "stage_p95_seconds",
-                    "effective_queue_budget_seconds",
-                    "execution_elapsed_seconds",
-                    "total_elapsed_seconds",
-                    "prompt_tokens",
-                    "available_input_tokens",
-                    "configured_output_tokens",
-                    "stage_output_cap_tokens",
-                    "max_output_tokens",
-                    "context_window_tokens",
-                    "safety_margin_tokens",
-                    "counting_mode",
-                    "observed_output_tokens",
-                    "output_chars",
-                ),
-            )
-            for record in records
-            if isinstance(record, dict)
-        ]
-    return result
+    return _select(event, fields)
 
 
 def _skill_summary(event: dict[str, Any] | None) -> dict[str, Any]:
@@ -1831,6 +2320,14 @@ def _nonnegative_int(value: Any) -> int:
         return max(0, int(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _nonnegative_float(value: Any) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return round(max(0.0, number), 6) if math.isfinite(number) else 0.0
 
 
 def _signed_int(value: Any) -> int:
