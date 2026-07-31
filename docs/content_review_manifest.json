@@ -132,10 +132,10 @@
         "mathforge/verification/proof_obligations.py"
       ],
       "expected_count": 14,
-      "version": "verification-closure-phase-t1-response-mode",
-      "engineering_reviewer": "codex-phase-t1-response-mode-audit",
+      "version": "verification-closure-phase-t2-response-formatting",
+      "engineering_reviewer": "codex-phase-t2-output-audit",
       "review_date": "2026-07-31",
-      "sha256": "bd34a82eefeb1f9cb385ae65ed4b40feada2519389fda7973e2d662aa13c13ad"
+      "sha256": "80bc1b05f1863351f4aa3260a36be6388130389ba95db091f50e4b6d6a76c7c9"
     },
     {
       "id": "reviewed-method-cards",
@@ -178,10 +178,10 @@
         "mathforge/verification/equivalence.py"
       ],
       "expected_count": 6,
-      "version": "answer-normalization-2-latex-output",
-      "engineering_reviewer": "codex-phase7-calibration-audit",
+      "version": "answer-normalization-3-response-mode",
+      "engineering_reviewer": "codex-phase-t2-output-audit",
       "review_date": "2026-07-31",
-      "sha256": "4d926ed79588348f6d6b89fde44e62443159448874c6a09784db3d99ce3303b1"
+      "sha256": "ca02df75724a7e6c184107fe916db3fc9251a38fe50c495885d2acebea9e1f30"
     },
     {
       "id": "phase7-live-calibration",

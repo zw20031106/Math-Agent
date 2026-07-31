@@ -2554,6 +2554,7 @@ class MathForgeHarness:
                 final_response,
                 exact_answer=candidate.final_answer,
                 answer_type=candidate.answer_type,
+                response_mode=session.problem_ir.response_mode,
             )
             trace.add(
                 "final_answer_selected",
@@ -2661,6 +2662,7 @@ class MathForgeHarness:
                         ),
                         exact_answer=last_safe_candidate.final_answer,
                         answer_type=last_safe_candidate.answer_type,
+                        response_mode=session.problem_ir.response_mode,
                     )[0],
                     last_safe_candidate.final_answer,
                 )
@@ -3387,17 +3389,20 @@ class MathForgeHarness:
         *,
         exact_answer: str,
         answer_type: str,
+        response_mode: str,
     ):
         text = canonical_final_response(
             text,
             exact_answer=exact_answer,
             answer_type=answer_type,
+            response_mode=response_mode,
         )
         text = bound_final_response(
             text,
             exact_answer=exact_answer,
             max_chars=self._config.final_response_max_chars,
             answer_type=answer_type,
+            response_mode=response_mode,
         )
         try:
             return text, self._context_budget.ensure_text_within_window(text)

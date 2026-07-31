@@ -67,7 +67,7 @@ def test_formatter_does_not_treat_exact_answer_as_substring_of_wrong_value():
 
 
 def test_formatter_replaces_existing_answer_line_with_one_canonical_block():
-    parsed = ProblemParser().parse("求整数答案")
+    parsed = ProblemParser().parse("求整数答案并写出过程")
     candidate = CandidateSolution(
         "c",
         "PrimarySolver",
@@ -84,7 +84,7 @@ def test_formatter_replaces_existing_answer_line_with_one_canonical_block():
 @pytest.mark.parametrize(
     ("problem", "answer", "rendered_answer"),
     [
-        ("选择：\nA. 1\nB. 2", "A", "A"),
+        ("选择：\nA. 1\nB. 2", "A", r"$\mathrm{A}$"),
         ("求分数答案", r"\frac{1}{3}", r"$\frac{1}{3}$"),
         ("求解集合", "{1,2}", "${1,2}$"),
         ("求解区间", "[0,1)", "$[0,1)$"),

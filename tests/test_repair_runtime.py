@@ -150,8 +150,17 @@ def test_runtime_accepts_fully_reverified_repair_and_rebuilds_solution_text():
         and state["status"] == "selected"
         for state in final_states["candidates"]
     )
-    assert "x = x" in result["final_response"]
-    assert "STALE BAD DERIVATION" not in result["final_response"]
+    assert result["final_response"] == r"Final answer: $\mathrm{B}$"
+    proposal = next(
+        event
+        for event in result["trace"]
+        if event["event"] == "repair_proposed"
+    )
+    assert any(
+        "x = x" in step
+        for step in proposal["proposed_content"]["public_solution_steps"]
+    )
+    assert "STALE BAD DERIVATION" not in str(proposal["proposed_content"])
     repair_prompt = next(
         messages[-1]["content"]
         for messages in client.calls

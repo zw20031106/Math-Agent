@@ -11,9 +11,7 @@ def test_public_interface_returns_required_contract() -> None:
     assert set(result) == {"id", "status", "final_response", "trace"}
     assert result["id"] == 1
     assert result["status"] == "success"
-    assert result["final_response"] == (
-        "Solved independently: 1 + 1\n\nFinal answer: $1 + 1$"
-    )
+    assert result["final_response"] == "Final answer: $1 + 1$"
     assert isinstance(result["trace"], list)
 
 

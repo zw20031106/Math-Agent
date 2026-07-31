@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Made final-response formatting consume `ProblemIR.response_mode`: ordinary
+  direct-answer questions now return one LaTeX answer line, explicit exposition
+  requests retain their worked solution, and proof requests retain the complete
+  public proof before a single canonical answer block. Choice and plain-text
+  answers are emitted through `\mathrm{...}` and `\text{...}` respectively.
 - Upgraded ProblemIR to 2.1 with a Host-owned `response_mode` contract
   (`answer_only`, `worked_solution`, or `proof_full`), deterministic Chinese
   and English instruction classification, and validated public-metadata
