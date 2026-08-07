@@ -199,7 +199,7 @@ def test_documented_runner_boundaries_match_the_safe_runner_contract():
 
     assert "formal platform entry is `user_agent.py`" in readme
     assert "rolling case window with default and maximum" in readme
-    assert "concurrency four" in readme
+    assert "concurrency three" in readme
     assert "immutable legacy baseline fixtures" in readme
 
 

@@ -95,6 +95,8 @@ class RepairAgent:
             ),
             budget=budget,
             stage="repair",
+            turn_kind="repair",
+            agent_id="RepairAgent",
         )
         if budget.deadline.must_finalize():
             raise RuntimeError("repair response arrived after finalize cutoff")

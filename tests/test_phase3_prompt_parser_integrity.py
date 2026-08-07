@@ -225,7 +225,7 @@ def test_compiler_puts_the_candidate_core_first_and_caps_non_solver_roles():
     assert compiler.compile_role(
         "verifier_skeptic",
         user_content="Batch: {}",
-    ).max_output_tokens == 8192
+    ).max_output_tokens == 6144
     assert compiler.compile_role(
         "repair",
         user_content="Affected claim: c1",

@@ -128,7 +128,7 @@ def test_queue_budget_fails_fast_records_wait_and_reuses_released_slot():
     )
 
 
-def test_stage_timeout_includes_queue_wait_instead_of_extending_after_admission():
+def test_stage_timeout_begins_after_separate_queue_admission():
     entered = Event()
     release = Event()
     gate = ModelCallGate(1, max_background_tails=1)
@@ -164,7 +164,7 @@ def test_stage_timeout_includes_queue_wait_instead_of_extending_after_admission(
     assert captured.value.code == "model_response_deadline_exceeded"
     assert 0.045 <= elapsed < 0.13
     assert timings[0]["queue_elapsed_seconds"] >= 0.02
-    assert timings[0]["execution_elapsed_seconds"] < 0.06
+    assert timings[0]["execution_elapsed_seconds"] >= 0.055
     assert timings[0]["total_elapsed_seconds"] < 0.13
 
 
@@ -447,8 +447,8 @@ def test_competition_deadline_profile_is_explicit_and_preserves_terminal_reserve
     assert config.exploration_deadline_seconds == 720.0
     assert config.deterministic_finalize_reserve_seconds == 50.0
     assert config.model_queue_budget_seconds > 0
-    assert config.model_max_concurrency == 16
-    assert config.max_background_model_tails == 16
+    assert config.model_max_concurrency == 6
+    assert config.max_background_model_tails == 6
     assert config.hard_deadline_seconds < config.outer_platform_limit_seconds
 
     now = [0.0]

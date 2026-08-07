@@ -108,6 +108,16 @@ def test_named_profiles_are_versioned_and_fully_expanded():
         assert HarnessConfig.from_dict(payload).profile == name
 
 
+def test_competition_config_cannot_silently_fall_back_to_six_calls():
+    root = Path(__file__).resolve().parents[1]
+    payload = json.loads(
+        (root / "config" / "competition.json").read_text(encoding="utf-8")
+    )
+    payload.pop("max_logical_model_calls_per_problem")
+    with pytest.raises(ValueError, match="missing settings"):
+        HarnessConfig.from_dict(payload)
+
+
 def test_public_and_benchmark_use_the_same_semantic_config_hash(
     tmp_path,
     monkeypatch,

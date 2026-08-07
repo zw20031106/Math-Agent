@@ -61,10 +61,10 @@
         "mathforge/parsing/solution_parser.py"
       ],
       "expected_count": 7,
-      "version": "model-candidate-boundary-2.1",
-      "engineering_reviewer": "codex-phase-t5-prompt-audit",
-      "review_date": "2026-07-31",
-      "sha256": "533bdb673f0c2b56cf6860c44c1ab1cc08b576977bead24011c8e10a4b363f70"
+      "version": "model-candidate-boundary-2.1-f1-execution-policy",
+      "engineering_reviewer": "codex-phase-f1-resource-governance-audit",
+      "review_date": "2026-08-07",
+      "sha256": "a0fbb06246b07fe06931aa18d9e64d083ef3c941796285eee9a351a7a1841e0f"
     },
     {
       "id": "reasoning-state",
@@ -150,10 +150,10 @@
         "mathforge/verification/proof_obligations.py"
       ],
       "expected_count": 14,
-      "version": "verification-closure-phase-t5-response-mode",
-      "engineering_reviewer": "codex-phase-t5-prompt-audit",
-      "review_date": "2026-07-31",
-      "sha256": "05754489b1fd86c789ea6a6f648462ad055433fe53c5cd2dff2d2982237bd428"
+      "version": "verification-closure-phase-f1-resource-governance",
+      "engineering_reviewer": "codex-phase-f1-resource-governance-audit",
+      "review_date": "2026-08-07",
+      "sha256": "7b757c8974383acd8ce7bbcc5d65881d664dca2d2829b80e5d24faa4e47e0394"
     },
     {
       "id": "reviewed-method-cards",
@@ -211,10 +211,10 @@
         "scripts/propose_competition_config.py"
       ],
       "expected_count": 4,
-      "version": "phase7-live-calibration-2-trace-3.7",
-      "engineering_reviewer": "codex-phase-t4-trace-audit",
-      "review_date": "2026-07-31",
-      "sha256": "adc79e391ab3fa4f7732796b5f59e7b171c756e5dcc6c0b0f39a104530f3f535"
+      "version": "phase-f1-resource-governance-trace-3.7",
+      "engineering_reviewer": "codex-phase-f1-resource-governance-audit",
+      "review_date": "2026-08-07",
+      "sha256": "a49d418e555889ac6eb8fc133497cdd293bd54b95a2863925555b52a0c7cd355"
     },
     {
       "id": "router-calibration",

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from threading import Lock
 
+from mathforge.agent_runtime.call_ledger import CallLedger
+from mathforge.agent_runtime.resource_governor import ResourceGovernor
 from mathforge.harness.allocation import CallAllocationPlan, CallBudgetSnapshot
 from mathforge.harness.deadline import DeadlineController
 from mathforge.harness.errors import BudgetExceeded
@@ -29,6 +31,10 @@ class CallBudget:
     token_limit_mode: str = "dynamic_context"
     model_context_window_tokens: int = 262144
     context_safety_margin_tokens: int = 8192
+    model_call_policy: str = "legacy_staged"
+    soft_call_checkpoints: tuple[int, ...] = (1,)
+    speculative_exploration_cutoff: int = 1
+    closure_reserve_calls: int = 0
 
     def __post_init__(self) -> None:
         if self.max_calls < 1 or self.max_tokens < 0:
@@ -56,6 +62,9 @@ class CallBudget:
             raise ValueError("evidence and prompt budgets must be positive")
         if self.model_queue_budget_seconds <= 0:
             raise ValueError("model queue budget must be positive")
+        self.soft_call_checkpoints = tuple(self.soft_call_checkpoints)
+        if self.model_call_policy not in {"legacy_staged", "adaptive_bounded"}:
+            raise ValueError("model call policy is invalid")
         self._lock = Lock()
         self._frozen = False
         self._scheduler_case_id = ""
@@ -90,9 +99,26 @@ class CallBudget:
         self.provider_active_tails = 0
         self.provider_peak_tails = 0
         self.provider_scheduler_peak = 0
+        self.provider_rate_reserved_weight = 0
+        self.provider_rate_peak_weight = 0
+        self.provider_rate_wait_count = 0
+        self.provider_rate_admitted_weight = 0
         self.provider_circuit_trips = 0
         self.provider_fast_failures = 0
-        self.model_call_records: list[dict] = []
+        self._call_ledger = CallLedger()
+        self.model_call_records = self._call_ledger.records
+        self._resource_governor = (
+            ResourceGovernor(
+                hard_limit=self.max_calls,
+                soft_checkpoints=self.soft_call_checkpoints,
+                speculative_exploration_cutoff=(
+                    self.speculative_exploration_cutoff
+                ),
+                closure_reserve_calls=self.closure_reserve_calls,
+            )
+            if self.model_call_policy == "adaptive_bounded"
+            else None
+        )
         self.final_response_tokens = 0
         self.final_response_counting_mode = ""
         self.deadline = DeadlineController(
@@ -123,16 +149,35 @@ class CallBudget:
     def set_allocation_plan(self, plan: CallAllocationPlan) -> None:
         with self._lock:
             self._ensure_mutable_locked()
+            if self._resource_governor is not None:
+                raise RuntimeError(
+                    "adaptive_bounded budgets do not accept stage allocations"
+                )
             if plan.max_calls != self.max_calls:
                 raise ValueError("call allocation plan does not match budget")
             self._allocation_plan = plan.with_stage_floors(self._stage_calls)
 
-    def consume(self, *, stage: str = "unallocated", optional: bool = False) -> None:
+    def consume(
+        self,
+        *,
+        stage: str = "unallocated",
+        optional: bool = False,
+        action_category: str | None = None,
+    ) -> None:
         with self._lock:
             self._ensure_mutable_locked()
-            if self.used_calls >= self.max_calls:
+            if self._resource_governor is not None:
+                category = action_category or ResourceGovernor.default_action_category(
+                    stage,
+                    optional=optional,
+                )
+                self._resource_governor.admit(
+                    used_calls=self.used_calls,
+                    action_category=category,
+                )
+            elif self.used_calls >= self.max_calls:
                 raise BudgetExceeded("model call budget exhausted")
-            if self._allocation_plan is not None:
+            if self._allocation_plan is not None and self._resource_governor is None:
                 used_for_stage = self._stage_calls.get(stage, 0)
                 if used_for_stage >= self._allocation_plan.limit_for(stage):
                     raise BudgetExceeded(f"{stage} call allocation exhausted")
@@ -178,6 +223,8 @@ class CallBudget:
             record = {
                 "stage": str(stage),
                 **dict(allocation),
+                "logical_call_index": self.used_calls,
+                "logical_call_consumed": False,
                 "dispatched": False,
                 "started_elapsed_seconds": round(
                     self.deadline.elapsed_seconds(),
@@ -200,18 +247,28 @@ class CallBudget:
                 "output_counting_mode": "",
                 "output_chars": 0,
                 "output_budget_exceeded": False,
+                "finish_reason": str(
+                    allocation.get("finish_reason", "unobservable")
+                ),
+                "tail_state": "none",
+                "stop_reason": "",
                 "elapsed_seconds": 0.0,
                 "queue_elapsed_seconds": 0.0,
+                "agent_wait_seconds": 0.0,
+                "scheduler_wait_seconds": 0.0,
+                "rate_wait_seconds": 0.0,
                 "execution_elapsed_seconds": 0.0,
                 "total_elapsed_seconds": 0.0,
             }
-            self.model_call_records.append(record)
-            return len(self.model_call_records) - 1
+            return self._call_ledger.start(record)
 
     def record_model_call_dispatched(self, index: int) -> None:
         with self._lock:
             self._ensure_mutable_locked()
-            self.model_call_records[index]["dispatched"] = True
+            self._call_ledger.update(
+                index,
+                {"dispatched": True, "logical_call_consumed": True},
+            )
 
     def record_model_call_completed(
         self,
@@ -245,6 +302,7 @@ class CallBudget:
                         output_budget_exceeded
                     ),
                     "elapsed_seconds": round(elapsed, 6),
+                    "stop_reason": "response_received",
                 }
             )
 
@@ -270,6 +328,7 @@ class CallBudget:
                     "failure_code": str(failure_code),
                     "transport_attempts": attempts,
                     "elapsed_seconds": round(elapsed, 6),
+                    "stop_reason": str(failure_code),
                 }
             )
 
@@ -294,6 +353,7 @@ class CallBudget:
                     "failure_code": str(failure_code),
                     "transport_attempts": attempts,
                     "elapsed_seconds": round(elapsed, 6),
+                    "stop_reason": str(failure_code),
                 }
             )
 
@@ -312,18 +372,22 @@ class CallBudget:
             if rejected:
                 self.model_response_rejection_count += 1
 
-    def record_background_tail(self, event: str) -> None:
+    def record_background_tail(self, event: str, index: int | None = None) -> None:
         with self._lock:
             self._ensure_mutable_locked()
             if event == "started":
                 self.background_tail_started += 1
                 self.background_tail_active += 1
+                if index is not None:
+                    self.model_call_records[index]["tail_state"] = "background_tail"
             elif event == "completed":
                 self.background_tail_completed += 1
                 self.background_tail_active = max(
                     0,
                     self.background_tail_active - 1,
                 )
+                if index is not None:
+                    self.model_call_records[index]["tail_state"] = "completed_late"
             else:
                 raise ValueError("unknown background-tail event")
 
@@ -346,6 +410,9 @@ class CallBudget:
         index: int,
         *,
         queue_elapsed_seconds: float,
+        agent_wait_seconds: float = 0.0,
+        scheduler_wait_seconds: float = 0.0,
+        rate_wait_seconds: float = 0.0,
         execution_elapsed_seconds: float,
         total_elapsed_seconds: float,
     ) -> None:
@@ -359,6 +426,18 @@ class CallBudget:
             self.model_call_records[index].update(
                 {
                     "queue_elapsed_seconds": round(queue_elapsed, 6),
+                    "agent_wait_seconds": round(
+                        max(0.0, float(agent_wait_seconds)),
+                        6,
+                    ),
+                    "scheduler_wait_seconds": round(
+                        max(0.0, float(scheduler_wait_seconds)),
+                        6,
+                    ),
+                    "rate_wait_seconds": round(
+                        max(0.0, float(rate_wait_seconds)),
+                        6,
+                    ),
                     "execution_elapsed_seconds": round(execution_elapsed, 6),
                     "total_elapsed_seconds": round(total_elapsed, 6),
                 }
@@ -401,6 +480,24 @@ class CallBudget:
                     self.provider_scheduler_peak,
                     int(scheduler.get("peak", 0)),
                 )
+            rate_limit = snapshot.get("rate_limit", {})
+            if isinstance(rate_limit, dict):
+                self.provider_rate_reserved_weight = max(
+                    0,
+                    int(rate_limit.get("reserved_weight", 0)),
+                )
+                self.provider_rate_peak_weight = max(
+                    self.provider_rate_peak_weight,
+                    int(rate_limit.get("peak_weight", 0)),
+                )
+                self.provider_rate_wait_count = max(
+                    self.provider_rate_wait_count,
+                    int(rate_limit.get("wait_count", 0)),
+                )
+                self.provider_rate_admitted_weight = max(
+                    self.provider_rate_admitted_weight,
+                    int(rate_limit.get("admitted_weight", 0)),
+                )
 
     def freeze(self) -> None:
         with self._lock:
@@ -415,7 +512,11 @@ class CallBudget:
         return not self.deadline.optional_work_allowed()
 
     def can_start_exploration(self) -> bool:
-        return self.deadline.exploration_allowed()
+        return self.deadline.exploration_allowed() and (
+            self._resource_governor is None
+            or self.used_calls
+            < self._resource_governor.speculative_exploration_cutoff
+        )
 
     def must_finalize(self) -> bool:
         return self.deadline.must_finalize()
@@ -495,20 +596,42 @@ class CallBudget:
                 if self._allocation_plan is not None
                 else {}
             )
-            stage_remaining = {
-                stage: max(0, limit - self._stage_calls.get(stage, 0))
-                for stage, limit in limits.items()
-            }
+            remaining_calls = max(0, self.max_calls - self.used_calls)
+            stage_remaining = (
+                {
+                    stage: remaining_calls
+                    for stage in (
+                        "router",
+                        "primary",
+                        "alternative",
+                        "verifier",
+                        "repair",
+                        "lemma",
+                        "finalizer",
+                    )
+                }
+                if self._resource_governor is not None
+                else {
+                    stage: max(0, limit - self._stage_calls.get(stage, 0))
+                    for stage, limit in limits.items()
+                }
+            )
             return CallBudgetSnapshot(
                 max_calls=self.max_calls,
                 used_calls=self.used_calls,
-                remaining_calls=max(0, self.max_calls - self.used_calls),
+                remaining_calls=remaining_calls,
                 remaining_seconds=round(
                     self.deadline.remaining_seconds(),
                     6,
                 ),
-                exploration_open=self.deadline.exploration_allowed(),
+                exploration_open=self.can_start_exploration(),
                 stage_remaining=stage_remaining,
+                budget_phase=self.budget_phase,
+                next_checkpoint=(
+                    self._resource_governor.next_checkpoint(self.used_calls)
+                    if self._resource_governor is not None
+                    else None
+                ),
             )
 
     def to_dict(self) -> dict:
@@ -516,7 +639,16 @@ class CallBudget:
             return {
                 "max_calls": self.max_calls,
                 "used_calls": self.used_calls,
+                "calls_used": self.used_calls,
                 "model_calls": self.used_calls,
+                "model_call_policy": self.model_call_policy,
+                "budget_phase": self.budget_phase,
+                "soft_call_checkpoints": list(self.soft_call_checkpoints),
+                "speculative_exploration_cutoff": (
+                    self.speculative_exploration_cutoff
+                ),
+                "closure_reserve_calls": self.closure_reserve_calls,
+                "calls_remaining": max(0, self.max_calls - self.used_calls),
                 "max_tokens": self.max_tokens,
                 "used_tokens": self.used_tokens,
                 "estimated_tokens": self.used_tokens,
@@ -563,15 +695,21 @@ class CallBudget:
                 "provider_active_tails": self.provider_active_tails,
                 "provider_peak_tails": self.provider_peak_tails,
                 "provider_scheduler_peak": self.provider_scheduler_peak,
+                "provider_rate_reserved_weight": (
+                    self.provider_rate_reserved_weight
+                ),
+                "provider_rate_peak_weight": self.provider_rate_peak_weight,
+                "provider_rate_wait_count": self.provider_rate_wait_count,
+                "provider_rate_admitted_weight": (
+                    self.provider_rate_admitted_weight
+                ),
                 "provider_circuit_trips": self.provider_circuit_trips,
                 "provider_fast_failures": self.provider_fast_failures,
                 "final_response_tokens": self.final_response_tokens,
                 "final_response_counting_mode": (
                     self.final_response_counting_mode
                 ),
-                "model_call_records": [
-                    dict(record) for record in self.model_call_records
-                ],
+                "model_call_records": self._call_ledger.snapshot(),
                 "max_claims": self.max_claims,
                 "used_claims": self.used_claims,
                 "max_tool_calls": self.max_tool_calls,
@@ -599,6 +737,20 @@ class CallBudget:
                 "frozen": self._frozen,
             }
 
+    @property
+    def budget_phase(self) -> str:
+        if self._resource_governor is None:
+            return "legacy_staged"
+        return self._resource_governor.phase(self.used_calls)
+
+    @property
+    def resource_governor(self) -> ResourceGovernor | None:
+        return self._resource_governor
+
     def _ensure_mutable_locked(self) -> None:
         if self._frozen:
             raise RuntimeError("call budget is frozen")
+
+
+class SessionCallBudget(CallBudget):
+    """Named F1 budget used by the production per-problem Session."""

@@ -11,6 +11,8 @@ class CallBudgetSnapshot:
     remaining_seconds: float
     exploration_open: bool
     stage_remaining: dict[str, int]
+    budget_phase: str = "legacy"
+    next_checkpoint: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -20,6 +22,8 @@ class CallBudgetSnapshot:
             "remaining_seconds": self.remaining_seconds,
             "exploration_open": self.exploration_open,
             "stage_remaining": dict(self.stage_remaining),
+            "budget_phase": self.budget_phase,
+            "next_checkpoint": self.next_checkpoint,
         }
 
 

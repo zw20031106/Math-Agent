@@ -11,7 +11,7 @@ from mathforge.output.judge_trace import minimal_judge_trace
 from mathforge.runtime import MathForgeHarness
 
 
-CASE_MAX_CONCURRENCY = 4
+CASE_MAX_CONCURRENCY = load_competition_config().case_max_concurrency
 
 
 class ReasoningAgent:
@@ -20,12 +20,13 @@ class ReasoningAgent:
         del args, kwargs
         if config is not None and not isinstance(config, HarnessConfig):
             raise TypeError("config must be a HarnessConfig")
+        active_config = config or load_competition_config()
         self._harness = MathForgeHarness(
             client,
-            config or load_competition_config(),
+            active_config,
             model_identity=official_client_model_identity(),
         )
-        self._case_gate = BoundedSemaphore(CASE_MAX_CONCURRENCY)
+        self._case_gate = BoundedSemaphore(active_config.case_max_concurrency)
 
     def solve(self, problem: str, metadata: dict) -> dict:
         identifier = None

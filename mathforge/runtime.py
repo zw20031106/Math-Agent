@@ -10,6 +10,7 @@ from mathforge.agents.router_planner import RouterPlanner
 from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.adaptive_fanout import AdaptiveFanoutPolicy
+from mathforge.agent_runtime.session_call_budget import SessionCallBudget
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.debug import DebugSink, sanitized_failure_record
 from mathforge.harness.errors import (
@@ -147,6 +148,28 @@ _PUBLIC_METADATA_KEYS = (
 )
 
 
+def _build_call_allocation(
+    budget: CallBudget,
+    **kwargs: Any,
+):
+    max_calls = int(kwargs.pop("max_calls"))
+    governor = budget.resource_governor
+    if governor is not None:
+        return governor.activation_plan(
+            used_calls=budget.used_calls,
+            **kwargs,
+        )
+    return CallAllocationPlan.build(max_calls=max_calls, **kwargs)
+
+
+def _apply_stage_allocation(
+    budget: CallBudget,
+    allocation: Any,
+) -> None:
+    if budget.resource_governor is None:
+        budget.set_allocation_plan(allocation)
+
+
 def _public_metadata(metadata: Any) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         return {}
@@ -190,6 +213,11 @@ class MathForgeHarness:
         )
         gate = ModelCallGate(
             self._config.model_max_concurrency,
+            requests_per_minute=self._config.model_requests_per_minute,
+            rate_limit_window_seconds=self._config.rate_limit_window_seconds,
+            transport_attempt_reservation=(
+                self._config.transport_attempt_reservation
+            ),
             max_background_tails=self._config.max_background_model_tails,
             late_registry_limit=self._config.late_result_registry_max_entries,
         )
@@ -198,6 +226,7 @@ class MathForgeHarness:
             client,
             gate,
             self._context_budget,
+            stage_execution_policy=self._config.stage_execution_policy,
         )
         self._fallback = FallbackSolver()
         self._problem_parser = ProblemParser()
@@ -331,8 +360,12 @@ class MathForgeHarness:
         session = create_session(
             normalized_problem,
             safe_metadata,
-            CallBudget(
-                max_calls=self._config.max_model_calls,
+            SessionCallBudget(
+                max_calls=(
+                    self._config.max_logical_model_calls_per_problem
+                    if self._config.model_call_policy == "adaptive_bounded"
+                    else self._config.max_model_calls
+                ),
                 max_tokens=self._config.max_model_tokens,
                 soft_deadline_seconds=self._config.soft_deadline_seconds,
                 exploration_deadline_seconds=self._config.exploration_deadline_seconds,
@@ -363,6 +396,12 @@ class MathForgeHarness:
                 context_safety_margin_tokens=(
                     self._config.context_safety_margin_tokens
                 ),
+                model_call_policy=self._config.model_call_policy,
+                soft_call_checkpoints=self._config.soft_call_checkpoints,
+                speculative_exploration_cutoff=(
+                    self._config.speculative_exploration_cutoff
+                ),
+                closure_reserve_calls=self._config.closure_reserve_calls,
             ),
             raw_context_max_chars=self._config.raw_context_max_chars,
         )
@@ -590,6 +629,8 @@ class MathForgeHarness:
                         lambda **kwargs: self._provider.chat(
                             budget=session.budget,
                             stage="router",
+                            turn_kind="router",
+                            agent_id="RouterPlanner",
                             **kwargs,
                         )
                     )
@@ -668,7 +709,8 @@ class MathForgeHarness:
                     self._config.model_queue_budget_seconds
                 ),
             )
-            allocation = CallAllocationPlan.build(
+            allocation = _build_call_allocation(
+                session.budget,
                 max_calls=self._config.max_model_calls,
                 router_calls=session.budget.used_calls,
                 candidate_count=(
@@ -685,7 +727,7 @@ class MathForgeHarness:
                 ),
                 primary_calls=reasoning_plan.planned_rounds,
             )
-            session.budget.set_allocation_plan(allocation)
+            _apply_stage_allocation(session.budget, allocation)
             unreachable = list(allocation.unreachable_by_budget)
             if router_unreachable:
                 unreachable.insert(0, "router")
@@ -1342,7 +1384,8 @@ class MathForgeHarness:
                     provider_health=self._provider_health_state(),
                     disabled=["repair", "lemma", "verifier", "finalizer"],
                 )
-            allocation = CallAllocationPlan.build(
+            allocation = _build_call_allocation(
+                session.budget,
                 max_calls=self._config.max_model_calls,
                 router_calls=allocation.router,
                 candidate_count=session.route_plan.candidate_count,
@@ -1366,7 +1409,7 @@ class MathForgeHarness:
                     and optional_model_work_allowed
                 ),
             )
-            session.budget.set_allocation_plan(allocation)
+            _apply_stage_allocation(session.budget, allocation)
             session.route_plan = replace(
                 session.route_plan,
                 use_lemma_loop=(
@@ -1813,7 +1856,8 @@ class MathForgeHarness:
                 and session.budget.deadline.exploration_allowed()
             )
             if verifier_required:
-                allocation = CallAllocationPlan.build(
+                allocation = _build_call_allocation(
+                    session.budget,
                     max_calls=self._config.max_model_calls,
                     router_calls=allocation.router,
                     candidate_count=session.route_plan.candidate_count,
@@ -1823,7 +1867,7 @@ class MathForgeHarness:
                     finalizer_requested=allocation.finalizer_reserve > 0,
                     reverification_requested=post_verifier_repair_requested,
                 )
-                session.budget.set_allocation_plan(allocation)
+                _apply_stage_allocation(session.budget, allocation)
                 trace.add(
                     "call_allocation_rebalanced",
                     evidence_repair_triggers={},

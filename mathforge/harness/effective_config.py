@@ -6,6 +6,7 @@ from mathforge.agents.registry import PromptContractLoader
 from mathforge.config import HarnessConfig
 from mathforge.harness.model_policy import (
     stage_call_timeout,
+    stage_minimum_start_window,
     stage_output_cap,
     stage_p95_seconds,
 )
@@ -23,6 +24,12 @@ _ROLE_DIRECTORIES = {
 }
 _STAGES = (
     "router",
+    "replan",
+    "solver_progress",
+    "solver_candidate_standard",
+    "solver_candidate_proof",
+    "lemma_curator",
+    "peer_review",
     "primary",
     "alternative",
     "lemma",
@@ -55,12 +62,24 @@ def build_effective_config_snapshot(
             "raw_context_max_chars": config.raw_context_max_chars,
             "max_prompt_chars_total": config.max_prompt_chars_total,
             "stage_output_cap_tokens": {
-                stage: stage_output_cap(stage) for stage in _STAGES
+                stage: stage_output_cap(
+                    stage,
+                    config.stage_execution_policy,
+                )
+                for stage in _STAGES
             },
         },
         "provider": {
             "interface": "injected_client.chat",
             "max_physical_concurrency": config.model_max_concurrency,
+            "requests_per_minute": config.model_requests_per_minute,
+            "rate_limit_window_seconds": config.rate_limit_window_seconds,
+            "transport_attempt_reservation": (
+                config.transport_attempt_reservation
+            ),
+            "max_inflight_calls_per_agent": (
+                config.max_inflight_calls_per_agent
+            ),
             "max_background_tails": config.max_background_model_tails,
             "queue_budget_cap_seconds": config.model_queue_budget_seconds,
             "context_window_tokens": config.model_context_window_tokens,
@@ -71,8 +90,28 @@ def build_effective_config_snapshot(
                 stage: stage_p95_seconds(stage) for stage in _STAGES
             },
             "stage_timeout_seconds": {
-                stage: stage_call_timeout(stage) for stage in _STAGES
+                stage: stage_call_timeout(
+                    stage,
+                    config.stage_execution_policy,
+                )
+                for stage in _STAGES
             },
+            "stage_minimum_start_window_seconds": {
+                stage: stage_minimum_start_window(
+                    stage,
+                    config.stage_execution_policy,
+                )
+                for stage in _STAGES
+            },
+        },
+        "model_call_budget": {
+            "policy": config.model_call_policy,
+            "hard_limit": config.max_logical_model_calls_per_problem,
+            "soft_checkpoints": list(config.soft_call_checkpoints),
+            "speculative_exploration_cutoff": (
+                config.speculative_exploration_cutoff
+            ),
+            "closure_reserve_calls": config.closure_reserve_calls,
         },
         "deadline": {
             "outer_platform_limit_seconds": (

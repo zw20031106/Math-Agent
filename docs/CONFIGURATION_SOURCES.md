@@ -31,7 +31,7 @@ cross-case state during `solve()`.
 Local runner inputs outside Harness configuration are explicit CLI arguments:
 
 - `--model intern-s2-preview-397b` selects and validates the exact local model.
-- `--concurrency 4` selects one to four active cases and defaults to four.
+- `--concurrency 3` selects one to three active cases and defaults to three.
 
 The only optional environment input documented outside the official client is:
 

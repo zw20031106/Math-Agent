@@ -32,13 +32,13 @@ from scripts.run_case_outputs import run_model_preflight
 @pytest.mark.parametrize(
     ("stage", "expected_tokens", "expected_timeout"),
     [
-        ("router", 4096, 60.0),
-        ("primary", 32768, 165.0),
-        ("alternative", 24576, 165.0),
-        ("verifier", 8192, 165.0),
-        ("repair", 8192, 165.0),
-        ("lemma", 16384, 165.0),
-        ("finalizer", 4096, 60.0),
+        ("router", 4096, 120.0),
+        ("primary", 8192, 240.0),
+        ("alternative", 8192, 240.0),
+        ("verifier", 6144, 180.0),
+        ("repair", 8192, 225.0),
+        ("lemma", 8192, 225.0),
+        ("finalizer", 4096, 120.0),
     ],
 )
 def test_role_policy_separates_output_and_call_budgets(
@@ -180,12 +180,12 @@ def test_provider_applies_role_cap_and_records_transport_attempts():
     )
 
     assert response == "ok"
-    assert client.calls[0]["max_tokens"] == 32_768
+    assert client.calls[0]["max_tokens"] == 8_192
     assert budget.transport_attempts == 2
     record = budget.model_call_records[0]
     assert record["configured_output_tokens"] == 65_536
-    assert record["stage_output_cap_tokens"] == 32_768
-    assert record["max_output_tokens"] == 32_768
+    assert record["stage_output_cap_tokens"] == 8_192
+    assert record["max_output_tokens"] == 8_192
     assert record["transport_attempts"] == 2
     assert record["status"] == "completed"
 

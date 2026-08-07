@@ -27,8 +27,9 @@ The injected official client is the only model interface. No API keys, alternate
 model clients, native function calling, or network retrieval are used.
 
 The frozen official entry defaults to eight submitted cases. `ReasoningAgent`
-owns the effective case-admission boundary and permits at most four active
-solves; the competition model-call gate is also four. Candidate generation
+owns the effective case-admission boundary and permits at most three active
+solves; the Competition model-call gate permits six physical calls under a
+weighted global 200 RPM admission controller. Candidate generation
 dispatches Primary before optional alternatives, so outer-runner settings are
 not required for first-call fairness.
 
@@ -88,7 +89,7 @@ For one atomic JSON file per input case, written immediately when that case
 finishes, use:
 
 ```bash
-python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --model intern-s2-preview-397b --concurrency 4
+python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --model intern-s2-preview-397b --concurrency 3
 ```
 
 Files are named `<id>.json` and contain exactly `id`, `status`,
@@ -106,11 +107,11 @@ deadline profile. It permits one retry only for an explicitly
 classified, quickly returned rate-limit, 5xx, or connection failure; empty,
 invalid, incomplete, and timed-out responses are not replayed. The runner
 constructs the official client with one internal attempt, so all outer
-transport attempts remain observable. The competition model-call gate remains
-fixed at four concurrent physical requests.
+transport attempts remain observable. The Competition model-call gate permits
+six concurrent physical requests and reserves retry weight against 200 RPM.
 
 The custom runner uses a rolling case window with default and maximum
-concurrency four; a queued case does not consume its 900-second deadline before
+concurrency three; a queued case does not consume its 900-second deadline before
 dispatch. Each result is atomically written as soon as it finishes.
 `run_manifest.json`
 moves through `created`,
@@ -225,7 +226,7 @@ wheelhouse; installation and the smoke test are offline.
 
 - `--model intern-s2-preview-397b`: explicit local-runner model selection;
   aliases fail closed. This is not an environment-variable requirement.
-- `--concurrency 4`: local runner case concurrency; four is the default and
+- `--concurrency 3`: local runner case concurrency; three is the default and
   maximum.
 - `MATHFORGE_INTERN_S2_TOKENIZER_DIR`: optional pinned local tokenizer snapshot;
   a mismatch activates the recorded multilingual estimator instead of loading it.
@@ -237,13 +238,13 @@ runners load only their explicit `--config` path. The tested source hierarchy
 and intentional custom/default differences are recorded in
 `docs/CONFIGURATION_SOURCES.md`.
 
-The competition profile allows six model calls and has no artificial aggregate
-model-token quota. It stops low-value optional work at 800 seconds, closes all
-new model calls at 1,000 seconds, enters deterministic finalization at 1,100
-seconds, and requires Harness return by 1,150 seconds. The per-case runner
-reserves the remaining 50 seconds of the 1,200-second wall clock for a terminal
-result and atomic JSON persistence. Each model admission has a separate
-15-second queue budget, and queue time is included in the role timeout. A timed
+The Competition profile uses a 48-logical-call adaptive bounded budget, soft
+checkpoints at 16/28/40, and an eight-call closure reserve, with no artificial
+aggregate model-token quota. Optional work closes at 600 seconds, exploration
+closes at 720 seconds, the Harness hard deadline is 850 seconds, and the runner
+retains the rest of the 900-second outer limit for terminal output and
+persistence. Each admission has a separate 15-second queue budget. Queue wait
+counts against the problem deadline but not the admitted Turn's execution timeout. A timed
 out provider thread is not described as cancelled: it becomes a bounded
 background tail, opens the provider circuit at the configured limit, and can
 write only a small provider-level late-result record. It cannot retain or
@@ -263,15 +264,16 @@ repeated A0–A10 evidence are still required before S6 can freeze the profile.
 
 ### True multi-Agent remediation status
 
-Phase F0 freezes governance and the pre-remediation baseline only. The current
-six-call, optional-Router Competition behavior described above remains an
-accurate runtime fact at this phase; it is not the target architecture. The
+Phase F0 froze governance and the pre-remediation baseline. Phase F1 now
+implements the resource layer: case concurrency 3, weighted global 200 RPM
+admission, the 48-call adaptive budget, Turn-specific execution policy,
+CallLedger observability, and background-tail/same-Agent in-flight control. The
 authoritative phased design is
 `docs/MATH_AGENT_TRUE_MULTI_AGENT_FINAL_ARCHITECTURE_AND_IMPLEMENTATION_PLAN_2026-08-02.md`.
-It requires subsequent phases to implement mandatory LLM routing, independent
+Subsequent phases still must implement mandatory LLM routing, independent
 Agent calls and communication, multiple Candidates with cross-review, bounded
-long-horizon reasoning, case concurrency 3, and a global 200 RPM admission
-limit. F0 completion must not be represented as completion of that architecture.
+long-horizon reasoning, and the remaining completion gates. F1 completion must
+not be represented as completion of the full true multi-Agent architecture.
 
 Evaluation evidence uses an explicit-allow registry at
 `data/evaluation_evidence_registry.json`. Historical case directories and

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -9,9 +9,32 @@ from typing import ClassVar
 from mathforge.resources import resource_path
 
 
-CONFIG_SCHEMA_VERSION = "1.5"
+CONFIG_SCHEMA_VERSION = "2.0"
 COMPETITION_CONFIG_PATH = resource_path("config", "competition.json")
 _METADATA_FIELDS = frozenset({"schema_version", "profile", "status"})
+
+
+def _default_stage_execution_policy() -> dict[str, dict[str, int | float]]:
+    return {
+        "router": {"max_tokens": 4096, "timeout_seconds": 120.0, "minimum_start_window_seconds": 60.0},
+        "replan": {"max_tokens": 4096, "timeout_seconds": 120.0, "minimum_start_window_seconds": 60.0},
+        "solver_progress": {"max_tokens": 4096, "timeout_seconds": 180.0, "minimum_start_window_seconds": 90.0},
+        "solver_candidate_standard": {
+            "max_tokens": 8192,
+            "timeout_seconds": 240.0,
+            "minimum_start_window_seconds": 120.0,
+        },
+        "solver_candidate_proof": {
+            "max_tokens": 12288,
+            "timeout_seconds": 270.0,
+            "minimum_start_window_seconds": 180.0,
+        },
+        "lemma_curator": {"max_tokens": 8192, "timeout_seconds": 225.0, "minimum_start_window_seconds": 120.0},
+        "peer_review": {"max_tokens": 6144, "timeout_seconds": 180.0, "minimum_start_window_seconds": 90.0},
+        "verifier": {"max_tokens": 6144, "timeout_seconds": 180.0, "minimum_start_window_seconds": 90.0},
+        "repair": {"max_tokens": 8192, "timeout_seconds": 225.0, "minimum_start_window_seconds": 120.0},
+        "finalizer": {"max_tokens": 4096, "timeout_seconds": 120.0, "minimum_start_window_seconds": 60.0},
+    }
 
 
 @dataclass(frozen=True)
@@ -21,10 +44,27 @@ class HarnessConfig:
     schema_version: str = CONFIG_SCHEMA_VERSION
     profile: str = "custom"
     status: str = "custom"
+    case_max_concurrency: int = 3
     model_max_concurrency: int = 16
+    model_requests_per_minute: int = 200
+    rate_limit_window_seconds: float = 60.0
+    transport_attempt_reservation: int = 3
+    max_inflight_calls_per_agent: int = 1
     primary_temperature: float = 0.2
     primary_max_tokens: int = 0
     max_model_calls: int = 6
+    model_call_policy: str = "legacy_staged"
+    max_logical_model_calls_per_problem: int = 6
+    soft_call_checkpoints: tuple[int, ...] = (1,)
+    speculative_exploration_cutoff: int = 1
+    closure_reserve_calls: int = 0
+    stage_execution_policy: dict[str, dict[str, int | float]] = field(
+        default_factory=_default_stage_execution_policy
+    )
+    finish_reason_length_policy: str = "partial_needs_compaction"
+    timeout_retry_policy: str = "wait_tail_or_replan"
+    experimental_proof_max_tokens: int = 16384
+    experimental_proof_timeout_seconds: float = 300.0
     skill_char_budget: int = 6000
     raw_context_max_chars: int = 48000
     use_mcp: bool = False
@@ -71,6 +111,16 @@ class HarnessConfig:
     enable_long_horizon: bool = False
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "soft_call_checkpoints",
+            tuple(self.soft_call_checkpoints),
+        )
+        object.__setattr__(
+            self,
+            "stage_execution_policy",
+            json.loads(json.dumps(self.stage_execution_policy)),
+        )
         self.validate()
 
     @classmethod
@@ -78,7 +128,9 @@ class HarnessConfig:
         return {item.name for item in fields(cls)} - _METADATA_FIELDS
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        payload = asdict(self)
+        payload["soft_call_checkpoints"] = list(self.soft_call_checkpoints)
+        return payload
 
     @property
     def fingerprint(self) -> str:
@@ -126,9 +178,17 @@ class HarnessConfig:
                 raise ValueError(f"{name} must be a boolean")
 
         integer_ranges = {
+            "case_max_concurrency": (1, 3),
             "model_max_concurrency": (1, 64),
+            "model_requests_per_minute": (1, 200),
+            "transport_attempt_reservation": (1, 200),
+            "max_inflight_calls_per_agent": (1, 1),
             "primary_max_tokens": (0, 262144),
             "max_model_calls": (1, 64),
+            "max_logical_model_calls_per_problem": (1, 64),
+            "speculative_exploration_cutoff": (1, 64),
+            "closure_reserve_calls": (0, 63),
+            "experimental_proof_max_tokens": (1, 262144),
             "skill_char_budget": (1, 200000),
             "raw_context_max_chars": (256, 1000000),
             "max_model_tokens": (0, 10000000),
@@ -165,6 +225,7 @@ class HarnessConfig:
             raise ValueError("primary_temperature must be a number in [0, 2]")
 
         deadline_names = (
+            "rate_limit_window_seconds",
             "soft_deadline_seconds",
             "exploration_deadline_seconds",
             "hard_deadline_seconds",
@@ -172,6 +233,7 @@ class HarnessConfig:
             "outer_platform_limit_seconds",
             "model_queue_budget_seconds",
             "max_tool_seconds",
+            "experimental_proof_timeout_seconds",
         )
         for name in deadline_names:
             value = getattr(self, name)
@@ -197,6 +259,42 @@ class HarnessConfig:
             raise ValueError(
                 "max_background_model_tails must cover model_max_concurrency"
             )
+        if self.transport_attempt_reservation > self.model_requests_per_minute:
+            raise ValueError(
+                "transport_attempt_reservation must not exceed the RPM limit"
+            )
+        if self.model_call_policy not in {"legacy_staged", "adaptive_bounded"}:
+            raise ValueError("model_call_policy is invalid")
+        if self.finish_reason_length_policy != "partial_needs_compaction":
+            raise ValueError("finish_reason_length_policy is invalid")
+        if self.timeout_retry_policy != "wait_tail_or_replan":
+            raise ValueError("timeout_retry_policy is invalid")
+        self._validate_stage_execution_policy()
+        if self.model_call_policy == "adaptive_bounded":
+            if self.max_model_calls != self.max_logical_model_calls_per_problem:
+                raise ValueError(
+                    "max_model_calls must equal max_logical_model_calls_per_problem"
+                )
+            if (
+                self.speculative_exploration_cutoff
+                != self.max_logical_model_calls_per_problem
+                - self.closure_reserve_calls
+            ):
+                raise ValueError(
+                    "speculative cutoff must preserve closure_reserve_calls"
+                )
+            if (
+                tuple(sorted(set(self.soft_call_checkpoints)))
+                != self.soft_call_checkpoints
+                or any(
+                    type(item) is not int
+                    or not 0 < item <= self.speculative_exploration_cutoff
+                    for item in self.soft_call_checkpoints
+                )
+            ):
+                raise ValueError(
+                    "soft_call_checkpoints must be increasing exploration indices"
+                )
         if self.judge_trace_event_max_chars >= self.judge_trace_max_chars:
             raise ValueError(
                 "judge_trace_event_max_chars must be below judge_trace_max_chars"
@@ -283,6 +381,41 @@ class HarnessConfig:
             if enabled and not satisfied:
                 raise ValueError(message)
 
+    def _validate_stage_execution_policy(self) -> None:
+        expected = set(_default_stage_execution_policy())
+        policy = self.stage_execution_policy
+        if not isinstance(policy, dict) or set(policy) != expected:
+            raise ValueError("stage_execution_policy has invalid turn kinds")
+        for turn_kind, payload in policy.items():
+            if not isinstance(payload, dict) or set(payload) != {
+                "max_tokens",
+                "timeout_seconds",
+                "minimum_start_window_seconds",
+            }:
+                raise ValueError(
+                    f"stage_execution_policy.{turn_kind} has invalid fields"
+                )
+            max_tokens = payload["max_tokens"]
+            timeout = payload["timeout_seconds"]
+            minimum_window = payload["minimum_start_window_seconds"]
+            if type(max_tokens) is not int or not 1 <= max_tokens <= 262144:
+                raise ValueError(
+                    f"stage_execution_policy.{turn_kind}.max_tokens is invalid"
+                )
+            if type(timeout) not in {int, float} or timeout <= 0:
+                raise ValueError(
+                    f"stage_execution_policy.{turn_kind}.timeout_seconds is invalid"
+                )
+            if (
+                type(minimum_window) not in {int, float}
+                or isinstance(minimum_window, bool)
+                or not 0 < float(minimum_window) <= float(timeout)
+            ):
+                raise ValueError(
+                    "stage_execution_policy."
+                    f"{turn_kind}.minimum_start_window_seconds is invalid"
+                )
+
     @classmethod
     def from_dict(cls, payload: dict) -> "HarnessConfig":
         if not isinstance(payload, dict):
@@ -294,6 +427,13 @@ class HarnessConfig:
         for required in _METADATA_FIELDS:
             if required not in payload:
                 raise ValueError(f"configuration is missing {required}")
+        if payload.get("profile") == "competition":
+            missing_settings = cls.setting_names() - set(payload)
+            if missing_settings:
+                raise ValueError(
+                    "competition configuration is missing settings: "
+                    f"{sorted(missing_settings)}"
+                )
         return cls(**payload)
 
     @classmethod

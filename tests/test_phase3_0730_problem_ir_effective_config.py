@@ -264,7 +264,7 @@ def test_effective_config_is_public_and_empty_frozen_store_is_disabled():
 
     assert effective["provider"]["interface"] == "injected_client.chat"
     assert effective["provider"]["max_physical_concurrency"] == 16
-    assert effective["prompt"]["stage_output_cap_tokens"]["primary"] == 32768
+    assert effective["prompt"]["stage_output_cap_tokens"]["primary"] == 8192
     assert effective["deadline"]["hard_deadline_seconds"] == 870.0
     assert effective["features"]["frozen_lemma_store"] == {
         "requested": True,
@@ -284,4 +284,18 @@ def test_effective_config_is_public_and_empty_frozen_store_is_disabled():
         "safety_margin_tokens",
         "stage_p95_seconds",
         "effective_queue_budget_seconds",
+        "agent_wait_seconds",
+        "scheduler_wait_seconds",
+        "rate_wait_seconds",
+        "call_id",
+        "logical_call_index",
+        "logical_call_consumed",
+        "dispatched",
+        "turn_kind",
+        "requested_max_output_tokens",
+        "effective_max_output_tokens",
+        "stage_timeout_seconds",
+        "effective_stage_timeout_seconds",
+        "tail_state",
+        "stop_reason",
     } <= set(call)

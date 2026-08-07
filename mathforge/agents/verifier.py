@@ -163,6 +163,8 @@ class VerifierSkepticAgent:
                 ),
                 budget=budget,
                 stage="verifier",
+                turn_kind="verifier",
+                agent_id="VerifierSkeptic",
             )
             if budget.deadline.must_finalize():
                 return BatchVerificationResult([], False, "finalize_cutoff")

@@ -93,7 +93,7 @@ def _minimal_config(**changes) -> HarnessConfig:
 def test_competition_config_uses_reliable_completion_cap_and_e1_deadlines():
     config = load_competition_config()
 
-    assert config.schema_version == "1.5"
+    assert config.schema_version == "2.0"
     assert config.final_response_max_chars == 20000
     assert config.primary_max_tokens == 65536
     assert config.max_model_tokens == 0

@@ -73,7 +73,7 @@ def main() -> int:
     parser.add_argument("--input", type=Path, required=True, help="JSONL benchmark cases")
     parser.add_argument("--config", type=Path, default=ROOT / "config" / "competition.json")
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--concurrency", type=int, choices=range(1, 4), default=3)
     parser.add_argument("--model", default=EXACT_INTERN_MODEL)
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
@@ -133,6 +133,17 @@ def load_benchmark_config(path: Path) -> HarnessConfig:
         raise ValueError(f"unknown ablation configuration keys: {sorted(unknown)}")
     merged = load_competition_config().to_dict()
     merged.update(payload)
+    if "max_model_calls" in payload and "model_call_policy" not in payload:
+        call_limit = int(payload["max_model_calls"])
+        merged.update(
+            {
+                "model_call_policy": "legacy_staged",
+                "max_logical_model_calls_per_problem": call_limit,
+                "soft_call_checkpoints": [call_limit],
+                "speculative_exploration_cutoff": call_limit,
+                "closure_reserve_calls": 0,
+            }
+        )
     merged["profile"] = f"ablation-{path.stem}"
     merged["status"] = "experiment"
     return HarnessConfig.from_dict(merged)

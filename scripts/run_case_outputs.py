@@ -831,8 +831,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--concurrency",
         type=_case_concurrency,
-        default=4,
-        help="number of concurrently active cases (1-4, default: 4)",
+        default=3,
+        help="number of concurrently active cases (1-3, default: 3)",
     )
     parser.add_argument(
         "--model",
@@ -1027,9 +1027,9 @@ def main(argv: list[str] | None = None) -> int:
 
 def _case_concurrency(value: str) -> int:
     concurrency = int(value)
-    if concurrency < 1 or concurrency > 4:
+    if concurrency < 1 or concurrency > 3:
         raise argparse.ArgumentTypeError(
-            "--concurrency must be between 1 and 4"
+            "--concurrency must be between 1 and 3"
         )
     return concurrency
 

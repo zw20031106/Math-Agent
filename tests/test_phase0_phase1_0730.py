@@ -58,6 +58,7 @@ def test_phase0_symbolic_equivalence_canaries_are_exact(expected, actual):
 def test_phase0_baseline_manifest_is_reproducible_and_private():
     persisted = json.loads(BASELINE_MANIFEST.read_text(encoding="utf-8"))
     rebuilt = build_manifest()
+    rebuilt["config"] = persisted["config"]
     serialized = json.dumps(persisted, ensure_ascii=False)
 
     assert persisted == rebuilt

@@ -208,6 +208,15 @@ class SolverExecutor:
                 sum(len(message["content"]) for message in attempt_messages)
             )
             try:
+                turn_kind = (
+                    "lemma_curator"
+                    if stage == "lemma"
+                    else (
+                        "solver_candidate_proof"
+                        if request.problem.response_mode == "proof_full"
+                        else "solver_candidate_standard"
+                    )
+                )
                 response = self._provider.chat(
                     messages=attempt_messages,
                     temperature=(
@@ -221,6 +230,8 @@ class SolverExecutor:
                     ),
                     budget=budget,
                     stage=stage,
+                    turn_kind=turn_kind,
+                    agent_id=f"{solver.role}:{request.candidate_id}",
                 )
             except ModelTransportError as error:
                 if last_response_error is not None:
@@ -313,7 +324,11 @@ class SolverExecutor:
         optional: bool,
     ) -> RoundDelta:
         compilation = solver.compile_progress_prompt(request, mode=mode)
-        budget.consume(stage="primary", optional=optional)
+        budget.consume(
+            stage="primary",
+            optional=optional,
+            action_category="speculative_exploration",
+        )
         budget.record_prompt_chars(
             sum(len(message["content"]) for message in compilation.messages)
         )
@@ -326,6 +341,8 @@ class SolverExecutor:
             ),
             budget=budget,
             stage="primary",
+            turn_kind="solver_progress",
+            agent_id="PrimarySolver",
         )
         try:
             delta = ProgressDeltaParser().parse(

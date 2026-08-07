@@ -1685,7 +1685,16 @@ def _model_activity(
         calls.append(
             {
                 "call_index": call_index,
+                "call_id": str(record.get("call_id", "")),
+                "logical_call_index": _nonnegative_int(
+                    record.get("logical_call_index", call_index)
+                ),
+                "logical_call_consumed": bool(
+                    record.get("logical_call_consumed", False)
+                ),
+                "dispatched": bool(record.get("dispatched", False)),
                 "stage": stage,
+                "turn_kind": str(record.get("turn_kind", stage)),
                 "role": _model_role(stage),
                 "purpose": _model_purpose(stage),
                 "candidate_ids": candidate_ids,
@@ -1705,6 +1714,24 @@ def _model_activity(
                 ),
                 "configured_output_tokens": _nonnegative_int(
                     record.get("configured_output_tokens", 0)
+                ),
+                "requested_max_output_tokens": _nonnegative_int(
+                    record.get(
+                        "requested_max_output_tokens",
+                        record.get("configured_output_tokens", 0),
+                    )
+                ),
+                "effective_output_tokens": _nonnegative_int(
+                    record.get(
+                        "effective_output_tokens",
+                        record.get("max_output_tokens", 0),
+                    )
+                ),
+                "effective_max_output_tokens": _nonnegative_int(
+                    record.get(
+                        "effective_max_output_tokens",
+                        record.get("max_output_tokens", 0),
+                    )
                 ),
                 "stage_output_cap_tokens": _nonnegative_int(
                     record.get("stage_output_cap_tokens", 0)
@@ -1728,12 +1755,41 @@ def _model_activity(
                 "queue_elapsed_seconds": _nonnegative_float(
                     record.get("queue_elapsed_seconds", 0.0)
                 ),
+                "agent_wait_seconds": _nonnegative_float(
+                    record.get("agent_wait_seconds", 0.0)
+                ),
+                "scheduler_wait_seconds": _nonnegative_float(
+                    record.get("scheduler_wait_seconds", 0.0)
+                ),
+                "rate_wait_seconds": _nonnegative_float(
+                    record.get("rate_wait_seconds", 0.0)
+                ),
                 "stage_p95_seconds": _nonnegative_float(
                     record.get("stage_p95_seconds", 0.0)
                 ),
                 "effective_queue_budget_seconds": _nonnegative_float(
                     record.get("effective_queue_budget_seconds", 0.0)
                 ),
+                "configured_stage_timeout_seconds": _nonnegative_float(
+                    record.get("configured_stage_timeout_seconds", 0.0)
+                ),
+                "stage_timeout_seconds": _nonnegative_float(
+                    record.get(
+                        "stage_timeout_seconds",
+                        record.get("configured_stage_timeout_seconds", 0.0),
+                    )
+                ),
+                "minimum_start_window_seconds": _nonnegative_float(
+                    record.get("minimum_start_window_seconds", 0.0)
+                ),
+                "effective_stage_timeout_seconds": _nonnegative_float(
+                    record.get("effective_stage_timeout_seconds", 0.0)
+                ),
+                "finish_reason": str(
+                    record.get("finish_reason", "unobservable")
+                ),
+                "tail_state": str(record.get("tail_state", "none")),
+                "stop_reason": str(record.get("stop_reason", "")),
                 "execution_elapsed_seconds": _nonnegative_float(
                     record.get(
                         "execution_elapsed_seconds",
@@ -1844,7 +1900,14 @@ def _budget_summary(event: dict[str, Any] | None) -> dict[str, Any]:
     fields = (
         "max_calls",
         "used_calls",
+        "calls_used",
         "model_calls",
+        "model_call_policy",
+        "budget_phase",
+        "soft_call_checkpoints",
+        "speculative_exploration_cutoff",
+        "closure_reserve_calls",
+        "calls_remaining",
         "prompt_tokens",
         "requested_output_tokens",
         "observed_output_tokens",
@@ -1863,6 +1926,10 @@ def _budget_summary(event: dict[str, Any] | None) -> dict[str, Any]:
         "provider_active_tails",
         "provider_peak_tails",
         "provider_scheduler_peak",
+        "provider_rate_reserved_weight",
+        "provider_rate_peak_weight",
+        "provider_rate_wait_count",
+        "provider_rate_admitted_weight",
         "provider_circuit_trips",
         "provider_fast_failures",
         "used_tool_calls",

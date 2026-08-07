@@ -11,60 +11,115 @@ PROVIDER_CALL_TIMEOUT_SECONDS = (
     PROVIDER_HTTP_TIMEOUT_SECONDS + PROVIDER_CALL_GRACE_SECONDS
 )
 
-_STAGE_OUTPUT_CAPS = {
-    "router": 4096,
-    "primary": 32768,
-    "alternative": 24576,
-    "verifier": 8192,
-    "repair": 8192,
-    "lemma": 16384,
-    "finalizer": 4096,
+_DEFAULT_STAGE_EXECUTION_POLICY = {
+    "router": {"max_tokens": 4096, "timeout_seconds": 120.0, "minimum_start_window_seconds": 60.0},
+    "replan": {"max_tokens": 4096, "timeout_seconds": 120.0, "minimum_start_window_seconds": 60.0},
+    "solver_progress": {"max_tokens": 4096, "timeout_seconds": 180.0, "minimum_start_window_seconds": 90.0},
+    "solver_candidate_standard": {
+        "max_tokens": 8192,
+        "timeout_seconds": 240.0,
+        "minimum_start_window_seconds": 120.0,
+    },
+    "solver_candidate_proof": {
+        "max_tokens": 12288,
+        "timeout_seconds": 270.0,
+        "minimum_start_window_seconds": 180.0,
+    },
+    "lemma_curator": {"max_tokens": 8192, "timeout_seconds": 225.0, "minimum_start_window_seconds": 120.0},
+    "peer_review": {"max_tokens": 6144, "timeout_seconds": 180.0, "minimum_start_window_seconds": 90.0},
+    "verifier": {"max_tokens": 6144, "timeout_seconds": 180.0, "minimum_start_window_seconds": 90.0},
+    "repair": {"max_tokens": 8192, "timeout_seconds": 225.0, "minimum_start_window_seconds": 120.0},
+    "finalizer": {"max_tokens": 4096, "timeout_seconds": 120.0, "minimum_start_window_seconds": 60.0},
 }
-_DEFAULT_OUTPUT_CAP = 16384
-_STAGE_CALL_TIMEOUTS = {
-    "router": 60.0,
-    "primary": PROVIDER_CALL_TIMEOUT_SECONDS,
-    "alternative": PROVIDER_CALL_TIMEOUT_SECONDS,
-    "verifier": PROVIDER_CALL_TIMEOUT_SECONDS,
-    "repair": PROVIDER_CALL_TIMEOUT_SECONDS,
-    "lemma": PROVIDER_CALL_TIMEOUT_SECONDS,
-    "finalizer": 60.0,
+_TURN_KIND_ALIASES = {
+    "primary": "solver_candidate_standard",
+    "alternative": "solver_candidate_standard",
+    "lemma": "lemma_curator",
 }
+_DEFAULT_TURN_KIND = "solver_candidate_standard"
 _STAGE_P95_SECONDS = {
-    "router": 45.0,
-    "primary": 125.0,
-    "alternative": 125.0,
-    "verifier": 90.0,
-    "repair": 100.0,
-    "lemma": 105.0,
-    "finalizer": 45.0,
+    "router": 100.0,
+    "replan": 100.0,
+    "solver_progress": 150.0,
+    "solver_candidate_standard": 210.0,
+    "solver_candidate_proof": 240.0,
+    "lemma_curator": 180.0,
+    "peer_review": 150.0,
+    "verifier": 150.0,
+    "repair": 180.0,
+    "finalizer": 90.0,
 }
-_DEFAULT_STAGE_P95_SECONDS = 100.0
+_DEFAULT_STAGE_P95_SECONDS = 180.0
 
 
-def stage_output_cap(stage: str) -> int:
-    return _STAGE_OUTPUT_CAPS.get(str(stage), _DEFAULT_OUTPUT_CAP)
+def normalize_turn_kind(stage: str) -> str:
+    normalized = str(stage)
+    if normalized in _DEFAULT_STAGE_EXECUTION_POLICY:
+        return normalized
+    return _TURN_KIND_ALIASES.get(normalized, _DEFAULT_TURN_KIND)
 
 
-def effective_output_tokens(stage: str, configured_max_tokens: int) -> int:
+def _execution_spec(
+    stage: str,
+    policy: dict[str, dict[str, int | float]] | None = None,
+) -> dict[str, int | float]:
+    active = policy or _DEFAULT_STAGE_EXECUTION_POLICY
+    turn_kind = normalize_turn_kind(stage)
+    return active.get(turn_kind, active[_DEFAULT_TURN_KIND])
+
+
+def stage_output_cap(
+    stage: str,
+    policy: dict[str, dict[str, int | float]] | None = None,
+) -> int:
+    return int(_execution_spec(stage, policy)["max_tokens"])
+
+
+def effective_output_tokens(
+    stage: str,
+    configured_max_tokens: int,
+    policy: dict[str, dict[str, int | float]] | None = None,
+) -> int:
     if type(configured_max_tokens) is not int or configured_max_tokens < 0:
         raise ValueError("configured max output tokens must be nonnegative")
-    cap = stage_output_cap(stage)
+    cap = stage_output_cap(stage, policy)
     return cap if configured_max_tokens == 0 else min(cap, configured_max_tokens)
 
 
-def stage_call_timeout(stage: str) -> float:
-    return _STAGE_CALL_TIMEOUTS.get(str(stage), PROVIDER_CALL_TIMEOUT_SECONDS)
+def stage_call_timeout(
+    stage: str,
+    policy: dict[str, dict[str, int | float]] | None = None,
+) -> float:
+    return float(_execution_spec(stage, policy)["timeout_seconds"])
 
 
-def effective_call_timeout(stage: str, remaining_seconds: float) -> float:
-    return max(0.0, min(float(remaining_seconds), stage_call_timeout(stage)))
+def stage_minimum_start_window(
+    stage: str,
+    policy: dict[str, dict[str, int | float]] | None = None,
+) -> float:
+    return float(
+        _execution_spec(stage, policy)["minimum_start_window_seconds"]
+    )
+
+
+def effective_call_timeout(
+    stage: str,
+    remaining_seconds: float,
+    policy: dict[str, dict[str, int | float]] | None = None,
+) -> float:
+    return max(
+        0.0,
+        min(float(remaining_seconds), stage_call_timeout(stage, policy)),
+    )
 
 
 def stage_p95_seconds(stage: str) -> float:
     """Return the frozen initial healthy-service p95 estimate for a stage."""
 
-    return _STAGE_P95_SECONDS.get(str(stage), _DEFAULT_STAGE_P95_SECONDS)
+    return _STAGE_P95_SECONDS.get(
+        normalize_turn_kind(stage),
+        _DEFAULT_STAGE_P95_SECONDS,
+    )
 
 
 def feasible_queue_budget(

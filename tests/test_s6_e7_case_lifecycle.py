@@ -512,10 +512,10 @@ def test_manifest_lifecycle_never_leaves_interruption_as_running(tmp_path):
     assert summary["pending_case_count"] == 1
 
 
-def test_runner_defaults_to_four_and_bounds_case_concurrency():
+def test_runner_defaults_to_three_and_bounds_case_concurrency():
     parser = build_argument_parser()
     args = parser.parse_args(["--input", "cases.jsonl", "--output-dir", "out"])
-    assert args.concurrency == 4
+    assert args.concurrency == 3
     assert args.rerun_status == frozenset({"failed", "timeout"})
     assert parser.parse_args(
         [
@@ -536,7 +536,7 @@ def test_runner_defaults_to_four_and_bounds_case_concurrency():
                 "--output-dir",
                 "out",
                 "--concurrency",
-                "5",
+            "4",
             ]
         )
 

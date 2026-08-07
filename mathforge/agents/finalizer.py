@@ -89,6 +89,8 @@ class LLMFinalizer:
                 ),
                 budget=budget,
                 stage="finalizer",
+                turn_kind="finalizer",
+                agent_id="LLMFinalizer",
             )
             if budget.deadline.must_finalize():
                 return FinalizationResult(deterministic_text, False, "finalize_cutoff")

@@ -103,9 +103,9 @@ def test_stage_aging_eventually_promotes_an_old_waiter():
 
 
 def test_queue_budget_reserves_stage_p95_and_varies_by_stage_and_deadline():
-    assert feasible_queue_budget("primary", 500.0, 60.0) == 50.0
-    assert feasible_queue_budget("router", 500.0, 60.0) == 18.0
-    assert feasible_queue_budget("primary", 132.0, 60.0) == 7.0
+    assert feasible_queue_budget("primary", 500.0, 60.0) == 60.0
+    assert feasible_queue_budget("router", 500.0, 60.0) == 40.0
+    assert feasible_queue_budget("primary", 132.0, 60.0) == 0.0
     assert feasible_queue_budget("primary", 120.0, 60.0) == 0.0
 
 
@@ -114,7 +114,7 @@ def test_repair_reverify_requires_one_atomic_time_reserve():
         ("repair", "verifier"),
         60.0,
     )
-    assert required == 266.0
+    assert required == 450.0
     assert not stage_sequence_feasible(
         ("repair", "verifier"),
         remaining_seconds=required - 0.001,
@@ -146,7 +146,7 @@ def test_bound_case_and_effective_queue_policy_are_recorded_per_call():
 
     record = budget.model_call_records[0]
     assert budget.scheduler_case_id == session.session_id
-    assert record["stage_p95_seconds"] == 125.0
+    assert record["stage_p95_seconds"] == 210.0
     assert record["effective_queue_budget_seconds"] == 15.0
     assert budget.to_dict()["scheduler_case_bound"] is True
     assert budget.to_dict()["provider_scheduler_peak"] == 1

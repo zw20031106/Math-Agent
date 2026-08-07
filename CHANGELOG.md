@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Completed true multi-Agent remediation Phase F1 resource governance: case
+  concurrency is configuration-driven and capped at 3; the shared Provider now
+  applies weighted rolling 200 RPM admission, six-call physical concurrency,
+  same-Agent single in-flight control, and auditable background tails. The
+  Competition profile now uses a 48-call adaptive per-problem hard limit with
+  16/28/40 checkpoints and an eight-call closure reserve, plus Turn-specific
+  output, timeout, and minimum-start-window policies. Added CallLedger and
+  resource-governor trace fields and deterministic F1 boundary/concurrency
+  tests. This phase establishes the resource substrate only; the Agent runtime,
+  mailbox, mandatory Router protocol, and autonomous multi-Agent loop remain in
+  later phases.
 - Completed true multi-Agent remediation Phase F0 without changing runtime
   behavior: synchronized the authoritative final plan, marked the obsolete
   six-call design as superseded, froze the source/config/Prompt/Skill/Data/model
@@ -9,7 +20,7 @@
   Definition of Done and phased governance decision in ADR-003. The active
   Competition profile remains `candidate-unvalidated`; concurrency 3, 200 RPM,
   mandatory Router, the 48-call bounded policy, and typed timeout/Token policies
-  remain targets for later phases.
+  were recorded as targets for later phases.
 - Added the shared executable `ModelCandidatePayload 2.1` boundary used by
   Prompt compilation and Candidate parsing. Solver prompts now receive the
   Host-owned response mode, require LaTeX-delimited public mathematics, retain

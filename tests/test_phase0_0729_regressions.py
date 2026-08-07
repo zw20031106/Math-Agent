@@ -115,7 +115,7 @@ def test_primary_transport_failure_uses_the_reserved_recovery_call():
     assert candidate.final_answer == "-1/4"
 
 
-def test_case_runner_accepts_and_defaults_to_concurrency_four():
+def test_case_runner_accepts_and_defaults_to_concurrency_three():
     parser = build_argument_parser()
     default_args = parser.parse_args(
         ["--input", "cases.jsonl", "--output-dir", "out"]
@@ -127,12 +127,12 @@ def test_case_runner_accepts_and_defaults_to_concurrency_four():
             "--output-dir",
             "out",
             "--concurrency",
-            "4",
+            "3",
         ]
     )
 
-    assert default_args.concurrency == 4
-    assert explicit_args.concurrency == 4
+    assert default_args.concurrency == 3
+    assert explicit_args.concurrency == 3
 
 
 def test_local_retry_wrapper_does_not_serialize_independent_model_calls():

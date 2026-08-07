@@ -15,10 +15,14 @@ from mathforge.harness.model_policy import (
     effective_output_tokens,
     feasible_queue_budget,
     stage_call_timeout,
+    stage_minimum_start_window,
     stage_output_cap,
     stage_p95_seconds,
 )
-from mathforge.harness.priority_scheduler import PriorityCallScheduler
+from mathforge.harness.model_admission import (
+    AdmissionWaitExceeded,
+    ModelAdmissionController,
+)
 from mathforge.harness.transport import (
     ObservedModelResponse,
     classify_transport_failure,
@@ -37,6 +41,9 @@ class ModelCallGate:
         self,
         max_concurrency: int,
         *,
+        requests_per_minute: int = 200,
+        rate_limit_window_seconds: float = 60.0,
+        transport_attempt_reservation: int = 3,
         max_background_tails: int | None = None,
         late_registry_limit: int = 64,
     ) -> None:
@@ -53,7 +60,12 @@ class ModelCallGate:
             )
         if late_registry_limit < 1:
             raise ValueError("late_registry_limit must be positive")
-        self._scheduler = PriorityCallScheduler(max_concurrency)
+        self._admission = ModelAdmissionController(
+            max_concurrency,
+            requests_per_minute=requests_per_minute,
+            rate_limit_window_seconds=rate_limit_window_seconds,
+            transport_attempt_reservation=transport_attempt_reservation,
+        )
         self._max_background_tails = tail_limit
         self._late_registry_limit = int(late_registry_limit)
         self._health_lock = Lock()
@@ -78,21 +90,34 @@ class ModelCallGate:
         background_tail_callback=None,
         stage: str = "unallocated",
         case_id: str = "",
+        agent_id: str = "",
         queue_budget_seconds: float | None = None,
         stage_timeout_seconds: float | None = None,
+        minimum_start_window_seconds: float = 0.0,
         timing_callback=None,
         dispatch_callback=None,
         **kwargs,
     ):
         if deadline is None:
             self._reject_open_circuit(timing_callback)
-            self._scheduler.acquire(stage, case_id=case_id)
+            try:
+                lease = self._admission.acquire(
+                    stage,
+                    case_id=case_id,
+                    agent_id=agent_id,
+                    timeout=None,
+                )
+            except AdmissionWaitExceeded as error:
+                raise ModelCallRejected(error.code) from error
+            dispatched = False
             try:
                 if dispatch_callback is not None:
                     dispatch_callback()
+                self._admission.commit(lease)
+                dispatched = True
                 return function(**kwargs)
             finally:
-                self._scheduler.release()
+                self._admission.release(lease, dispatched=dispatched)
 
         self._reject_open_circuit(timing_callback)
         started = perf_counter()
@@ -108,36 +133,41 @@ class ModelCallGate:
         )
         acquire_timeout = max(
             0.0,
-            min(
-                stage_timeout,
-                queue_budget,
-                deadline.remaining_for_model_call(),
-            ),
+            min(queue_budget, deadline.remaining_for_model_call()),
         )
-        if not self._scheduler.acquire(
-            stage,
-            acquire_timeout,
-            case_id=case_id,
-        ):
+        try:
+            lease = self._admission.acquire(
+                stage,
+                case_id=case_id,
+                agent_id=agent_id,
+                timeout=acquire_timeout,
+            )
+        except AdmissionWaitExceeded as error:
             queue_elapsed = perf_counter() - started
             self._emit_timing(
                 timing_callback,
                 queue_elapsed_seconds=queue_elapsed,
+                agent_wait_seconds=0.0,
+                scheduler_wait_seconds=0.0,
+                rate_wait_seconds=0.0,
                 execution_elapsed_seconds=0.0,
                 total_elapsed_seconds=queue_elapsed,
             )
-            raise ModelCallRejected("model_concurrency_wait_exceeded")
+            raise ModelCallRejected(error.code) from error
         queue_elapsed = perf_counter() - started
         try:
             self._reject_open_circuit(timing_callback, queue_elapsed)
         except ModelCallRejected:
-            self._scheduler.release()
+            self._admission.release(lease, dispatched=False)
             raise
         if not deadline.can_start_model_call():
-            self._scheduler.release()
+            self._admission.release(lease, dispatched=False)
             self._emit_timing(
                 timing_callback,
                 queue_elapsed_seconds=queue_elapsed,
+                agent_wait_seconds=lease.agent_wait_seconds,
+                scheduler_wait_seconds=lease.scheduler_wait_seconds,
+                rate_wait_seconds=lease.rate_wait_seconds,
                 execution_elapsed_seconds=0.0,
                 total_elapsed_seconds=queue_elapsed,
             )
@@ -146,19 +176,38 @@ class ModelCallGate:
         execution_timeout = max(
             0.0,
             min(
-                stage_timeout - queue_elapsed,
+                stage_timeout,
                 deadline.remaining_for_model_call(),
             ),
         )
-        if execution_timeout <= 0:
-            self._scheduler.release()
+        minimum_start_window = max(
+            0.0,
+            float(minimum_start_window_seconds),
+        )
+        if execution_timeout < minimum_start_window:
+            self._admission.release(lease, dispatched=False)
             self._emit_timing(
                 timing_callback,
                 queue_elapsed_seconds=queue_elapsed,
+                agent_wait_seconds=lease.agent_wait_seconds,
+                scheduler_wait_seconds=lease.scheduler_wait_seconds,
+                rate_wait_seconds=lease.rate_wait_seconds,
                 execution_elapsed_seconds=0.0,
                 total_elapsed_seconds=queue_elapsed,
             )
-            raise ModelCallRejected("model_concurrency_wait_exceeded")
+            raise ModelCallRejected("model_stage_window_insufficient")
+        if execution_timeout <= 0:
+            self._admission.release(lease, dispatched=False)
+            self._emit_timing(
+                timing_callback,
+                queue_elapsed_seconds=queue_elapsed,
+                agent_wait_seconds=lease.agent_wait_seconds,
+                scheduler_wait_seconds=lease.scheduler_wait_seconds,
+                rate_wait_seconds=lease.rate_wait_seconds,
+                execution_elapsed_seconds=0.0,
+                total_elapsed_seconds=queue_elapsed,
+            )
+            raise ModelCallRejected("model_response_deadline_exceeded")
 
         done = Event()
         outcome: dict[str, Any] = {}
@@ -170,8 +219,9 @@ class ModelCallGate:
             try:
                 dispatch_callback()
             except Exception:
-                self._scheduler.release()
+                self._admission.release(lease, dispatched=False)
                 raise
+        self._admission.commit(lease)
 
         def invoke() -> None:
             try:
@@ -182,7 +232,7 @@ class ModelCallGate:
                 with state_lock:
                     state["completed"] = True
                     is_background_tail = state["timed_out"]
-                self._scheduler.release()
+                self._admission.release(lease, dispatched=True)
                 done.set()
                 if is_background_tail:
                     self._complete_tail(
@@ -216,6 +266,9 @@ class ModelCallGate:
                 self._emit_timing(
                     timing_callback,
                     queue_elapsed_seconds=queue_elapsed,
+                    agent_wait_seconds=lease.agent_wait_seconds,
+                    scheduler_wait_seconds=lease.scheduler_wait_seconds,
+                    rate_wait_seconds=lease.rate_wait_seconds,
                     execution_elapsed_seconds=execution_elapsed,
                     total_elapsed_seconds=perf_counter() - started,
                 )
@@ -227,6 +280,9 @@ class ModelCallGate:
         self._emit_timing(
             timing_callback,
             queue_elapsed_seconds=queue_elapsed,
+            agent_wait_seconds=lease.agent_wait_seconds,
+            scheduler_wait_seconds=lease.scheduler_wait_seconds,
+            rate_wait_seconds=lease.rate_wait_seconds,
             execution_elapsed_seconds=execution_elapsed,
             total_elapsed_seconds=perf_counter() - started,
         )
@@ -250,7 +306,7 @@ class ModelCallGate:
                 ),
                 "health_window_size": len(self._health_window),
                 "late_registry": deepcopy(self._late_registry),
-                "scheduler": self._scheduler.snapshot(),
+                **self._admission.snapshot(),
             }
 
     def record_provider_result(
@@ -359,6 +415,9 @@ class ModelCallGate:
         callback,
         *,
         queue_elapsed_seconds: float,
+        agent_wait_seconds: float = 0.0,
+        scheduler_wait_seconds: float = 0.0,
+        rate_wait_seconds: float = 0.0,
         execution_elapsed_seconds: float,
         total_elapsed_seconds: float,
     ) -> None:
@@ -368,6 +427,18 @@ class ModelCallGate:
             {
                 "queue_elapsed_seconds": round(
                     max(0.0, float(queue_elapsed_seconds)),
+                    6,
+                ),
+                "agent_wait_seconds": round(
+                    max(0.0, float(agent_wait_seconds)),
+                    6,
+                ),
+                "scheduler_wait_seconds": round(
+                    max(0.0, float(scheduler_wait_seconds)),
+                    6,
+                ),
+                "rate_wait_seconds": round(
+                    max(0.0, float(rate_wait_seconds)),
                     6,
                 ),
                 "execution_elapsed_seconds": round(
@@ -390,11 +461,16 @@ class OfficialClientProvider:
         client: Any,
         gate: ModelCallGate,
         context_budget: ModelContextBudget | None = None,
+        *,
+        stage_execution_policy: (
+            dict[str, dict[str, int | float]] | None
+        ) = None,
     ) -> None:
         if not callable(getattr(client, "chat", None)):
             raise TypeError("client must expose a callable chat method")
         self._chat = client.chat
         self._gate = gate
+        self._stage_execution_policy = deepcopy(stage_execution_policy)
         self._context_budget = context_budget or ModelContextBudget(
             context_window_tokens=262144,
             safety_margin_tokens=8192,
@@ -409,12 +485,27 @@ class OfficialClientProvider:
         deadline: "DeadlineController | None" = None,
         budget: "CallBudget | None" = None,
         stage: str = "unallocated",
+        turn_kind: str | None = None,
+        agent_id: str | None = None,
     ) -> str:
-        effective_max_tokens = effective_output_tokens(stage, max_tokens)
+        active_turn_kind = turn_kind or stage
+        effective_max_tokens = effective_output_tokens(
+            active_turn_kind,
+            max_tokens,
+            self._stage_execution_policy,
+        )
+        configured_stage_timeout = stage_call_timeout(
+            active_turn_kind,
+            self._stage_execution_policy,
+        )
+        minimum_start_window = stage_minimum_start_window(
+            active_turn_kind,
+            self._stage_execution_policy,
+        )
         active_deadline = budget.deadline if budget is not None else deadline
         queue_budget = (
             feasible_queue_budget(
-                stage,
+                active_turn_kind,
                 active_deadline.remaining_for_model_call(),
                 budget.model_queue_budget_seconds,
             )
@@ -428,8 +519,26 @@ class OfficialClientProvider:
         allocation_payload = {
             **allocation.to_dict(),
             "configured_output_tokens": max_tokens,
-            "stage_output_cap_tokens": stage_output_cap(stage),
-            "stage_p95_seconds": stage_p95_seconds(stage),
+            "requested_max_output_tokens": max_tokens,
+            "effective_output_tokens": allocation.max_output_tokens,
+            "effective_max_output_tokens": allocation.max_output_tokens,
+            "turn_kind": active_turn_kind,
+            "stage_output_cap_tokens": stage_output_cap(
+                active_turn_kind,
+                self._stage_execution_policy,
+            ),
+            "configured_stage_timeout_seconds": configured_stage_timeout,
+            "stage_timeout_seconds": configured_stage_timeout,
+            "minimum_start_window_seconds": minimum_start_window,
+            "effective_stage_timeout_seconds": (
+                min(
+                    configured_stage_timeout,
+                    active_deadline.remaining_for_model_call(),
+                )
+                if active_deadline is not None
+                else configured_stage_timeout
+            ),
+            "stage_p95_seconds": stage_p95_seconds(active_turn_kind),
             "effective_queue_budget_seconds": queue_budget,
         }
         call_index = (
@@ -444,10 +553,23 @@ class OfficialClientProvider:
                 deadline=active_deadline,
                 stage=stage,
                 case_id=(budget.scheduler_case_id if budget is not None else ""),
+                agent_id=(agent_id or active_turn_kind),
                 queue_budget_seconds=queue_budget,
+                stage_timeout_seconds=configured_stage_timeout,
+                minimum_start_window_seconds=(
+                    minimum_start_window
+                    if budget is None
+                    or budget.model_call_policy == "adaptive_bounded"
+                    else 0.0
+                ),
                 background_tail_callback=(
-                    budget.record_background_tail
-                    if budget is not None
+                    (
+                        lambda event: budget.record_background_tail(
+                            event,
+                            call_index,
+                        )
+                    )
+                    if budget is not None and call_index is not None
                     else None
                 ),
                 timing_callback=(

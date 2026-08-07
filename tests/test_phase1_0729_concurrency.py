@@ -12,7 +12,7 @@ from scripts.run_case_outputs import CaseRunManifest
 from user_agent import CASE_MAX_CONCURRENCY, ReasoningAgent
 
 
-def test_reasoning_agent_admits_at_most_four_active_cases(monkeypatch):
+def test_reasoning_agent_admits_at_most_three_active_cases(monkeypatch):
     release = Event()
     four_started = Event()
 
@@ -59,7 +59,7 @@ def test_reasoning_agent_admits_at_most_four_active_cases(monkeypatch):
             str(index) for index in range(8)
         ]
 
-    assert harness.peak == CASE_MAX_CONCURRENCY == 4
+    assert harness.peak == CASE_MAX_CONCURRENCY == 3
 
 
 def test_model_gate_allows_four_but_never_more_physical_calls():
