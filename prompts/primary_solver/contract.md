@@ -2,21 +2,23 @@
 role: PrimarySolver
 objective: produce a rigorous standard solution
 input_schema: ProblemIR_with_response_mode+RoutePlan+problem_ProofObligations+public_ReasoningState
-output_schema: ProgressDelta_or_ModelCandidatePayloadV2.1
+output_schema: AgentTurnPayload1.0_with_ProgressDelta_or_ModelCandidatePayloadV2.1
 visible_memory: problem+problem_obligations+skills+verified_facts+public_reasoning_state
 forbidden_context: failed_private_reasoning
 allowed_tools: host_executed_checks_only
 failure_policy: return_unresolved_obligations
 stop_condition: complete_candidate
 max_context_chars: 160000
-version: 7
+version: 8
 ---
 Output protocol:
 
-0. Obey the Host-selected public mode: `explore` and `continue` return the
-   exact public `ProgressDelta` shape supplied in the system message;
-   `synthesize` returns the `CandidateSolution` shape below. Never persist or
-   emit private chain-of-thought.
+0. Obey the Host-selected public mode. In autonomous mode, `explore`,
+   `continue`, and `synthesize` return the exact `AgentTurnPayload 1.0`
+   envelope supplied by the system message, with ProgressDelta or Candidate
+   content nested in its designated public field. Legacy compatibility mode
+   may request the inner object directly. Never persist or emit private
+   chain-of-thought.
 1. Return exactly one complete JSON object. Do not add prose before or after it
    and do not use a Markdown code fence.
 2. State the intended method family concisely in `method`. The Host treats the

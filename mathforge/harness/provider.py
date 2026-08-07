@@ -61,11 +61,27 @@ def _fail_protocol_turn(runtime, turn, failure_code: str) -> None:
         return
 
 
-def _complete_protocol_turn(runtime, turn, response: str) -> dict:
+def _complete_protocol_turn(
+    runtime,
+    turn,
+    response: str,
+    *,
+    agent_action_protocol: bool = False,
+    response_truncated: bool = False,
+    truncation_reason: str = "",
+) -> dict:
     if runtime is None or turn is None:
         return {}
     try:
-        return runtime.complete_model_turn(turn.turn_id, response)
+        if not agent_action_protocol and not response_truncated:
+            return runtime.complete_model_turn(turn.turn_id, response)
+        return runtime.complete_model_turn(
+            turn.turn_id,
+            response,
+            agent_action_protocol=agent_action_protocol,
+            response_truncated=response_truncated,
+            truncation_reason=truncation_reason,
+        )
     except Exception:
         return {"agent_protocol_status": "shadow_publish_failed"}
 
@@ -523,6 +539,7 @@ class OfficialClientProvider:
         stage: str = "unallocated",
         turn_kind: str | None = None,
         agent_id: str | None = None,
+        agent_action_protocol: bool = False,
     ) -> str:
         active_turn_kind = turn_kind or stage
         protocol_runtime = budget.agent_runtime if budget is not None else None
@@ -733,6 +750,9 @@ class OfficialClientProvider:
             budget.record_provider_health(self._gate.health_snapshot())
         output = self._context_budget.count_text(response)
         output_budget_exceeded = output.tokens > allocation.max_output_tokens
+        finish_reason = str(
+            getattr(response, "finish_reason", "unobservable")
+        ) or "unobservable"
         if budget is not None and call_index is not None:
             budget.record_model_call_completed(
                 call_index,
@@ -742,13 +762,22 @@ class OfficialClientProvider:
                 elapsed_seconds=perf_counter() - started,
                 transport_attempts=attempts,
                 output_budget_exceeded=output_budget_exceeded,
+                finish_reason=finish_reason,
             )
             if protocol_runtime is not None and protocol_turn is not None:
-                lineage = _complete_protocol_turn(
-                    protocol_runtime,
-                    protocol_turn,
-                    response,
-                )
+                if agent_action_protocol:
+                    lineage = {
+                        "agent_id": protocol_turn.agent_id,
+                        "task_id": protocol_turn.task_id,
+                        "turn_id": protocol_turn.turn_id,
+                        "agent_protocol_status": "awaiting_domain_validation",
+                    }
+                else:
+                    lineage = _complete_protocol_turn(
+                        protocol_runtime,
+                        protocol_turn,
+                        response,
+                    )
                 budget.record_model_call_lineage(call_index, lineage)
             budget.record_tokens(output.tokens)
         if (
@@ -765,4 +794,8 @@ class OfficialClientProvider:
             transport_attempts=attempts,
             model_call_index=call_index,
             output_budget_exceeded=output_budget_exceeded,
+            finish_reason=finish_reason,
+            protocol_turn_id=(
+                protocol_turn.turn_id if protocol_turn is not None else ""
+            ),
         )

@@ -1,10 +1,13 @@
 # ADR-001：LemmaCurator 保持确定性宿主服务
 
-- 状态：Accepted
+- 状态：Superseded by ADR-004 / Phase F4
 - 日期：2026-07-23
 - 阶段：S3 / C15–C16
 
 ## 背景
+
+> 本 ADR 仅记录 S3 历史决策。2026-08-07 起，正式自主管线依据
+> ADR-004 使用独立 LLM LemmaCurator；确定性 Curator 只保留为验证与回退服务。
 
 仓库保留了 `prompts/lemma_curator/contract.md`，但生产链路中的
 `LemmaCurator` 实际执行的是从已解析 Claim 到 problem-local LemmaCard 的

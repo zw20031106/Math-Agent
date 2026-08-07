@@ -15,11 +15,26 @@ os.environ.pop("INTERN_MODEL", None)
 os.environ.pop("INTERN_API_KEY", None)
 
 from user_agent import ReasoningAgent
+import json
 
 class FormalSmokeClient:
     def chat(self, *, messages, temperature, max_tokens):
-        del messages, temperature, max_tokens
-        return '{"method":"direct-deduction","final_answer":"2","public_solution_steps":["Evaluate the sum directly: 1+1=2."],"claims":[{"claim_id":"c1","statement":"1+1=2","depends_on":[],"check_type":"symbolic_equivalence","importance":"critical"}],"method_steps":[{"step_id":"s1","kind":"computation","claim_ids":["c1"],"theorem":""}],"solution_text":"Adding the two unit quantities gives 1+1=2.","assumptions":[],"theorems":[],"unresolved_obligations":[]}'
+        del temperature, max_tokens
+        system = messages[0]["content"]
+        user = messages[-1]["content"]
+        if system.startswith("You are RouterPlanner"):
+            methods = ["direct-deduction", "structural-transform", "constructive-computation"]
+            return json.dumps({"primary_subject":"general-math","auxiliary_subject":None,"risk_level":"high","method_families":methods,"subgoals":[{"subgoal_id":"sg-1","objective":"Establish the result","depends_on":[]}],"task_proposals":[{"proposal_id":"p1","agent_role":"PrimarySolver","task_type":"solve_primary","subgoal_ids":["sg-1"],"method_family":methods[0],"priority":100},{"proposal_id":"p2","agent_role":"AlternativeSolver","task_type":"solve_alternative","subgoal_ids":["sg-1"],"method_family":methods[1],"priority":90},{"proposal_id":"p3","agent_role":"AlternativeSolver","task_type":"solve_alternative","subgoal_ids":["sg-1"],"method_family":methods[2],"priority":80}]})
+        if system.startswith("You are LemmaCurator"):
+            recipient = json.loads(user)["reply_recipient_role"]
+            return json.dumps({"protocol_version":"1.0","task_result_type":"LemmaArtifact","action":"complete","public_state_delta":{},"result_payload":{"lemmas":[]},"outbound_intents":[{"recipient_role":recipient}],"progress_summary":"Lemma scan complete.","stop_reason":"lemma_scan_complete"})
+        if "Public protocol mode is explore" in system or "Public protocol mode is continue" in system:
+            delta = {"public_summary":"Direct arithmetic establishes the result.","strategy":"direct-deduction","subgoals":[],"claims":[],"open_obligations":[],"closed_obligation_ids":[],"contradictions":[],"next_step":"Synthesize.","stop_reason":"ready_for_candidate"}
+            return json.dumps({"protocol_version":"1.0","task_result_type":"ProgressArtifact","action":"complete","public_state_delta":delta,"result_payload":{},"outbound_intents":[],"progress_summary":"Exploration complete.","stop_reason":"ready_for_candidate"})
+        candidate = {"method":"direct-deduction","final_answer":"2","public_solution_steps":["Evaluate the sum directly: 1+1=2."],"claims":[{"claim_id":"c1","statement":"1+1=2","depends_on":[],"check_type":"symbolic_equivalence","importance":"critical"}],"solution_text":"Adding the two unit quantities gives 1+1=2.","assumptions":[],"theorems":[],"unresolved_obligations":[]}
+        if "AgentTurnPayload 1.0" in system:
+            return json.dumps({"protocol_version":"1.0","task_result_type":"CandidateArtifact","action":"publish_candidate","public_state_delta":{},"result_payload":candidate,"outbound_intents":[],"progress_summary":"Candidate published.","stop_reason":"candidate_complete"})
+        return json.dumps(candidate)
 
 result = ReasoningAgent(FormalSmokeClient()).solve(
     "Calculate the integer 1+1",

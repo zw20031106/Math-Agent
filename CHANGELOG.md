@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Completed true multi-Agent remediation Phase F4. PrimarySolver and
+  AlternativeSolver now run isolated, independently stateful Agent Action
+  loops without fixed planned rounds; public information gain, repeated
+  Artifact hashes, the 48-call ResourceGovernor, deadlines, and explicit
+  `complete`/`abstain` Actions govern continuation. Activated an independent
+  LLM LemmaCurator for every autonomous solve and request/reply wake-up,
+  connected Host-executed Tool and versioned Router replan requests, and added
+  typed 4096 Progress, 8192 standard/compact Candidate, and 12288 proof Turn
+  contracts. `finish_reason=length` now creates a partial Artifact and a fresh
+  compact-synthesis Turn; unsupported proof output degrades visibly to 8192.
+  Added F4 protocol, autonomy, isolation, abstention, token, truncation, and
+  long-horizon regression tests. Peer review and rebuttal remain Phase F5.
 - Completed true multi-Agent remediation Phase F3. Production profiles now
   require an independent RouterPlanner model call before every Solver call.
   Router output contains a validated route, method families, acyclic subgoal

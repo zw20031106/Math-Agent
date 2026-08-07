@@ -48,7 +48,121 @@ class FormalSmokeClient:
                 "max_tokens": max_tokens,
             }
         )
+        system = messages[0]["content"]
+        user = messages[-1]["content"]
+        if system.startswith("You are RouterPlanner"):
+            return json.dumps(_router_payload(), ensure_ascii=False)
+        if system.startswith("You are LemmaCurator"):
+            recipient = json.loads(user)["reply_recipient_role"]
+            return json.dumps(
+                _agent_envelope(
+                    "LemmaArtifact",
+                    "complete",
+                    result_payload={"lemmas": []},
+                    outbound_intents=[{"recipient_role": recipient}],
+                    progress_summary="Lemma scan completed.",
+                    stop_reason="lemma_scan_complete",
+                ),
+                ensure_ascii=False,
+            )
+        if "Public protocol mode is explore" in system or (
+            "Public protocol mode is continue" in system
+        ):
+            return json.dumps(
+                _agent_envelope(
+                    "ProgressArtifact",
+                    "complete",
+                    public_state_delta=_progress_delta(),
+                    progress_summary="Public exploration completed.",
+                    stop_reason="ready_for_candidate",
+                ),
+                ensure_ascii=False,
+            )
+        if "AgentTurnPayload 1.0" in system:
+            candidate = {
+                key: value
+                for key, value in _STRICT_CANDIDATE.items()
+                if key != "method_steps"
+            }
+            return json.dumps(
+                _agent_envelope(
+                    "CandidateArtifact",
+                    "publish_candidate",
+                    result_payload=candidate,
+                    progress_summary="Published a complete candidate.",
+                    stop_reason="candidate_complete",
+                ),
+                ensure_ascii=False,
+            )
         return json.dumps(_STRICT_CANDIDATE, ensure_ascii=False)
+
+
+def _router_payload() -> dict[str, Any]:
+    methods = [
+        "direct-deduction",
+        "structural-transform",
+        "constructive-computation",
+    ]
+    return {
+        "primary_subject": "general-math",
+        "auxiliary_subject": None,
+        "risk_level": "high",
+        "method_families": methods,
+        "subgoals": [
+            {
+                "subgoal_id": "sg-1",
+                "objective": "Establish the arithmetic result",
+                "depends_on": [],
+            }
+        ],
+        "task_proposals": [
+            {
+                "proposal_id": f"proposal-{index}",
+                "agent_role": "PrimarySolver" if index == 1 else "AlternativeSolver",
+                "task_type": "solve_primary" if index == 1 else "solve_alternative",
+                "subgoal_ids": ["sg-1"],
+                "method_family": method,
+                "priority": 110 - index * 10,
+            }
+            for index, method in enumerate(methods, start=1)
+        ],
+    }
+
+
+def _progress_delta() -> dict[str, Any]:
+    return {
+        "public_summary": "Direct arithmetic establishes the result.",
+        "strategy": "direct-deduction",
+        "subgoals": [],
+        "claims": [],
+        "open_obligations": [],
+        "closed_obligation_ids": [],
+        "contradictions": [],
+        "next_step": "Synthesize the candidate.",
+        "stop_reason": "ready_for_candidate",
+    }
+
+
+def _agent_envelope(
+    task_result_type: str,
+    action: str,
+    *,
+    public_state_delta: dict[str, Any] | None = None,
+    result_payload: dict[str, Any] | None = None,
+    outbound_intents: list[dict[str, Any]] | None = None,
+    progress_summary: str,
+    stop_reason: str,
+) -> dict[str, Any]:
+    return {
+        "protocol_version": "1.0",
+        "task_result_type": task_result_type,
+        "action": action,
+        "public_state_delta": public_state_delta or {},
+        "result_payload": result_payload or {},
+        "outbound_intents": outbound_intents or [],
+        "progress_summary": progress_summary,
+        "stop_reason": stop_reason,
+    }
 
 
 def assert_formal_smoke_result(result: dict[str, Any]) -> None:

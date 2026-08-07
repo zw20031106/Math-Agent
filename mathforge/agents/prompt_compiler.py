@@ -19,6 +19,7 @@ _ROLE_DIRECTORY_TO_STAGE = {
     "router_planner": "router",
     "primary_solver": "primary",
     "alternative_solver": "alternative",
+    "lemma_curator": "lemma",
     "verifier_skeptic": "verifier",
     "repair": "repair",
     "finalizer": "finalizer",
@@ -37,13 +38,20 @@ _SOLVER_OUTPUT_TOKENS = {
         "alternative_solver": 8192,
     },
     "proof": {
-        "primary_solver": 8192,
-        "alternative_solver": 8192,
+        "primary_solver": 12288,
+        "alternative_solver": 12288,
     },
 }
+_AGENT_TURN_ENVELOPE_PROTOCOL = (
+    "Wrap the public result in AgentTurnPayload 1.0 with exactly these fields "
+    "in this order: protocol_version, task_result_type, action, "
+    "public_state_delta, result_payload, outbound_intents, progress_summary, "
+    "stop_reason. protocol_version is \"1.0\". Never generate agent_id, "
+    "task_id, turn_id, artifact_id, message_id, thread_id, token limits, or "
+    "timeouts; the Host owns them. Return one bare JSON object only. "
+)
 _CANDIDATE_CORE_PROTOCOL = (
-    f"Use ModelCandidatePayload {MODEL_CANDIDATE_PAYLOAD_VERSION}. Return "
-    "exactly one complete JSON object, with no prose or Markdown fence. "
+    f"Construct ModelCandidatePayload {MODEL_CANDIDATE_PAYLOAD_VERSION}. "
     "Put the durable core fields first in this order: method, final_answer, "
     "public_solution_steps, claims. Then include solution_text, assumptions, "
     "theorems, and unresolved_obligations. All eight fields are required; list "
@@ -79,10 +87,10 @@ _CANDIDATE_CORE_PROTOCOL = (
     "mathematical formula with $...$ and use standard LaTeX rather than Unicode "
     "math glyphs. Keep final_answer as LaTeX source without $ delimiters because "
     "the Host renders its delimiters. Prioritize a "
-    "complete valid object over verbosity and finish within 8,192 output tokens."
+    "complete valid object over verbosity."
 )
 _PROGRESS_DELTA_PROTOCOL = (
-    "Public protocol mode is {mode}. Return exactly one bare JSON object with "
+    "Public protocol mode is {mode}. Construct one ProgressDelta object with "
     "these nine fields and no others: public_summary, strategy, subgoals, "
     "claims, open_obligations, closed_obligation_ids, contradictions, "
     "next_step, stop_reason. This is a public, auditable ProgressDelta, not a "
@@ -129,6 +137,18 @@ _ROLE_PROTOCOLS = {
         "Return only RoutePlan JSON with primary_subject, auxiliary_subject, "
         "risk_level, and exactly three controlled method_families. Do not solve "
         "the problem and do not include a Candidate contract."
+    ),
+    "lemma_curator": (
+        _AGENT_TURN_ENVELOPE_PROTOCOL
+        + "Use task_result_type LemmaArtifact and action complete. Put exactly "
+        "one object in result_payload with field lemmas. lemmas is an array; "
+        "each item contains exactly statement, conditions, dependencies, "
+        "proof_sketch, and target_obligation_ids. Proposed lemmas are public "
+        "targets, not verified facts. Use public_state_delta as {} and a "
+        "non-empty progress_summary and stop_reason. outbound_intents must "
+        "contain exactly the public "
+        "recipient_role supplied by the Host and no IDs. Do not solve or "
+        "arbitrate the final answer."
     ),
     "verifier_skeptic": (
         "Return only one JSON object with findings. Each finding contains "
@@ -178,6 +198,8 @@ class PromptCompiler:
         route: RoutePlan,
         user_content: str,
         runtime_instructions: str = "",
+        autonomous: bool = False,
+        compact: bool = False,
     ) -> PromptCompilation:
         if role_directory not in {"primary_solver", "alternative_solver"}:
             raise ValueError("solver prompt role is invalid")
@@ -187,6 +209,30 @@ class PromptCompiler:
             self._response_mode_protocol(problem),
             self._solver_profile_protocol(profile),
         ]
+        if autonomous:
+            instructions.insert(
+                0,
+                _AGENT_TURN_ENVELOPE_PROTOCOL
+                + "For a complete solution use task_result_type "
+                "CandidateArtifact and action publish_candidate; place the "
+                "entire ModelCandidatePayload inside result_payload, set "
+                "public_state_delta to {}, and use outbound_intents []. If no "
+                "sound candidate can be produced, use action abstain, "
+                "task_result_type CheckpointArtifact, empty result_payload, "
+                "and explain the public reason in stop_reason. "
+            )
+        else:
+            instructions.insert(
+                0,
+                "Return the ModelCandidatePayload as exactly one complete bare "
+                "JSON object, with no prose or Markdown fence.",
+            )
+        if compact:
+            instructions.append(
+                "This is compact_synthesis recovery. Consume only the supplied "
+                "verified public Artifact summaries. Return the smallest complete "
+                "Candidate contract; do not repeat the discarded long response."
+            )
         if role_directory == "alternative_solver":
             instructions.append(
                 "Solve independently from the forbidden method families; do not "
@@ -211,6 +257,10 @@ class PromptCompiler:
         if runtime_instructions.strip():
             instructions.append(runtime_instructions.strip())
         output_tokens = _SOLVER_OUTPUT_TOKENS[profile][role_directory]
+        instructions.append(
+            f"This Candidate Turn has a {output_tokens:,}-token output ceiling; "
+            "this is a per-Turn ceiling, not a per-problem reasoning budget."
+        )
         return self._compile(
             role_directory,
             profile,
@@ -228,13 +278,39 @@ class PromptCompiler:
         user_content: str,
         mode: str,
         runtime_instructions: str = "",
+        autonomous: bool = False,
     ) -> PromptCompilation:
-        if role_directory != "primary_solver":
-            raise ValueError("only PrimarySolver may advance ReasoningState")
+        if role_directory not in {"primary_solver", "alternative_solver"}:
+            raise ValueError("solver progress prompt role is invalid")
         if mode not in {"explore", "continue"}:
             raise ValueError("progress mode must be explore or continue")
         profile = self.solver_profile(problem, route)
         instructions = [_PROGRESS_DELTA_PROTOCOL.replace("{mode}", mode)]
+        if autonomous:
+            instructions.insert(
+                0,
+                _AGENT_TURN_ENVELOPE_PROTOCOL
+                + "Use task_result_type ProgressArtifact. Put the exact "
+                "ProgressDelta object inside public_state_delta and use empty "
+                "result_payload. Choose one action: continue_reasoning, "
+                "request_lemma, request_tool_check, request_replan, complete, "
+                "or abstain. Use complete with a non-empty stop_reason when the "
+                "public exploration is ready for a separate Candidate synthesis "
+                "Turn. "
+                "For a request action include one matching outbound_intent with "
+                "only public request details and Artifact-independent Claim or "
+                "obligation references. For continue_reasoning use [] intents. "
+                "A continuation must add a Claim, Subgoal, obligation transition, "
+                "or concrete request; wording-only changes are invalid. Use "
+                "task_result_type ToolRequestArtifact for request_tool_check, "
+                "CheckpointArtifact for abstain, and ProgressArtifact otherwise."
+            )
+        else:
+            instructions.insert(
+                0,
+                "Return the ProgressDelta as exactly one complete bare JSON "
+                "object, with no prose or Markdown fence.",
+            )
         if mode == "explore":
             instructions.append(
                 "Decompose the exact target and establish the first useful "
@@ -254,7 +330,7 @@ class PromptCompiler:
             f"{profile}:{mode}",
             user_content,
             "\n".join(instructions),
-            8192,
+            4096,
         )
 
     def compile_role(

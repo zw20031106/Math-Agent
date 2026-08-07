@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 from typing import Any, Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from time import perf_counter
 
 from mathforge.agents.registry import PromptContractLoader, SkillRegistry
 from mathforge.agents.skill_selector import DynamicSkillSelector
-from mathforge.agents.router_planner import RouterPlanner
+from mathforge.agents.router_planner import RouterPlanner, method_families_for
 from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.adaptive_fanout import AdaptiveFanoutPolicy
 from mathforge.agent_runtime.session_call_budget import SessionCallBudget
 from mathforge.agent_runtime.definitions import AgentRegistry
 from mathforge.agent_runtime.runtime import SessionAgentRuntime
+from mathforge.agent_runtime.autonomy import AgentProgressTracker
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.debug import DebugSink, sanitized_failure_record
 from mathforge.harness.errors import (
@@ -42,10 +43,20 @@ from mathforge.harness.reasoning_state import (
     ReasoningStateCompressor,
 )
 from mathforge.harness.proof_graph import build_claim_evidence_graph
-from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
+from mathforge.agents.solver import (
+    AlternativeSolver,
+    PrimarySolver,
+    SolverExecutor,
+    SolverRequest,
+)
+from mathforge.agents.lemma_curator import (
+    LLMLemmaCuratorAgent,
+    LLMLemmaRequest,
+)
 from mathforge.harness.orchestration import (
     BranchFailure,
     CandidateOrchestrator,
+    FanoutResult,
     candidate_failure_trace_payload,
     candidate_trace_payload,
     public_candidate_content,
@@ -118,6 +129,22 @@ from mathforge.verification.cross_review import (
 )
 from mathforge.tools.shadow_solver import ShadowOutcome
 from mathforge.verification.answer_normalization import canonical_answer
+
+
+@dataclass
+class _AutonomousBranch:
+    role: str
+    candidate_id: str
+    solver: PrimarySolver | AlternativeSolver
+    method_family: str
+    forbidden_method_families: tuple[str, ...]
+    context_view: Any
+    skill_context: str
+    state: ReasoningState
+    mode: str = "explore"
+    status: str = "exploring"
+    stop_reason: str = ""
+    candidate: Any = None
 
 
 _ROLE_CONTRACT_DIRECTORIES = {
@@ -255,6 +282,10 @@ class MathForgeHarness:
         self._tool_feedback = ToolFeedbackController(self._tool_executor)
         self._arbitration = ArbitrationPolicy(self._tool_executor)
         self._lemma_loop = VerifiedLemmaLoop()
+        self._llm_lemma_curator = LLMLemmaCuratorAgent(
+            self._provider,
+            self._contracts,
+        )
         self._retriever = Retriever() if self._config.enable_rag else None
         self._evidence_stage = EvidenceStage(self._tool_executor)
         self._proof_stage = ProofStage()
@@ -701,17 +732,31 @@ class MathForgeHarness:
                 ),
             )
             pre_allocation_budget = session.budget.snapshot()
-            reasoning_plan = self._long_horizon_policy.decide(
-                session.route_plan,
-                enabled=self._config.enable_long_horizon,
-                remaining_calls=pre_allocation_budget.remaining_calls,
-                remaining_seconds=pre_allocation_budget.remaining_seconds,
-                verifier_required=verifier_required,
-                alternatives_enabled=self._config.enable_alternatives,
-                provider_healthy=self._provider_allows_optional_model_work(),
-                maximum_queue_seconds=(
-                    self._config.model_queue_budget_seconds
-                ),
+            autonomous_agents_enabled = bool(
+                self._config.enable_long_horizon
+                and self._config.model_call_policy == "adaptive_bounded"
+                and self._provider_allows_optional_model_work()
+            )
+            reasoning_plan = (
+                LongHorizonPlan(
+                    False,
+                    1,
+                    "agent_action_governed",
+                    0.0,
+                )
+                if autonomous_agents_enabled
+                else self._long_horizon_policy.decide(
+                    session.route_plan,
+                    enabled=self._config.enable_long_horizon,
+                    remaining_calls=pre_allocation_budget.remaining_calls,
+                    remaining_seconds=pre_allocation_budget.remaining_seconds,
+                    verifier_required=verifier_required,
+                    alternatives_enabled=self._config.enable_alternatives,
+                    provider_healthy=self._provider_allows_optional_model_work(),
+                    maximum_queue_seconds=(
+                        self._config.model_queue_budget_seconds
+                    ),
+                )
             )
             allocation = _build_call_allocation(
                 session.budget,
@@ -729,7 +774,11 @@ class MathForgeHarness:
                     self._config.enable_finalizer
                     and session.route_plan.use_llm_finalizer
                 ),
-                primary_calls=reasoning_plan.planned_rounds,
+                primary_calls=(
+                    1
+                    if autonomous_agents_enabled
+                    else reasoning_plan.planned_rounds
+                ),
             )
             _apply_stage_allocation(session.budget, allocation)
             unreachable = list(allocation.unreachable_by_budget)
@@ -890,12 +939,24 @@ class MathForgeHarness:
                     "open_obligations",
                 ],
             )
-            trace.add(
-                "long_horizon_planned",
-                **reasoning_plan.to_dict(),
-                remaining_calls=pre_allocation_budget.remaining_calls,
-                remaining_seconds=pre_allocation_budget.remaining_seconds,
-            )
+            if autonomous_agents_enabled:
+                trace.add(
+                    "autonomous_solver_planned",
+                    enabled=True,
+                    fixed_planned_rounds=False,
+                    governance=(
+                        "agent_action+public_progress+resource_governor+deadline"
+                    ),
+                    remaining_calls=pre_allocation_budget.remaining_calls,
+                    remaining_seconds=pre_allocation_budget.remaining_seconds,
+                )
+            else:
+                trace.add(
+                    "long_horizon_planned",
+                    **reasoning_plan.to_dict(),
+                    remaining_calls=pre_allocation_budget.remaining_calls,
+                    remaining_seconds=pre_allocation_budget.remaining_seconds,
+                )
             self._trace_dynamic_skill_selection(
                 trace,
                 skill_compositions,
@@ -939,7 +1000,17 @@ class MathForgeHarness:
                 "solver_context_ready",
             )
             primary_seed = None
-            if reasoning_plan.enabled:
+            autonomous_summary: dict[str, Any] = {}
+            if autonomous_agents_enabled:
+                fanout, session.reasoning_state, autonomous_summary = (
+                    self._run_autonomous_solver_fanout(
+                        session,
+                        trace,
+                        role_skill_contexts=role_skill_contexts,
+                        solver_contexts=solver_contexts,
+                    )
+                )
+            elif reasoning_plan.enabled:
                 (
                     primary_seed,
                     session.reasoning_state,
@@ -954,31 +1025,32 @@ class MathForgeHarness:
                     ),
                     context_view=solver_contexts["PrimarySolver"],
                 )
-            fanout = self._candidate_orchestrator.fanout(
-                session.problem_ir,
-                session.route_plan,
-                role_skill_contexts.get("PrimarySolver", ""),
-                session.budget,
-                temperature=self._config.primary_temperature,
-                max_tokens=self._config.primary_max_tokens,
-                context_views=solver_contexts,
-                role_skill_contexts=role_skill_contexts,
-                event_callback=trace.add,
-                fanout_decider=(
-                    lambda primary, budget: self._adaptive_fanout.decide(
-                        session.route_plan,
-                         primary,
-                         budget,
-                         required_stage_reserve=allocation.verifier,
-                         shadow_consistency=self._shadow_consistency(
+            if not autonomous_agents_enabled:
+                fanout = self._candidate_orchestrator.fanout(
+                    session.problem_ir,
+                    session.route_plan,
+                    role_skill_contexts.get("PrimarySolver", ""),
+                    session.budget,
+                    temperature=self._config.primary_temperature,
+                    max_tokens=self._config.primary_max_tokens,
+                    context_views=solver_contexts,
+                    role_skill_contexts=role_skill_contexts,
+                    event_callback=trace.add,
+                    fanout_decider=(
+                        lambda primary, budget: self._adaptive_fanout.decide(
+                            session.route_plan,
                              primary,
-                             shadow_outcome,
-                             session.problem_ir.answer_type,
-                         ),
-                     )
-                 ),
-                primary_candidate=primary_seed,
-             )
+                             budget,
+                             required_stage_reserve=allocation.verifier,
+                             shadow_consistency=self._shadow_consistency(
+                                 primary,
+                                 shadow_outcome,
+                                 session.problem_ir.answer_type,
+                             ),
+                         )
+                     ),
+                    primary_candidate=primary_seed,
+                 )
             primary_candidate = next(
                 (
                     item
@@ -1052,9 +1124,15 @@ class MathForgeHarness:
             trace.add(
                 "reasoning_loop_completed",
                 state_id=session.reasoning_state.state_id,
-                enabled=reasoning_plan.enabled,
+                enabled=(
+                    autonomous_agents_enabled or reasoning_plan.enabled
+                ),
                 completed_rounds=len(session.reasoning_state.rounds),
-                planned_rounds=reasoning_plan.planned_rounds,
+                **(
+                    {"fixed_planned_rounds": False, **autonomous_summary}
+                    if autonomous_agents_enabled
+                    else {"planned_rounds": reasoning_plan.planned_rounds}
+                ),
                 stop_reason=reasoning_stop_reason,
                 degraded_reason=reasoning_degraded_reason,
                 candidate_id=(
@@ -3146,6 +3224,679 @@ class MathForgeHarness:
             None,
         )
         return result
+
+    def _run_autonomous_solver_fanout(
+        self,
+        session,
+        trace: TraceBuilder,
+        *,
+        role_skill_contexts: dict[str, str],
+        solver_contexts: dict[str, Any],
+    ) -> tuple[FanoutResult, ReasoningState, dict[str, Any]]:
+        tracker = AgentProgressTracker()
+        shared_lemma_context = self._run_initial_llm_lemma_curator(
+            session,
+            trace,
+        )
+        methods = list(dict.fromkeys(session.route_plan.method_families))
+        methods.extend(
+            method
+            for method in method_families_for(
+                session.route_plan.primary_subject,
+                session.route_plan.problem_type,
+            )
+            if method not in methods
+        )
+        methods.extend(
+            method
+            for method in method_families_for(
+                "general-math",
+                session.route_plan.problem_type,
+            )
+            if method not in methods
+        )
+        target_count = 2 if self._config.enable_alternatives else 1
+        if len(methods) < target_count:
+            methods.append("independent-direct-check")
+        branches = [
+            _AutonomousBranch(
+                role="PrimarySolver",
+                candidate_id="primary-1",
+                solver=PrimarySolver(self._contracts),
+                method_family=methods[0],
+                forbidden_method_families=tuple(methods[1:target_count]),
+                context_view=solver_contexts.get("PrimarySolver"),
+                skill_context=(
+                    role_skill_contexts.get("PrimarySolver", "")
+                    + shared_lemma_context
+                ),
+                state=ReasoningState.initialize(
+                    session.problem_ir,
+                    strategy=methods[0],
+                ),
+            )
+        ]
+        if target_count > 1:
+            branches.append(
+                _AutonomousBranch(
+                    role="AlternativeSolver",
+                    candidate_id="alternative-1",
+                    solver=AlternativeSolver(self._contracts),
+                    method_family=methods[1],
+                    forbidden_method_families=tuple(
+                        method for method in methods[:target_count] if method != methods[1]
+                    ),
+                    context_view=solver_contexts.get("AlternativeSolver"),
+                    skill_context=(
+                        role_skill_contexts.get("AlternativeSolver", "")
+                        + shared_lemma_context
+                    ),
+                    state=ReasoningState.initialize(
+                        session.problem_ir,
+                        strategy=methods[1],
+                    ),
+                )
+            )
+
+        action_turns = 0
+        progress_turns = 0
+        stall_stops = 0
+        while any(branch.status == "exploring" for branch in branches):
+            cycle_advanced = False
+            for branch in branches:
+                if branch.status != "exploring":
+                    continue
+                pending_candidates = sum(
+                    item.status not in {"abstained", "candidate_published"}
+                    for item in branches
+                )
+                candidate_kind = (
+                    "solver_candidate_proof"
+                    if session.problem_ir.response_mode == "proof_full"
+                    else "solver_candidate_standard"
+                )
+                if (
+                    not session.budget.can_start_exploration()
+                    or not stage_sequence_feasible(
+                        [candidate_kind] * max(1, pending_candidates),
+                        remaining_seconds=(
+                            session.budget.snapshot().remaining_seconds
+                        ),
+                        maximum_queue_seconds=(
+                            self._config.model_queue_budget_seconds
+                        ),
+                    )
+                ):
+                    branch.status = "ready_to_synthesize"
+                    branch.stop_reason = "resource_governor_requested_synthesis"
+                    continue
+                try:
+                    compressed = self._compress_reasoning_state(
+                        branch.state,
+                        trace,
+                    )
+                    turn = self._solver_executor.execute_autonomous_progress(
+                        branch.solver,
+                        SolverRequest(
+                            branch.candidate_id,
+                            session.problem_ir,
+                            session.route_plan,
+                            branch.skill_context
+                            + self._autonomous_budget_context(
+                                session.budget.snapshot()
+                            ),
+                            branch.method_family,
+                            branch.forbidden_method_families,
+                            branch.context_view,
+                            compressed.prompt_json,
+                        ),
+                        session.budget,
+                        mode=branch.mode,
+                        temperature=(
+                            self._config.primary_temperature
+                            if branch.role == "PrimarySolver"
+                            else max(self._config.primary_temperature, 0.35)
+                        ),
+                        max_tokens=self._config.primary_max_tokens,
+                        optional=branch.mode == "continue",
+                    )
+                except Exception as error:
+                    branch.status = "ready_to_synthesize"
+                    branch.stop_reason = self._reasoning_failure_code(error)
+                    trace.add(
+                        "autonomous_turn_failed",
+                        agent_role=branch.role,
+                        candidate_id=branch.candidate_id,
+                        mode=branch.mode,
+                        failure_code=branch.stop_reason,
+                        next_action="synthesize_candidate",
+                    )
+                    continue
+                action_turns += 1
+                progress_turns += 1
+                cycle_advanced = True
+                decision = tracker.observe(
+                    f"{branch.role}:{branch.candidate_id}",
+                    turn.parsed.payload,
+                )
+                summary: dict[str, Any] = {
+                    "information_gain": decision.information_gain,
+                    "added_claim_ids": [],
+                    "evidence_ids": [],
+                }
+                if turn.delta is not None:
+                    try:
+                        branch.state, summary = branch.state.apply(turn.delta)
+                    except ValueError as error:
+                        branch.status = "ready_to_synthesize"
+                        branch.stop_reason = "progress_state_transition_invalid"
+                        trace.add(
+                            "autonomous_turn_failed",
+                            agent_role=branch.role,
+                            candidate_id=branch.candidate_id,
+                            mode=branch.mode,
+                            failure_code=branch.stop_reason,
+                            detail=type(error).__name__,
+                            next_action="synthesize_candidate",
+                        )
+                        continue
+                trace.add(
+                    "autonomous_agent_action",
+                    agent_role=branch.role,
+                    candidate_id=branch.candidate_id,
+                    mode=branch.mode,
+                    action=turn.action,
+                    partial=turn.partial,
+                    truncation_reason=turn.parsed.truncation_reason,
+                    progress_summary=turn.parsed.payload.progress_summary,
+                    semantic_sha256=decision.semantic_sha256,
+                    information_gain=decision.information_gain,
+                    state_version=branch.state.version,
+                    outbound_intents=list(
+                        turn.parsed.payload.outbound_intents
+                    ),
+                )
+                if not decision.continue_allowed:
+                    stall_stops += 1
+                    branch.status = "ready_to_synthesize"
+                    branch.stop_reason = decision.stop_reason
+                    trace.add(
+                        "autonomous_stall_detected",
+                        agent_role=branch.role,
+                        candidate_id=branch.candidate_id,
+                        **decision.to_dict(),
+                    )
+                    continue
+                if turn.action == "abstain":
+                    branch.status = "abstained"
+                    branch.stop_reason = turn.parsed.payload.stop_reason
+                    trace.add(
+                        "candidate_generation_started",
+                        candidate_id=branch.candidate_id,
+                        role=branch.role,
+                        planned_method_family=branch.method_family,
+                        turn_kind="agent_abstention",
+                        autonomous=True,
+                    )
+                    trace.add(
+                        "candidate_generation_failed",
+                        **candidate_failure_trace_payload(
+                            branch.candidate_id,
+                            "agent_abstained",
+                        ),
+                        role=branch.role,
+                        public_reason=branch.stop_reason,
+                    )
+                    continue
+                if turn.action == "complete":
+                    branch.status = "ready_to_synthesize"
+                    branch.stop_reason = (
+                        turn.parsed.payload.stop_reason
+                        or "agent_requested_candidate_synthesis"
+                    )
+                    continue
+                if turn.action == "request_tool_check":
+                    self._apply_autonomous_tool_request(
+                        session,
+                        trace,
+                        branch,
+                        turn.delta,
+                        summary,
+                    )
+                elif turn.action == "request_lemma":
+                    branch.skill_context += self._answer_solver_lemma_request(
+                        session,
+                        trace,
+                        branch,
+                        turn.parsed.payload.outbound_intents,
+                    )
+                elif turn.action == "request_replan":
+                    self._answer_solver_replan_request(
+                        session,
+                        trace,
+                        branch,
+                    )
+                branch.mode = "continue"
+            if not cycle_advanced and all(
+                branch.status != "exploring" for branch in branches
+            ):
+                break
+
+        candidates = []
+        failures: list[BranchFailure] = []
+        candidate_attempts = len(branches)
+        candidate_synthesis_attempts = 0
+        compact_recoveries = 0
+        proof_degradations = 0
+        for branch in branches:
+            if branch.status == "abstained":
+                failures.append(
+                    BranchFailure(branch.candidate_id, "agent_abstained")
+                )
+                continue
+            candidate_synthesis_attempts += 1
+            trace.add(
+                "candidate_generation_started",
+                candidate_id=branch.candidate_id,
+                role=branch.role,
+                planned_method_family=branch.method_family,
+                turn_kind=(
+                    "solver_candidate_proof"
+                    if session.problem_ir.response_mode == "proof_full"
+                    else "solver_candidate_standard"
+                ),
+                autonomous=True,
+            )
+            try:
+                compressed = self._compress_reasoning_state(branch.state, trace)
+                request = SolverRequest(
+                    branch.candidate_id,
+                    session.problem_ir,
+                    session.route_plan,
+                    branch.skill_context
+                    + self._autonomous_budget_context(
+                        session.budget.snapshot()
+                    ),
+                    branch.method_family,
+                    branch.forbidden_method_families,
+                    branch.context_view,
+                    compressed.prompt_json,
+                )
+                turn = self._solver_executor.execute_autonomous_candidate(
+                    branch.solver,
+                    request,
+                    session.budget,
+                    temperature=(
+                        self._config.primary_temperature
+                        if branch.role == "PrimarySolver"
+                        else max(self._config.primary_temperature, 0.35)
+                    ),
+                    max_tokens=self._config.primary_max_tokens,
+                )
+                if turn.partial:
+                    compact_recoveries += 1
+                    trace.add(
+                        "candidate_partial_recovery_started",
+                        candidate_id=branch.candidate_id,
+                        truncation_reason=turn.parsed.truncation_reason,
+                        recovery_turn_kind="solver_compact_synthesis",
+                        raw_response_reused=False,
+                    )
+                    turn = self._solver_executor.execute_autonomous_candidate(
+                        branch.solver,
+                        request,
+                        session.budget,
+                        temperature=0.0,
+                        max_tokens=self._config.primary_max_tokens,
+                        compact=True,
+                    )
+                if turn.action == "abstain" or turn.candidate is None:
+                    failures.append(
+                        BranchFailure(branch.candidate_id, "agent_abstained")
+                    )
+                    branch.status = "abstained"
+                    trace.add(
+                        "candidate_generation_failed",
+                        **candidate_failure_trace_payload(
+                            branch.candidate_id,
+                            "agent_abstained",
+                        ),
+                        role=branch.role,
+                    )
+                    continue
+                branch.candidate = turn.candidate
+                branch.status = "candidate_published"
+                candidates.append(turn.candidate)
+                trace.add(
+                    "candidate_generated",
+                    **candidate_trace_payload(turn.candidate),
+                    autonomous=True,
+                )
+            except ModelTransportError as error:
+                if session.problem_ir.response_mode == "proof_full":
+                    proof_degradations += 1
+                    trace.add(
+                        "proof_token_canary_degraded",
+                        candidate_id=branch.candidate_id,
+                        requested_tokens=12288,
+                        fallback_tokens=8192,
+                        failure_code=error.code,
+                    )
+                    try:
+                        turn = self._solver_executor.execute_autonomous_candidate(
+                            branch.solver,
+                            request,
+                            session.budget,
+                            temperature=0.0,
+                            max_tokens=8192,
+                            compact=True,
+                        )
+                        if turn.candidate is not None and not turn.partial:
+                            branch.candidate = turn.candidate
+                            branch.status = "candidate_published"
+                            candidates.append(turn.candidate)
+                            trace.add(
+                                "candidate_generated",
+                                **candidate_trace_payload(turn.candidate),
+                                autonomous=True,
+                                proof_token_degraded=True,
+                            )
+                            continue
+                    except Exception as retry_error:
+                        error = retry_error
+                reason = self._reasoning_failure_code(error)
+                failures.append(BranchFailure(branch.candidate_id, reason))
+                trace.add(
+                    "candidate_generation_failed",
+                    **candidate_failure_trace_payload(
+                        branch.candidate_id,
+                        reason,
+                    ),
+                    role=branch.role,
+                )
+            except Exception as error:
+                reason = self._reasoning_failure_code(error)
+                failures.append(BranchFailure(branch.candidate_id, reason))
+                trace.add(
+                    "candidate_generation_failed",
+                    **candidate_failure_trace_payload(
+                        branch.candidate_id,
+                        reason,
+                    ),
+                    role=branch.role,
+                )
+
+        primary_state = branches[0].state
+        return (
+            FanoutResult(candidates, failures),
+            primary_state,
+            {
+                "action_turns": action_turns,
+                "progress_turns": progress_turns,
+                "candidate_attempts": candidate_attempts,
+                "candidate_synthesis_attempts": candidate_synthesis_attempts,
+                "abstained_agents": sum(
+                    branch.status == "abstained" for branch in branches
+                ),
+                "stall_stops": stall_stops,
+                "compact_recoveries": compact_recoveries,
+                "proof_token_degradations": proof_degradations,
+                "agent_stop_reasons": {
+                    branch.role: branch.stop_reason for branch in branches
+                },
+            },
+        )
+
+    def _run_initial_llm_lemma_curator(
+        self,
+        session,
+        trace: TraceBuilder,
+    ) -> str:
+        plan = session.agent_plan
+        conditions = tuple(
+            dict.fromkeys(
+                (
+                    *session.problem_ir.definitions,
+                    *session.problem_ir.quantifiers,
+                    *session.problem_ir.constraints,
+                    *session.problem_ir.assumptions,
+                )
+            )
+        )
+        try:
+            outcome = self._llm_lemma_curator.execute(
+                LLMLemmaRequest(
+                    problem=session.problem_ir.normalized_problem,
+                    plan_id=plan.plan_id,
+                    plan_summary="; ".join(
+                        subgoal.objective for subgoal in plan.subgoals
+                    ),
+                    conditions=conditions,
+                    target_obligation_ids=tuple(
+                        subgoal.subgoal_id for subgoal in plan.subgoals
+                    ),
+                    request_text=(
+                        "Identify problem-local lemmas and theorem conditions "
+                        "that both independent Solvers should address."
+                    ),
+                    recipient_role="PrimarySolver",
+                ),
+                session.budget,
+                max_tokens=self._config.primary_max_tokens,
+                optional=False,
+            )
+        except Exception as error:
+            trace.add(
+                "llm_lemma_curator_completed",
+                status="failed",
+                independent_model_call=True,
+                failure_code=self._reasoning_failure_code(error),
+                fallback="deterministic_post_candidate_curation",
+            )
+            return ""
+        session.lemmas.extend(outcome.lemmas)
+        alternative_message_id = ""
+        if self._config.enable_alternatives and outcome.turn_id:
+            alternative_message_id = session.agent_runtime.relay_turn_artifact(
+                outcome.turn_id,
+                recipient_role="AlternativeSolver",
+                message_type="lemma_published",
+                public_summary=(
+                    "LemmaCurator shared initial provisional lemmas with the "
+                    "isolated AlternativeSolver"
+                ),
+            )
+        trace.add(
+            "llm_lemma_curator_completed",
+            status="partial" if outcome.parsed.partial else "completed",
+            independent_model_call=True,
+            action=outcome.parsed.payload.action,
+            lemma_ids=[lemma.lemma_id for lemma in outcome.lemmas],
+            lemma_status="provisional",
+            hard_fact_eligible=False,
+            reply_recipient_role="PrimarySolver",
+            alternative_message_id=alternative_message_id,
+        )
+        return self._proposed_lemma_context(outcome.lemmas)
+
+    def _answer_solver_lemma_request(
+        self,
+        session,
+        trace: TraceBuilder,
+        branch: _AutonomousBranch,
+        intents: tuple[dict[str, Any], ...],
+    ) -> str:
+        intent = intents[0] if intents else {}
+        request_text = str(
+            intent.get("request", intent.get("target", "Resolve the blocked public obligation."))
+        )
+        obligation_ids = tuple(
+            str(item)
+            for item in intent.get("target_obligation_ids", [])
+            if str(item)
+        )
+        try:
+            outcome = self._llm_lemma_curator.execute(
+                LLMLemmaRequest(
+                    problem=session.problem_ir.normalized_problem,
+                    plan_id=session.agent_plan.plan_id,
+                    plan_summary=branch.state.strategy,
+                    conditions=tuple(session.problem_ir.assumptions),
+                    target_obligation_ids=obligation_ids,
+                    request_text=request_text,
+                    recipient_role=branch.role,
+                    source_round=max(1, branch.state.version + 1),
+                ),
+                session.budget,
+                max_tokens=self._config.primary_max_tokens,
+                optional=True,
+            )
+        except Exception as error:
+            trace.add(
+                "lemma_request_completed",
+                requester_role=branch.role,
+                status="failed",
+                failure_code=self._reasoning_failure_code(error),
+            )
+            return ""
+        session.lemmas.extend(outcome.lemmas)
+        trace.add(
+            "lemma_request_completed",
+            requester_role=branch.role,
+            status="completed",
+            lemma_ids=[lemma.lemma_id for lemma in outcome.lemmas],
+            solver_woken=True,
+            hard_fact_eligible=False,
+        )
+        return self._proposed_lemma_context(outcome.lemmas)
+
+    def _apply_autonomous_tool_request(
+        self,
+        session,
+        trace: TraceBuilder,
+        branch: _AutonomousBranch,
+        delta,
+        summary: dict[str, Any],
+    ) -> None:
+        if not self._config.enable_tools or delta is None:
+            trace.add(
+                "agent_tool_request_completed",
+                requester_role=branch.role,
+                status="unavailable",
+                solver_woken=True,
+            )
+            return
+        added = set(summary.get("added_claim_ids", []))
+        batch = self._tool_feedback.run(
+            tuple(claim for claim in delta.claims if claim.claim_id in added),
+            domains=session.problem_ir.domains,
+            assumptions=session.problem_ir.assumptions,
+            selected_tools=session.route_plan.selected_tools,
+            budget=session.budget,
+        )
+        if batch.work_items:
+            branch.state, feedback = branch.state.apply_tool_results(
+                batch.results
+            )
+            summary["evidence_ids"] = feedback["evidence_ids"]
+        trace.add(
+            "agent_tool_request_completed",
+            requester_role=branch.role,
+            status="completed" if batch.work_items else "no_supported_check",
+            solver_woken=True,
+            **batch.to_trace_dict(),
+        )
+
+    def _answer_solver_replan_request(
+        self,
+        session,
+        trace: TraceBuilder,
+        branch: _AutonomousBranch,
+    ) -> None:
+        previous = session.agent_plan
+        try:
+            outcome = self._context_route_stage.plan_authoritative(
+                session.problem_ir,
+                llm_chat=lambda **kwargs: self._provider.chat(
+                    budget=session.budget,
+                    stage="router",
+                    turn_kind="replan",
+                    agent_id="RouterPlanner",
+                    **kwargs,
+                ),
+                consume_call=lambda: session.budget.consume(
+                    stage="router",
+                    optional=True,
+                    action_category="replan",
+                ),
+                max_tokens=self._config.primary_max_tokens,
+                previous_plan=previous,
+                verified_fact_ids=tuple(
+                    record.evidence_id
+                    for record in session.evidence
+                    if is_semantic_hard_pass(record)
+                ),
+                record_prompt_chars=session.budget.record_prompt_chars,
+            )
+            session.route_plan = outcome.route_plan
+            session.agent_plan = outcome.authoritative_plan
+            methods = session.route_plan.method_families
+            method_index = 0 if branch.role == "PrimarySolver" else 1
+            if method_index < len(methods):
+                branch.method_family = methods[method_index]
+                branch.forbidden_method_families = tuple(
+                    method
+                    for index, method in enumerate(methods[:2])
+                    if index != method_index
+                )
+            refs = session.agent_runtime.publish_router_decision(
+                route_payload=session.route_plan.to_dict(),
+                plan=session.agent_plan,
+            )
+        except Exception as error:
+            trace.add(
+                "agent_replan_completed",
+                requester_role=branch.role,
+                status="failed",
+                failure_code=self._reasoning_failure_code(error),
+            )
+            return
+        trace.add(
+            "agent_replan_completed",
+            requester_role=branch.role,
+            status="completed",
+            prior_plan_id=previous.plan_id,
+            plan_id=session.agent_plan.plan_id,
+            plan_version=session.agent_plan.version,
+            solver_woken=True,
+            **refs,
+        )
+
+    @staticmethod
+    def _proposed_lemma_context(lemmas) -> str:
+        if not lemmas:
+            return ""
+        lines = [
+            "\n\nProposed problem-local lemmas (UNVERIFIED; these are targets, not facts):"
+        ]
+        lines.extend(
+            f"- {lemma.lemma_id}: {lemma.statement}; conditions: "
+            f"{', '.join(lemma.conditions) or 'none'}"
+            for lemma in lemmas
+        )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _autonomous_budget_context(snapshot) -> str:
+        return (
+            "\n\nPublic resource state: "
+            f"session_calls_remaining={snapshot.remaining_calls}; "
+            f"budget_pressure={snapshot.budget_phase}; "
+            f"next_soft_checkpoint={snapshot.next_checkpoint}; "
+            f"exploration_open={str(snapshot.exploration_open).lower()}. "
+            "Use this only to choose a public Action; the Host remains the "
+            "sole authority for admission and limits."
+        )
 
     def _run_long_horizon_primary(
         self,

@@ -33,20 +33,20 @@
       "path": "prompts",
       "pattern": "contract.md",
       "expected_count": 7,
-        "version": "prompt-contract-8-authoritative-router-plan-3.0",
-        "engineering_reviewer": "codex-phase-f3-authoritative-router-audit",
+        "version": "prompt-contract-9-f4-agent-action-lemma-llm",
+        "engineering_reviewer": "codex-phase-f4-autonomous-agent-audit",
         "review_date": "2026-08-07",
-        "sha256": "111092d6247093ea0d429d4941f07a55240e4483eb98aa4eb375040a919d0a42"
+        "sha256": "137f7e7787e84422bbfcc5d3d9188cd83109c2d64166303ed9c6daec774c3508"
     },
     {
       "id": "prompt-compiler",
       "kind": "file",
       "path": "mathforge/agents/prompt_compiler.py",
       "expected_count": 1,
-      "version": "prompt-compiler-9-response-mode-candidate-2.1",
-      "engineering_reviewer": "codex-phase-t5-prompt-audit",
-      "review_date": "2026-07-31",
-      "sha256": "a2a0644878499ddafce2528f80a3b1a883ceafa58c7084ca19c98e0b053e259a"
+      "version": "prompt-compiler-10-f4-typed-turn-tokens",
+      "engineering_reviewer": "codex-phase-f4-autonomous-agent-audit",
+      "review_date": "2026-08-07",
+      "sha256": "1b5c248c4c109de3a0fd71c4c628c9469e746c1f90c97b86406064b85d008b9c"
     },
     {
       "id": "model-candidate-boundary",
@@ -61,10 +61,10 @@
         "mathforge/parsing/solution_parser.py"
       ],
       "expected_count": 7,
-      "version": "model-candidate-boundary-2.1-f1-execution-policy",
-      "engineering_reviewer": "codex-phase-f1-resource-governance-audit",
+      "version": "model-candidate-boundary-2.1-f4-agent-envelope",
+      "engineering_reviewer": "codex-phase-f4-autonomous-agent-audit",
       "review_date": "2026-08-07",
-      "sha256": "a0fbb06246b07fe06931aa18d9e64d083ef3c941796285eee9a351a7a1841e0f"
+      "sha256": "c044fc7dc0172ad6ca540b7096a37fa86d1259573099427824dc415efd3931cf"
     },
     {
       "id": "reasoning-state",
@@ -125,10 +125,10 @@
         "mathforge/harness/schemas.py"
       ],
       "expected_count": 3,
-        "version": "typed-lemma-feedback-phase-f3-authoritative-plan-field",
-        "engineering_reviewer": "codex-phase-f3-authoritative-router-audit",
+        "version": "typed-lemma-feedback-phase-f4-independent-llm-agent",
+        "engineering_reviewer": "codex-phase-f4-autonomous-agent-audit",
         "review_date": "2026-08-07",
-        "sha256": "66a974924c9c88d67c7971919e938351ee0449ef67d1f2864e79ee1cfc9c8104"
+        "sha256": "f1f9cd5b8a78f92b4a1b9f1236f55388b826a549798cc0ff572a912a38e06b98"
     },
     {
       "id": "verification-closure",
@@ -150,10 +150,10 @@
         "mathforge/verification/proof_obligations.py"
       ],
       "expected_count": 14,
-        "version": "verification-closure-phase-f3-authoritative-router",
-        "engineering_reviewer": "codex-phase-f3-authoritative-router-audit",
+        "version": "verification-closure-phase-f4-autonomous-candidates",
+        "engineering_reviewer": "codex-phase-f4-autonomous-agent-audit",
         "review_date": "2026-08-07",
-        "sha256": "911078bb84076a83797444e4989d653d082523aebd1a7a097d896b317790335b"
+        "sha256": "5104bd65bd46a84f1b18e087a218037f907ac0cb09bb4962e46aa7b29d66c7ee"
     },
     {
       "id": "reviewed-method-cards",
@@ -211,10 +211,10 @@
         "scripts/propose_competition_config.py"
       ],
       "expected_count": 4,
-      "version": "phase-f1-resource-governance-trace-3.7",
-      "engineering_reviewer": "codex-phase-f1-resource-governance-audit",
+      "version": "phase-f4-turn-policy-trace-4.0",
+      "engineering_reviewer": "codex-phase-f4-autonomous-agent-audit",
       "review_date": "2026-08-07",
-      "sha256": "a49d418e555889ac6eb8fc133497cdd293bd54b95a2863925555b52a0c7cd355"
+      "sha256": "b0044111fc2e6608709e9fcb6b4c80bb30c5b4db46e24ffb1fa35ced40cc4fbf"
     },
     {
       "id": "router-calibration",

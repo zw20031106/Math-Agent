@@ -24,6 +24,11 @@ def _default_stage_execution_policy() -> dict[str, dict[str, int | float]]:
             "timeout_seconds": 240.0,
             "minimum_start_window_seconds": 120.0,
         },
+        "solver_compact_synthesis": {
+            "max_tokens": 8192,
+            "timeout_seconds": 240.0,
+            "minimum_start_window_seconds": 120.0,
+        },
         "solver_candidate_proof": {
             "max_tokens": 12288,
             "timeout_seconds": 270.0,

@@ -15,7 +15,7 @@ from mathforge.output.loop_health import (
 )
 
 
-JUDGE_TRACE_SCHEMA_VERSION = "3.9"
+JUDGE_TRACE_SCHEMA_VERSION = "4.0"
 JUDGE_EVENT_STAGES = {
     "solution_process": "solution",
     "workflow_overview": "workflow",
@@ -26,12 +26,22 @@ JUDGE_EVENT_STAGES = {
     "route_planned": "routing",
     "reasoning_state_initialized": "reasoning",
     "long_horizon_planned": "reasoning",
+    "autonomous_solver_planned": "reasoning",
+    "autonomous_agent_action": "reasoning",
+    "autonomous_stall_detected": "reasoning",
+    "autonomous_turn_failed": "reasoning",
     "round_summary": "reasoning",
     "reasoning_loop_completed": "reasoning",
     "skills_selected": "skill_selection",
     "model_activity": "model_activity",
     "agent_protocol": "orchestration",
     "tool_feedback_completed": "evidence",
+    "agent_tool_request_completed": "evidence",
+    "llm_lemma_curator_completed": "lemma",
+    "lemma_request_completed": "lemma",
+    "agent_replan_completed": "routing",
+    "candidate_partial_recovery_started": "candidate_generation",
+    "proof_token_canary_degraded": "candidate_generation",
     "verifier_completed": "verification",
     "candidate_summaries": "candidate_generation",
     "evidence_summary": "evidence",
@@ -366,6 +376,21 @@ def project_judge_trace(
             ),
         ),
     )
+    autonomous_planned = _last(by_name, "autonomous_solver_planned")
+    append(
+        "autonomous_solver_planned",
+        autonomous_planned,
+        _select(
+            autonomous_planned,
+            (
+                "enabled",
+                "fixed_planned_rounds",
+                "governance",
+                "remaining_calls",
+                "remaining_seconds",
+            ),
+        ),
+    )
     for round_event in by_name.get("round_summary", []):
         append(
             "round_summary",
@@ -446,12 +471,47 @@ def project_judge_trace(
                 "enabled",
                 "completed_rounds",
                 "planned_rounds",
+                "fixed_planned_rounds",
+                "action_turns",
+                "progress_turns",
+                "candidate_attempts",
+                "candidate_synthesis_attempts",
+                "abstained_agents",
+                "stall_stops",
+                "compact_recoveries",
+                "proof_token_degradations",
+                "agent_stop_reasons",
                 "stop_reason",
                 "degraded_reason",
                 "candidate_id",
             ),
         ),
     )
+    for event_name in (
+        "llm_lemma_curator_completed",
+        "lemma_request_completed",
+        "agent_tool_request_completed",
+        "agent_replan_completed",
+        "candidate_partial_recovery_started",
+        "proof_token_canary_degraded",
+    ):
+        event = _last(by_name, event_name)
+        append(
+            event_name,
+            event,
+            {
+                key: value
+                for key, value in (event or {}).items()
+                if key
+                not in {
+                    "event",
+                    "schema_version",
+                    "seq",
+                    "elapsed_ms",
+                    "stage",
+                }
+            },
+        )
     skills = _last(by_name, "skills_selected")
     append(
         "skills_selected",

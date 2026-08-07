@@ -164,12 +164,12 @@ def test_frozen_prompt_baseline_is_preserved_while_current_review_can_advance():
         "expected_count"
     ]
     assert scopes["prompt-contracts"]["version"] == (
-        "prompt-contract-8-authoritative-router-plan-3.0"
+        "prompt-contract-9-f4-agent-action-lemma-llm"
     )
     assert content["prompt_contracts"]["sha256"] != scopes["prompt-contracts"][
         "sha256"
     ]
-    assert content["prompt_compiler"]["sha256"] == scopes["prompt-compiler"][
+    assert content["prompt_compiler"]["sha256"] != scopes["prompt-compiler"][
         "sha256"
     ]
     assert content["domain_skills"]["sha256"] == scopes["domain-skills"][

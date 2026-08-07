@@ -31,6 +31,8 @@ class ObservedModelResponse(str):
     transport_attempts: int
     model_call_index: int | None
     output_budget_exceeded: bool
+    finish_reason: str
+    protocol_turn_id: str
 
     def __new__(
         cls,
@@ -39,11 +41,15 @@ class ObservedModelResponse(str):
         transport_attempts: int = 1,
         model_call_index: int | None = None,
         output_budget_exceeded: bool = False,
+        finish_reason: str = "",
+        protocol_turn_id: str = "",
     ) -> ObservedModelResponse:
         instance = super().__new__(cls, value)
         instance.transport_attempts = max(1, int(transport_attempts))
         instance.model_call_index = model_call_index
         instance.output_budget_exceeded = bool(output_budget_exceeded)
+        instance.finish_reason = str(finish_reason)
+        instance.protocol_turn_id = str(protocol_turn_id)
         return instance
 
 

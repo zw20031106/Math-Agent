@@ -302,6 +302,7 @@ class CallBudget:
         elapsed_seconds: float,
         transport_attempts: int = 1,
         output_budget_exceeded: bool = False,
+        finish_reason: str = "",
     ) -> None:
         with self._lock:
             self._ensure_mutable_locked()
@@ -322,6 +323,11 @@ class CallBudget:
                     "output_chars": characters,
                     "output_budget_exceeded": bool(
                         output_budget_exceeded
+                    ),
+                    "finish_reason": str(finish_reason),
+                    "response_truncated": bool(
+                        output_budget_exceeded
+                        or str(finish_reason).casefold() == "length"
                     ),
                     "elapsed_seconds": round(elapsed, 6),
                     "stop_reason": "response_received",

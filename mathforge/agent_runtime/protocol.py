@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from hashlib import sha256
+import json
 from typing import Any
 
 
@@ -37,6 +39,7 @@ MESSAGE_TYPES = frozenset(
         "progress_shared",
         "lemma_requested",
         "lemma_published",
+        "tool_check_requested",
         "evidence_available",
         "candidate_published",
         "peer_review_requested",
@@ -109,6 +112,18 @@ class AgentTurnPayload:
             raise ValueError("invalid AgentTurnPayload action")
         if not self.task_result_type or not self.progress_summary:
             raise ValueError("AgentTurnPayload public fields must be non-empty")
+        if not isinstance(self.public_state_delta, dict):
+            raise ValueError("AgentTurnPayload public_state_delta must be an object")
+        if not isinstance(self.result_payload, dict):
+            raise ValueError("AgentTurnPayload result_payload must be an object")
+        if any(not isinstance(item, dict) for item in self.outbound_intents):
+            raise ValueError("AgentTurnPayload outbound_intents must contain objects")
+        if self.action == "publish_candidate" and not self.result_payload:
+            raise ValueError("publish_candidate requires result_payload")
+        if self.action == "continue_reasoning" and not self.public_state_delta:
+            raise ValueError("continue_reasoning requires public_state_delta")
+        if self.action in {"abstain", "complete"} and not self.stop_reason:
+            raise ValueError(f"{self.action} requires stop_reason")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -121,6 +136,97 @@ class AgentTurnPayload:
             "progress_summary": self.progress_summary,
             "stop_reason": self.stop_reason,
         }
+
+
+@dataclass(frozen=True)
+class ParsedAgentTurn:
+    payload: AgentTurnPayload
+    response_sha256: str
+    partial: bool = False
+    truncation_reason: str = ""
+
+
+_MODEL_TURN_FIELDS = frozenset(
+    {
+        "protocol_version",
+        "task_result_type",
+        "action",
+        "public_state_delta",
+        "result_payload",
+        "outbound_intents",
+        "progress_summary",
+        "stop_reason",
+    }
+)
+_HOST_OWNED_TURN_FIELDS = frozenset(
+    {
+        "agent_id",
+        "task_id",
+        "turn_id",
+        "artifact_id",
+        "message_id",
+        "thread_id",
+        "session_id",
+        "requested_max_output_tokens",
+        "stage_timeout_seconds",
+    }
+)
+
+
+class AgentTurnPayloadParser:
+    """Parse the model-owned public Action envelope without accepting Host IDs."""
+
+    def parse(
+        self,
+        response: str,
+        *,
+        allowed_actions: tuple[str, ...] | frozenset[str] | None = None,
+        truncated: bool = False,
+        truncation_reason: str = "",
+    ) -> ParsedAgentTurn:
+        try:
+            decoded = json.loads(str(response))
+        except (TypeError, ValueError) as error:
+            raise ValueError("AgentTurnPayload is not valid JSON") from error
+        if not isinstance(decoded, dict) or set(decoded) != _MODEL_TURN_FIELDS:
+            raise ValueError("AgentTurnPayload fields do not match the public schema")
+        self._reject_host_fields(decoded)
+        outbound = decoded["outbound_intents"]
+        if not isinstance(outbound, list):
+            raise ValueError("AgentTurnPayload outbound_intents must be a list")
+        payload = AgentTurnPayload(
+            protocol_version=str(decoded["protocol_version"]),
+            task_result_type=str(decoded["task_result_type"]).strip(),
+            action=str(decoded["action"]).strip(),
+            public_state_delta=deepcopy(decoded["public_state_delta"]),
+            result_payload=deepcopy(decoded["result_payload"]),
+            outbound_intents=tuple(deepcopy(item) for item in outbound),
+            progress_summary=str(decoded["progress_summary"]).strip(),
+            stop_reason=str(decoded["stop_reason"]).strip(),
+        )
+        if allowed_actions is not None and payload.action not in set(allowed_actions):
+            raise ValueError("AgentTurnPayload action is not allowed for this Turn")
+        reason = str(truncation_reason).strip()
+        return ParsedAgentTurn(
+            payload=payload,
+            response_sha256=sha256(str(response).encode("utf-8")).hexdigest(),
+            partial=bool(truncated),
+            truncation_reason=reason if truncated else "",
+        )
+
+    def _reject_host_fields(self, value: Any) -> None:
+        if isinstance(value, dict):
+            forbidden = _HOST_OWNED_TURN_FIELDS.intersection(value)
+            if forbidden:
+                raise ValueError(
+                    "AgentTurnPayload contains Host-owned fields: "
+                    + ", ".join(sorted(forbidden))
+                )
+            for nested in value.values():
+                self._reject_host_fields(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                self._reject_host_fields(nested)
 
 
 @dataclass(frozen=True)

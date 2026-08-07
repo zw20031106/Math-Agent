@@ -494,7 +494,7 @@ ProblemIR + ReasoningState + FailureCode
 | `mathforge/verification/completion.py` | 区分硬完成、模型审阅和不完整；软审阅不关闭硬证明义务 | `ProofStage.evaluate` |
 | `mathforge/verification/arbitration.py` | 按硬证据、独立互证、定向审阅等层级排序，并用公开内容摘要破除完全并列 | `MathForgeHarness` |
 | `mathforge/harness/repair.py` | Claim-local 版本化 Patch、重验证、Evidence 事务提交或回滚 | `MathForgeHarness` |
-| `mathforge/output/judge_trace.py` | Judge Trace 3.9 以公开解题过程和逻辑工作流为前两项，并投影权威 Router Plan、模型角色调用、候选公开内容、review target、证据层级、修复/回滚和仲裁结果 | `output.public_result` |
+| `mathforge/output/judge_trace.py` | Judge Trace 4.0 以公开解题过程和逻辑工作流为前两项，并投影权威 Router Plan、自主 Agent Action/通信、模型角色调用、候选公开内容、review target、证据层级、修复/回滚和仲裁结果 | `output.public_result` |
 | `mathforge/output/loop_health.py` | 将未审阅冲突、仅模型审阅证明和修复回滚反映为闭环降级原因 | `judge_trace.py` |
 | `mathforge/harness/effective_config.py` | Effective Config 1.2 公开验证闭环的生效策略 | `MathForgeHarness` |
 | `tests/test_phase6_0730_verification_cross_review_repair.py` | 验收前置义务、可审阅切片、定向冲突、证据层级、确定性仲裁及原子回滚 | Phase 6 回归门 |
@@ -512,5 +512,5 @@ ProblemIR
   → 证据触发的 Claim-local Repair
   → 原子 Reverify + 质量比较 + commit/rollback
   → 确定性 Arbitration
-  → Judge Trace 3.9 authoritative Router workflow + response-mode-aware final_response
+  → Judge Trace 4.0 authoritative Router + autonomous Agent Action workflow + response-mode-aware final_response
 ```

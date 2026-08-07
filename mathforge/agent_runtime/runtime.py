@@ -9,7 +9,7 @@ from typing import Any
 from mathforge.agent_runtime.artifact_store import SessionArtifactStore
 from mathforge.agent_runtime.definitions import AgentRegistry
 from mathforge.agent_runtime.mailbox import SessionMailbox
-from mathforge.agent_runtime.protocol import AgentTurnPayload, PROTOCOL_SCHEMA_VERSION, TurnContext, TurnLineage
+from mathforge.agent_runtime.protocol import AgentTurnPayload, AgentTurnPayloadParser, PROTOCOL_SCHEMA_VERSION, TurnContext, TurnLineage
 from mathforge.agent_runtime.router_protocol import AuthoritativePlan
 from mathforge.agent_runtime.state import AgentInstance, AgentStateRegistry, AgentTaskRegistry, TERMINAL_AGENT_STATES
 
@@ -54,6 +54,7 @@ class SessionAgentRuntime:
         self._turn_contexts: dict[str, TurnContext] = {}
         self._sequence = 0
         self._authoritative_plan: AuthoritativePlan | None = None
+        self._agent_action_turns = False
         self._released = False
         self._lock = RLock()
 
@@ -133,7 +134,7 @@ class SessionAgentRuntime:
                     "output_artifact_ids",
                     artifact.artifact_id,
                 )
-            recipient = self._ensure_agent("PrimarySolver", "mailbox")
+            recipient = self._ensure_agent("PrimarySolver", "primary-1")
             pair = tuple(sorted((router_context.agent_id, recipient.agent_id)))
             thread_id = self._thread_keys.get(pair)
             if not thread_id:
@@ -261,28 +262,88 @@ class SessionAgentRuntime:
             self.agents.update(context.agent_id, model_call_count=current["model_call_count"] + 1, budget_snapshot=dict(budget_snapshot or {}))
             self._turns[turn_id] = replace(self._turns[turn_id], status="dispatched")
 
-    def complete_model_turn(self, turn_id: str, response: str) -> dict[str, str]:
+    def complete_model_turn(
+        self,
+        turn_id: str,
+        response: str,
+        *,
+        agent_action_protocol: bool = False,
+        response_truncated: bool = False,
+        truncation_reason: str = "",
+    ) -> dict[str, str]:
         with self._lock:
             context = self._turn_contexts[turn_id]
             digest = sha256(response.encode("utf-8")).hexdigest()
-            payload = AgentTurnPayload(
-                protocol_version=PROTOCOL_SCHEMA_VERSION,
-                task_result_type=context.artifact_type,
-                action="publish_candidate" if context.artifact_type == "CandidateArtifact" else "complete",
-                public_state_delta={"turn_status": "completed"},
-                result_payload={"response_sha256": digest, "response_chars": len(response), "turn_kind": context.turn_kind},
-                outbound_intents=({"message_type": context.message_type, "recipient_role": context.recipient_role},),
-                progress_summary=f"{context.role} published {context.artifact_type}",
-                stop_reason="model_response_received",
-            )
+            if agent_action_protocol:
+                self._agent_action_turns = True
+                try:
+                    parsed = AgentTurnPayloadParser().parse(
+                        response,
+                        allowed_actions=self.definitions.get(
+                            context.role
+                        ).allowed_action_types,
+                        truncated=response_truncated,
+                        truncation_reason=truncation_reason,
+                    )
+                except Exception:
+                    self.agents.transition(
+                        context.agent_id,
+                        "ready",
+                        failure_code="agent_turn_payload_invalid",
+                    )
+                    self.tasks.transition(context.task_id, "ready")
+                    self._turns[turn_id] = replace(
+                        self._turns[turn_id],
+                        status="failed",
+                        failure_code="agent_turn_payload_invalid",
+                    )
+                    raise
+                payload = parsed.payload
+                artifact_type, message_type, recipient_role = (
+                    self._action_protocol_route(context, payload)
+                )
+            else:
+                parsed = None
+                payload = AgentTurnPayload(
+                    protocol_version=PROTOCOL_SCHEMA_VERSION,
+                    task_result_type=context.artifact_type,
+                    action="publish_candidate" if context.artifact_type == "CandidateArtifact" else "complete",
+                    public_state_delta={"turn_status": "completed"},
+                    result_payload={"response_sha256": digest, "response_chars": len(response), "turn_kind": context.turn_kind},
+                    outbound_intents=({"message_type": context.message_type, "recipient_role": context.recipient_role},),
+                    progress_summary=f"{context.role} published {context.artifact_type}",
+                    stop_reason="model_response_received",
+                )
+                artifact_type = context.artifact_type
+                message_type = context.message_type
+                recipient_role = context.recipient_role
             previous = self.tasks.get(context.task_id).output_artifact_ids
+            artifact_payload = payload.to_dict()
+            if artifact_type == "CandidateArtifact":
+                artifact_payload = self._public_candidate_artifact_payload(
+                    artifact_payload
+                )
             artifact = self.artifacts.publish(
-                artifact_type=context.artifact_type, producer_agent_id=context.agent_id, task_id=context.task_id,
-                turn_id=context.turn_id, payload=payload.to_dict(), parent_artifact_ids=(previous[-1],) if previous else (),
+                artifact_type=artifact_type, producer_agent_id=context.agent_id, task_id=context.task_id,
+                turn_id=context.turn_id,
+                payload={
+                    **artifact_payload,
+                    "host_completion": {
+                        "status": "partial" if response_truncated else "complete",
+                        "truncation_reason": (
+                            str(truncation_reason) if response_truncated else ""
+                        ),
+                        "response_sha256": digest,
+                    },
+                },
+                parent_artifact_ids=(previous[-1],) if previous else (),
             )
             self.tasks.append_output(context.task_id, artifact.artifact_id)
             self.agents.append(context.agent_id, "output_artifact_ids", artifact.artifact_id)
-            recipient = self._ensure_agent(context.recipient_role, "mailbox")
+            recipient = self._ensure_agent(
+                recipient_role,
+                self._mailbox_descriptor(recipient_role, context),
+            )
             pair = tuple(sorted((context.agent_id, recipient.agent_id)))
             thread_id = self._thread_keys.get(pair)
             if not thread_id:
@@ -290,13 +351,79 @@ class SessionAgentRuntime:
                 self._thread_keys[pair] = thread_id
             message = self.mailbox.send(
                 thread_id=thread_id, sender_agent_id=context.agent_id, recipient_agent_id=recipient.agent_id,
-                task_id=context.task_id, message_type=context.message_type, artifact_ids=(artifact.artifact_id,),
+                task_id=context.task_id, message_type=message_type, artifact_ids=(artifact.artifact_id,),
                 public_summary=payload.progress_summary, reply_to_message_id=self.mailbox.latest_message_id(thread_id),
             )
-            self.tasks.transition(context.task_id, "ready")
+            if payload.action in {"publish_candidate", "abstain"} and not response_truncated:
+                self.tasks.transition(context.task_id, "completed")
+            else:
+                self.tasks.transition(context.task_id, "ready")
             self.agents.transition(context.agent_id, "ready")
             self._turns[turn_id] = replace(self._turns[turn_id], artifact_id=artifact.artifact_id, message_id=message.message_id, status="completed")
             return {"agent_id": context.agent_id, "task_id": context.task_id, "turn_id": turn_id, "output_artifact_id": artifact.artifact_id, "message_id": message.message_id}
+
+    @staticmethod
+    def _mailbox_descriptor(role: str, context: TurnContext) -> str:
+        if role == "PrimarySolver":
+            return "primary-1"
+        if role == "AlternativeSolver":
+            return "alternative-1"
+        return "default"
+
+    @staticmethod
+    def _public_candidate_artifact_payload(
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Keep Candidate communication public without retaining full prose."""
+
+        result = payload.get("result_payload", {})
+        if not isinstance(result, dict):
+            return payload
+        public_result = {
+            key: result[key]
+            for key in (
+                "method",
+                "final_answer",
+                "public_solution_steps",
+                "claims",
+                "assumptions",
+                "theorems",
+                "unresolved_obligations",
+            )
+            if key in result
+        }
+        return {**payload, "result_payload": public_result}
+
+    @staticmethod
+    def _action_protocol_route(
+        context: TurnContext,
+        payload: AgentTurnPayload,
+    ) -> tuple[str, str, str]:
+        expected = {
+            "continue_reasoning": ("ProgressArtifact", "progress_shared", "RouterPlanner"),
+            "request_lemma": ("ProgressArtifact", "lemma_requested", "LemmaCurator"),
+            "request_tool_check": ("ToolRequestArtifact", "tool_check_requested", "RouterPlanner"),
+            "request_replan": ("ProgressArtifact", "replan_requested", "RouterPlanner"),
+            "publish_candidate": ("CandidateArtifact", "candidate_published", "VerifierSkeptic"),
+            "abstain": ("CheckpointArtifact", "task_abstained", "RouterPlanner"),
+            "complete": (context.artifact_type, context.message_type, context.recipient_role),
+        }.get(payload.action)
+        if expected is None:
+            raise ValueError("Agent Action is not implemented by the F4 Host")
+        artifact_type, message_type, recipient_role = expected
+        if payload.task_result_type != artifact_type:
+            raise ValueError("Agent Action task_result_type is inconsistent")
+        if payload.outbound_intents:
+            proposed = str(payload.outbound_intents[0].get("recipient_role", ""))
+            if proposed in {
+                "RouterPlanner",
+                "PrimarySolver",
+                "AlternativeSolver",
+                "LemmaCurator",
+                "VerifierSkeptic",
+            }:
+                recipient_role = proposed
+        return artifact_type, message_type, recipient_role
 
     def fail_model_turn(self, turn_id: str, failure_code: str) -> None:
         with self._lock:
@@ -308,6 +435,42 @@ class SessionAgentRuntime:
                 self.agents.transition(context.agent_id, "ready", failure_code=failure_code)
                 self.tasks.transition(context.task_id, "ready")
             self._turns[turn_id] = replace(self._turns[turn_id], status="failed", failure_code=str(failure_code))
+
+    def relay_turn_artifact(
+        self,
+        turn_id: str,
+        *,
+        recipient_role: str,
+        message_type: str,
+        public_summary: str,
+    ) -> str:
+        with self._lock:
+            context = self._turn_contexts[turn_id]
+            lineage = self._turns[turn_id]
+            if not lineage.artifact_id:
+                raise ValueError("completed Turn has no Artifact to relay")
+            recipient = self._ensure_agent(
+                recipient_role,
+                self._mailbox_descriptor(recipient_role, context),
+            )
+            pair = tuple(sorted((context.agent_id, recipient.agent_id)))
+            thread_id = self._thread_keys.get(pair)
+            if not thread_id:
+                thread_id = self.mailbox.create_thread(
+                    (context.agent_id, recipient.agent_id)
+                ).thread_id
+                self._thread_keys[pair] = thread_id
+            message = self.mailbox.send(
+                thread_id=thread_id,
+                sender_agent_id=context.agent_id,
+                recipient_agent_id=recipient.agent_id,
+                task_id=context.task_id,
+                message_type=message_type,
+                artifact_ids=(lineage.artifact_id,),
+                public_summary=public_summary,
+                reply_to_message_id=self.mailbox.latest_message_id(thread_id),
+            )
+            return message.message_id
 
     def finalize(self, model_call_records: list[dict[str, Any]]) -> dict[str, Any]:
         with self._lock:
@@ -329,14 +492,22 @@ class SessionAgentRuntime:
             return {
                 "schema_version": PROTOCOL_SCHEMA_VERSION,
                 "mode": (
-                    "hybrid_router_authoritative"
-                    if self._authoritative_plan is not None
-                    else "shadow_protocol"
+                    "autonomous_agent_action"
+                    if self._agent_action_turns
+                    else (
+                        "hybrid_router_authoritative"
+                        if self._authoritative_plan is not None
+                        else "shadow_protocol"
+                    )
                 ),
                 "selection_authority": (
-                    "authoritative_router_plan_then_legacy_candidate_flow"
-                    if self._authoritative_plan is not None
-                    else "legacy_flow"
+                    "authoritative_router_then_agent_actions"
+                    if self._agent_action_turns
+                    else (
+                        "authoritative_router_plan_then_legacy_candidate_flow"
+                        if self._authoritative_plan is not None
+                        else "legacy_flow"
+                    )
                 ),
                 "active_plan_id": (
                     self._authoritative_plan.plan_id
@@ -356,6 +527,7 @@ class SessionAgentRuntime:
             self.agents.clear()
             self._agent_keys.clear(); self._task_keys.clear(); self._thread_keys.clear(); self._turns.clear(); self._turn_contexts.clear()
             self._authoritative_plan = None
+            self._agent_action_turns = False
             self._released = True
 
     @property

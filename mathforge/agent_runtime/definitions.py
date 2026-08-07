@@ -151,6 +151,15 @@ def _definition(
     actions: tuple[str, ...],
     prompt_contract: str,
 ) -> AgentDefinition:
+    prompt_versions = {
+        "RouterPlanner": "3",
+        "PrimarySolver": "8",
+        "AlternativeSolver": "6",
+        "LemmaCurator": "3",
+        "VerifierSkeptic": "4",
+        "RepairAgent": "4",
+        "LLMFinalizer": "3",
+    }
     return AgentDefinition(
         role=role,
         capabilities=("independent_model_turn", "artifact_publish", "message_send"),
@@ -161,7 +170,7 @@ def _definition(
         writable_artifact_types=writable,
         allowed_action_types=actions,
         prompt_contract=prompt_contract,
-        prompt_version="7",
+        prompt_version=prompt_versions[role],
         skill_roles=(role,),
         failure_policy="record_public_failure_and_return_control_to_host",
     )

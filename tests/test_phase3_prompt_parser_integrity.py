@@ -114,7 +114,7 @@ def test_simple_production_prompt_is_well_below_the_previous_fallback_size():
     ("problem_text", "expected_profile", "expected_tokens"),
     [
         ("Compute 17+28.", "minimal", 8192),
-        ("Prove that x^2 >= 0 for every real x.", "proof", 8192),
+        ("Prove that x^2 >= 0 for every real x.", "proof", 12288),
         (
             "Given a probability density f(x)=1/2 on [0,2], "
             "verify normalization and compute the probability.",

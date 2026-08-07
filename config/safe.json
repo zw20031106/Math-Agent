@@ -21,6 +21,7 @@
     "replan": {"max_tokens": 4096, "timeout_seconds": 120.0, "minimum_start_window_seconds": 60.0},
     "solver_progress": {"max_tokens": 4096, "timeout_seconds": 180.0, "minimum_start_window_seconds": 90.0},
     "solver_candidate_standard": {"max_tokens": 8192, "timeout_seconds": 240.0, "minimum_start_window_seconds": 120.0},
+    "solver_compact_synthesis": {"max_tokens": 8192, "timeout_seconds": 240.0, "minimum_start_window_seconds": 120.0},
     "solver_candidate_proof": {"max_tokens": 12288, "timeout_seconds": 270.0, "minimum_start_window_seconds": 180.0},
     "lemma_curator": {"max_tokens": 8192, "timeout_seconds": 225.0, "minimum_start_window_seconds": 120.0},
     "peer_review": {"max_tokens": 6144, "timeout_seconds": 180.0, "minimum_start_window_seconds": 90.0},

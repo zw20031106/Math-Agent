@@ -20,6 +20,11 @@ _DEFAULT_STAGE_EXECUTION_POLICY = {
         "timeout_seconds": 240.0,
         "minimum_start_window_seconds": 120.0,
     },
+    "solver_compact_synthesis": {
+        "max_tokens": 8192,
+        "timeout_seconds": 240.0,
+        "minimum_start_window_seconds": 120.0,
+    },
     "solver_candidate_proof": {
         "max_tokens": 12288,
         "timeout_seconds": 270.0,
@@ -42,6 +47,7 @@ _STAGE_P95_SECONDS = {
     "replan": 100.0,
     "solver_progress": 150.0,
     "solver_candidate_standard": 210.0,
+    "solver_compact_synthesis": 210.0,
     "solver_candidate_proof": 240.0,
     "lemma_curator": 180.0,
     "peer_review": 150.0,

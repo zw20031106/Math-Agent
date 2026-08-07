@@ -1,6 +1,6 @@
 # MathForge 公共输出契约
 
-版本：3.9
+版本：4.0
 
 ## 对外字段
 
@@ -53,7 +53,7 @@ Repair 输出不带定界符的标准 LaTeX 源，Host Formatter 负责唯一化
 
 ## Trace 内容
 
-公共 `trace` 使用 Judge Trace V3.9，是面向判分的有界审计叙事，不是内部
+公共 `trace` 使用 Judge Trace V4.0，是面向判分的有界审计叙事，不是内部
 框架日志或 Debug Journal：
 
 - `trace[0]` 固定为 `solution_process`，记录选中 Candidate 的公开方法、
@@ -74,6 +74,14 @@ Repair 输出不带定界符的标准 LaTeX 源，Host Formatter 负责唯一化
   安全失败原因、Plan 版本、子目标 DAG、Agent Task 提议以及 Route/Plan Artifact
   和通信消息引用。正式配置中 Router 是每题首个认知模型调用；其方法族和任务
   绑定会进入后续 Solver 调用记录。
+- F4 的 `autonomous_solver_planned` 与 `reasoning_loop_completed` 明确记录
+  `fixed_planned_rounds=false`、Agent Action/Progress/Candidate 尝试、停滞停止、
+  弃权和截断恢复统计；不再把自主循环伪装为旧的固定轮次循环。
+- `llm_lemma_curator_completed`、`lemma_request_completed`、
+  `agent_tool_request_completed`、`agent_replan_completed`、
+  `candidate_partial_recovery_started` 和 `proof_token_canary_degraded` 记录 F4
+  的公开通信与降级结果。`agent_protocol.messages` 展示线程化消息引用，但不公开
+  Prompt、原始响应、完整失败 Candidate 或私有推理。
 - `candidate_summaries` 必须包含选中 Candidate 的 `trace[0]` 引用，并为每个成功
   生成但未选中的 Candidate 保留有界 `public_final_answer` 与
   `public_solution_steps`，使候选对比可审计；生成失败的候选不伪造内容。

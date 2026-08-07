@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 
+from mathforge.agent_runtime.protocol import (
+    AgentTurnPayloadParser,
+    ParsedAgentTurn,
+)
 from mathforge.agents.prompt_compiler import PromptCompilation, PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.context.snapshots import RoleContextView
@@ -54,7 +58,13 @@ class PrimarySolver:
     def build_messages(self, request: SolverRequest) -> list[dict[str, str]]:
         return self.compile_prompt(request).messages
 
-    def compile_prompt(self, request: SolverRequest) -> PromptCompilation:
+    def compile_prompt(
+        self,
+        request: SolverRequest,
+        *,
+        autonomous: bool = False,
+        compact: bool = False,
+    ) -> PromptCompilation:
         context = (
             f"\nAuthorized context view:\n{request.context_view.to_prompt_json()}"
             if request.context_view is not None
@@ -81,6 +91,8 @@ class PrimarySolver:
                 "synthesize from it, preserve its ProblemFrame and Claim "
                 "dependencies, and list any still-open obligation."
             ),
+            autonomous=autonomous,
+            compact=compact,
         )
 
     def compile_progress_prompt(
@@ -88,6 +100,7 @@ class PrimarySolver:
         request: SolverRequest,
         *,
         mode: str,
+        autonomous: bool = False,
     ) -> PromptCompilation:
         context = (
             f"\nAuthorized context view:\n{request.context_view.to_prompt_json()}"
@@ -107,6 +120,7 @@ class PrimarySolver:
             route=request.route,
             user_content=user,
             mode=mode,
+            autonomous=autonomous,
         )
 
 
@@ -120,7 +134,13 @@ class AlternativeSolver:
     def build_messages(self, request: SolverRequest) -> list[dict[str, str]]:
         return self.compile_prompt(request).messages
 
-    def compile_prompt(self, request: SolverRequest) -> PromptCompilation:
+    def compile_prompt(
+        self,
+        request: SolverRequest,
+        *,
+        autonomous: bool = False,
+        compact: bool = False,
+    ) -> PromptCompilation:
         forbidden = ", ".join(request.forbidden_method_families) or "none"
         context = (
             f"\nAuthorized context view:\n{request.context_view.to_prompt_json()}"
@@ -133,6 +153,7 @@ class AlternativeSolver:
             f"Forbidden method families: {forbidden}.\n"
             f"{_problem_structure_prompt(request.problem)}\n"
             f"{request.skill_context}{context}"
+            f"{_reasoning_state_prompt(request.reasoning_state_json)}"
         )
         return self._compiler.compile_solver(
             "alternative_solver",
@@ -145,7 +166,58 @@ class AlternativeSolver:
                 "State the method concisely; the Host treats its wording as a "
                 "diversity signal."
             ),
+            autonomous=autonomous,
+            compact=compact,
         )
+
+    def compile_progress_prompt(
+        self,
+        request: SolverRequest,
+        *,
+        mode: str,
+        autonomous: bool = False,
+    ) -> PromptCompilation:
+        context = (
+            f"\nAuthorized context view:\n{request.context_view.to_prompt_json()}"
+            if request.context_view is not None
+            else ""
+        )
+        user = (
+            f"Problem:\n{request.problem.normalized_problem}\n\n"
+            f"Required core method family: {request.method_family}.\n"
+            f"Forbidden method families: "
+            f"{', '.join(request.forbidden_method_families) or 'none'}.\n"
+            f"{_problem_structure_prompt(request.problem)}\n"
+            f"{request.skill_context}{context}"
+            f"{_reasoning_state_prompt(request.reasoning_state_json)}"
+        )
+        return self._compiler.compile_solver_progress(
+            "alternative_solver",
+            problem=request.problem,
+            route=request.route,
+            user_content=user,
+            mode=mode,
+            runtime_instructions=(
+                "Advance only the isolated Alternative state. Do not infer or "
+                "request the Primary candidate before publishing your own."
+            ),
+            autonomous=autonomous,
+        )
+
+
+@dataclass(frozen=True)
+class AutonomousSolverTurn:
+    parsed: ParsedAgentTurn
+    delta: RoundDelta | None = None
+    candidate: CandidateSolution | None = None
+
+    @property
+    def action(self) -> str:
+        return self.parsed.payload.action
+
+    @property
+    def partial(self) -> bool:
+        return self.parsed.partial
 
 
 class SolverExecutor:
@@ -366,6 +438,280 @@ class SolverExecutor:
         )
         return delta
 
+    def execute_autonomous_progress(
+        self,
+        solver: PrimarySolver | AlternativeSolver,
+        request: SolverRequest,
+        budget: CallBudget,
+        *,
+        mode: str,
+        temperature: float,
+        max_tokens: int,
+        optional: bool,
+    ) -> AutonomousSolverTurn:
+        compilation = solver.compile_progress_prompt(
+            request,
+            mode=mode,
+            autonomous=True,
+        )
+        stage = "primary" if solver.role == "PrimarySolver" else "alternative"
+        budget.consume(
+            stage=stage,
+            optional=optional,
+            action_category="speculative_exploration",
+        )
+        budget.record_prompt_chars(
+            sum(len(message["content"]) for message in compilation.messages)
+        )
+        response = self._provider.chat(
+            messages=compilation.messages,
+            temperature=temperature,
+            max_tokens=PromptCompiler.bounded_output_tokens(
+                max_tokens,
+                compilation.max_output_tokens,
+            ),
+            budget=budget,
+            stage=stage,
+            turn_kind="solver_progress",
+            agent_id=f"{solver.role}:{request.candidate_id}",
+            agent_action_protocol=True,
+        )
+        parsed = self._parse_agent_turn(
+            response,
+            budget,
+            allowed_actions=(
+                "continue_reasoning",
+                "request_lemma",
+                "request_tool_check",
+                "request_replan",
+                "complete",
+                "abstain",
+            ),
+            truncated=_response_was_truncated(response),
+            truncation_reason=_response_truncation_reason(response),
+        )
+        if parsed.payload.task_result_type not in {
+            "ProgressArtifact",
+            "ToolRequestArtifact",
+            "CheckpointArtifact",
+        }:
+            self._fail_agent_turn(response, budget, "agent_turn_result_type_invalid")
+            raise ModelResponseError("agent_turn_result_type_invalid")
+        delta = None
+        if parsed.payload.public_state_delta:
+            try:
+                delta = ProgressDeltaParser().parse(
+                    json.dumps(
+                        parsed.payload.public_state_delta,
+                        ensure_ascii=False,
+                    ),
+                    round_index=_reasoning_state_version(
+                        request.reasoning_state_json
+                    ),
+                    mode=mode,
+                )
+            except (ValueError, TypeError) as error:
+                self._fail_agent_turn(response, budget, "agent_progress_delta_invalid")
+                budget.record_model_response_validation(
+                    getattr(response, "model_call_index", None),
+                    "agent_progress_delta_invalid",
+                    rejected=True,
+                )
+                raise ModelResponseError("agent_progress_delta_invalid") from error
+        if parsed.payload.action != "abstain" and delta is None:
+            self._fail_agent_turn(response, budget, "agent_progress_delta_missing")
+            raise ModelResponseError("agent_progress_delta_missing")
+        budget.record_model_response_validation(
+            getattr(response, "model_call_index", None),
+            (
+                "agent_progress_partial"
+                if parsed.partial
+                else "agent_progress_valid"
+            ),
+            rejected=False,
+        )
+        self._complete_agent_turn(response, budget)
+        return AutonomousSolverTurn(parsed=parsed, delta=delta)
+
+    def execute_autonomous_candidate(
+        self,
+        solver: PrimarySolver | AlternativeSolver,
+        request: SolverRequest,
+        budget: CallBudget,
+        *,
+        temperature: float,
+        max_tokens: int,
+        compact: bool = False,
+    ) -> AutonomousSolverTurn:
+        compilation = solver.compile_prompt(
+            request,
+            autonomous=True,
+            compact=compact,
+        )
+        stage = "primary" if solver.role == "PrimarySolver" else "alternative"
+        turn_kind = (
+            "solver_compact_synthesis"
+            if compact
+            else (
+                "solver_candidate_proof"
+                if request.problem.response_mode == "proof_full"
+                else "solver_candidate_standard"
+            )
+        )
+        budget.consume(
+            stage=stage,
+            optional=False,
+            action_category="candidate_completion",
+        )
+        budget.record_prompt_chars(
+            sum(len(message["content"]) for message in compilation.messages)
+        )
+        response = self._provider.chat(
+            messages=compilation.messages,
+            temperature=temperature,
+            max_tokens=PromptCompiler.bounded_output_tokens(
+                max_tokens,
+                compilation.max_output_tokens,
+            ),
+            budget=budget,
+            stage=stage,
+            turn_kind=turn_kind,
+            agent_id=f"{solver.role}:{request.candidate_id}",
+            agent_action_protocol=True,
+        )
+        parsed = self._parse_agent_turn(
+            response,
+            budget,
+            allowed_actions=("publish_candidate", "abstain"),
+            truncated=_response_was_truncated(response),
+            truncation_reason=_response_truncation_reason(response),
+        )
+        if parsed.partial:
+            budget.record_model_response_validation(
+                getattr(response, "model_call_index", None),
+                "candidate_partial_needs_compaction",
+                rejected=True,
+            )
+            self._complete_agent_turn(response, budget)
+            return AutonomousSolverTurn(parsed=parsed)
+        if parsed.payload.action == "abstain":
+            if parsed.payload.task_result_type != "CheckpointArtifact":
+                self._fail_agent_turn(response, budget, "agent_turn_result_type_invalid")
+                raise ModelResponseError("agent_turn_result_type_invalid")
+            self._complete_agent_turn(response, budget)
+            return AutonomousSolverTurn(parsed=parsed)
+        if parsed.payload.task_result_type != "CandidateArtifact":
+            self._fail_agent_turn(response, budget, "agent_turn_result_type_invalid")
+            raise ModelResponseError("agent_turn_result_type_invalid")
+        try:
+            candidate = self._parser.parse(
+                json.dumps(parsed.payload.result_payload, ensure_ascii=False),
+                candidate_id=request.candidate_id,
+                role=solver.role,
+                answer_type=request.problem.answer_type,
+            )
+        except SchemaValidationError as error:
+            self._fail_agent_turn(response, budget, "candidate_schema_invalid")
+            budget.record_model_response_validation(
+                getattr(response, "model_call_index", None),
+                "candidate_schema_invalid",
+                rejected=True,
+            )
+            raise ModelResponseError("candidate_schema_invalid") from error
+        validation_code, rejected = candidate_response_validation(candidate)
+        if rejected:
+            self._fail_agent_turn(response, budget, validation_code)
+            budget.record_model_response_validation(
+                getattr(response, "model_call_index", None),
+                validation_code,
+                rejected=True,
+            )
+            raise ModelResponseError(
+                validation_code,
+                details=_candidate_validation_details(candidate),
+            )
+        if candidate.method.strip().lower() != request.method_family.strip().lower():
+            candidate.parse_status = (
+                f"{candidate.parse_status}:method_contract_deviation"
+            )
+            candidate.contract_deviations.append("method:planned_method_family")
+            validation_code = "candidate_method_deviation"
+        budget.record_model_response_validation(
+            getattr(response, "model_call_index", None),
+            validation_code,
+            rejected=False,
+        )
+        candidate.planned_method_family = request.method_family
+        candidate.validate()
+        self._complete_agent_turn(response, budget)
+        return AutonomousSolverTurn(parsed=parsed, candidate=candidate)
+
+    @staticmethod
+    def _parse_agent_turn(
+        response: str,
+        budget: CallBudget,
+        *,
+        allowed_actions: tuple[str, ...],
+        truncated: bool,
+        truncation_reason: str,
+    ) -> ParsedAgentTurn:
+        try:
+            return AgentTurnPayloadParser().parse(
+                response,
+                allowed_actions=allowed_actions,
+                truncated=truncated,
+                truncation_reason=truncation_reason,
+            )
+        except (TypeError, ValueError) as error:
+            SolverExecutor._fail_agent_turn(
+                response,
+                budget,
+                "agent_turn_payload_invalid",
+            )
+            raise ModelResponseError("agent_turn_payload_invalid") from error
+
+    @staticmethod
+    def _complete_agent_turn(response: str, budget: CallBudget) -> None:
+        runtime = budget.agent_runtime
+        turn_id = str(getattr(response, "protocol_turn_id", ""))
+        if runtime is None or not turn_id:
+            return
+        try:
+            lineage = runtime.complete_model_turn(
+                turn_id,
+                str(response),
+                agent_action_protocol=True,
+                response_truncated=_response_was_truncated(response),
+                truncation_reason=_response_truncation_reason(response),
+            )
+        except Exception as error:
+            runtime.fail_model_turn(turn_id, "agent_protocol_publish_failed")
+            raise ModelResponseError("agent_protocol_publish_failed") from error
+        call_index = getattr(response, "model_call_index", None)
+        if call_index is not None:
+            budget.record_model_call_lineage(call_index, lineage)
+
+    @staticmethod
+    def _fail_agent_turn(
+        response: str,
+        budget: CallBudget,
+        failure_code: str,
+    ) -> None:
+        runtime = budget.agent_runtime
+        turn_id = str(getattr(response, "protocol_turn_id", ""))
+        if runtime is not None and turn_id:
+            runtime.fail_model_turn(turn_id, failure_code)
+        call_index = getattr(response, "model_call_index", None)
+        if call_index is not None:
+            budget.record_model_call_lineage(
+                call_index,
+                {
+                    "turn_id": turn_id,
+                    "agent_protocol_status": "domain_validation_failed",
+                    "failure_code": failure_code,
+                },
+            )
+
 
 def _problem_structure_prompt(problem: ProblemIR) -> str:
     fields = (
@@ -389,6 +735,22 @@ def _problem_structure_prompt(problem: ProblemIR) -> str:
         if bounded:
             lines.append(f"- {label}: {'; '.join(bounded)}")
     return "\n".join(lines)
+
+
+def _response_was_truncated(response: str) -> bool:
+    return bool(
+        getattr(response, "output_budget_exceeded", False)
+        or str(getattr(response, "finish_reason", "")).casefold() == "length"
+    )
+
+
+def _response_truncation_reason(response: str) -> str:
+    finish_reason = str(getattr(response, "finish_reason", "")).casefold()
+    if finish_reason == "length":
+        return "finish_reason_length"
+    if getattr(response, "output_budget_exceeded", False):
+        return "observed_output_exceeded_contract"
+    return ""
 
 
 def _reasoning_state_prompt(state_json: str) -> str:
