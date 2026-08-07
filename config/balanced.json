@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0",
   "profile": "balanced",
-  "status": "validated",
+  "status": "candidate-unvalidated",
   "case_max_concurrency": 3,
   "model_max_concurrency": 3,
   "model_requests_per_minute": 200,

@@ -176,7 +176,6 @@ class HarnessConfig:
         for name in bool_fields:
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be a boolean")
-
         integer_ranges = {
             "case_max_concurrency": (1, 3),
             "model_max_concurrency": (1, 64),
@@ -215,6 +214,18 @@ class HarnessConfig:
             if type(value) is not int or not minimum <= value <= maximum:
                 raise ValueError(
                     f"{name} must be an integer in [{minimum}, {maximum}]"
+                )
+        if (
+            self.profile in {"competition", "balanced", "safe"}
+            and self.status != "test"
+        ):
+            if not self.enable_router:
+                raise ValueError(
+                    "production profiles require the authoritative Router"
+                )
+            if self.max_model_calls < 2:
+                raise ValueError(
+                    "production profiles require Router and Solver capacity"
                 )
 
         if (

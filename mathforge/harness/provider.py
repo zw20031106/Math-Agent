@@ -594,6 +594,13 @@ class OfficialClientProvider:
             "agent_mode": protocol_turn.mode if protocol_turn else "",
             "task_id": protocol_turn.task_id if protocol_turn else "",
             "turn_id": protocol_turn.turn_id if protocol_turn else "",
+            "plan_id": protocol_turn.plan_id if protocol_turn else "",
+            "subgoal_ids": (
+                list(protocol_turn.subgoal_ids) if protocol_turn else []
+            ),
+            "planned_method_family": (
+                protocol_turn.method_family if protocol_turn else ""
+            ),
         }
         call_index = (
             budget.record_model_call_started(stage, allocation_payload)

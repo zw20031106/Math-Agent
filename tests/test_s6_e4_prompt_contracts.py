@@ -67,6 +67,7 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
         "finalizer",
     )
     expected_versions = {
+        "router_planner": "3",
         "primary_solver": "7",
         "alternative_solver": "5",
         "repair": "4",

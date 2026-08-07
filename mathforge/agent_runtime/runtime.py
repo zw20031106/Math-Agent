@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from hashlib import sha256
+import re
 from threading import RLock
 from typing import Any
 
@@ -9,6 +10,7 @@ from mathforge.agent_runtime.artifact_store import SessionArtifactStore
 from mathforge.agent_runtime.definitions import AgentRegistry
 from mathforge.agent_runtime.mailbox import SessionMailbox
 from mathforge.agent_runtime.protocol import AgentTurnPayload, PROTOCOL_SCHEMA_VERSION, TurnContext, TurnLineage
+from mathforge.agent_runtime.router_protocol import AuthoritativePlan
 from mathforge.agent_runtime.state import AgentInstance, AgentStateRegistry, AgentTaskRegistry, TERMINAL_AGENT_STATES
 
 
@@ -36,7 +38,7 @@ _OUTPUT_BY_ROLE = {
 
 
 class SessionAgentRuntime:
-    """Per-solve Shadow Protocol runtime; never influences candidate selection."""
+    """Per-solve protocol runtime with an authoritative Router boundary."""
 
     def __init__(self, session_id: str, definitions: AgentRegistry) -> None:
         self.session_id = session_id
@@ -46,13 +48,120 @@ class SessionAgentRuntime:
         self.artifacts = SessionArtifactStore(session_id, self.agents, definitions)
         self.mailbox = SessionMailbox(session_id, self.agents, self.tasks, self.artifacts, definitions)
         self._agent_keys: dict[tuple[str, str], str] = {}
-        self._task_keys: dict[tuple[str, str], str] = {}
+        self._task_keys: dict[tuple[str, str, str], str] = {}
         self._thread_keys: dict[tuple[str, str], str] = {}
         self._turns: dict[str, TurnLineage] = {}
         self._turn_contexts: dict[str, TurnContext] = {}
         self._sequence = 0
+        self._authoritative_plan: AuthoritativePlan | None = None
         self._released = False
         self._lock = RLock()
+
+    def bind_authoritative_plan(self, plan: AuthoritativePlan) -> None:
+        with self._lock:
+            plan.validate()
+            if self._authoritative_plan is not None:
+                if plan.version <= self._authoritative_plan.version:
+                    raise ValueError("authoritative plan version must increase")
+                if plan.parent_plan_id != self._authoritative_plan.plan_id:
+                    raise ValueError("authoritative replan parent is invalid")
+                if (
+                    plan.original_condition_digest
+                    != self._authoritative_plan.original_condition_digest
+                ):
+                    raise ValueError("authoritative replan changed original conditions")
+            self._authoritative_plan = plan
+
+    def publish_router_decision(
+        self,
+        *,
+        route_payload: dict[str, Any],
+        plan: AuthoritativePlan,
+    ) -> dict[str, str]:
+        with self._lock:
+            self.bind_authoritative_plan(plan)
+            router_context = next(
+                (
+                    context
+                    for context in reversed(tuple(self._turn_contexts.values()))
+                    if context.role == "RouterPlanner"
+                ),
+                None,
+            )
+            if router_context is None:
+                router = self._ensure_agent("RouterPlanner", "fallback")
+                task = self.tasks.create("route_and_plan", router.agent_id)
+                self._sequence += 1
+                router_context = TurnContext(
+                    router.agent_id,
+                    router.role,
+                    router.mode,
+                    task.task_id,
+                    task.task_type,
+                    f"turn-{self.session_id[:8]}-{self._sequence:04d}-fallback",
+                    "router_fallback",
+                    "PlanArtifact",
+                    "plan_published",
+                    "PrimarySolver",
+                )
+            previous = self.tasks.get(router_context.task_id).output_artifact_ids
+            route_artifact = self.artifacts.publish(
+                artifact_type="RouteArtifact",
+                producer_agent_id=router_context.agent_id,
+                task_id=router_context.task_id,
+                turn_id=router_context.turn_id,
+                payload={
+                    "route": dict(route_payload),
+                    "plan_id": plan.plan_id,
+                    "source": plan.source,
+                    "fallback_reason": plan.fallback_reason,
+                },
+                parent_artifact_ids=(previous[-1],) if previous else (),
+            )
+            plan_artifact = self.artifacts.publish(
+                artifact_type="PlanArtifact",
+                producer_agent_id=router_context.agent_id,
+                task_id=router_context.task_id,
+                turn_id=router_context.turn_id,
+                payload=plan.to_dict(),
+                parent_artifact_ids=(route_artifact.artifact_id,),
+            )
+            for artifact in (route_artifact, plan_artifact):
+                self.tasks.append_output(router_context.task_id, artifact.artifact_id)
+                self.agents.append(
+                    router_context.agent_id,
+                    "output_artifact_ids",
+                    artifact.artifact_id,
+                )
+            recipient = self._ensure_agent("PrimarySolver", "mailbox")
+            pair = tuple(sorted((router_context.agent_id, recipient.agent_id)))
+            thread_id = self._thread_keys.get(pair)
+            if not thread_id:
+                thread_id = self.mailbox.create_thread(
+                    (router_context.agent_id, recipient.agent_id)
+                ).thread_id
+                self._thread_keys[pair] = thread_id
+            message = self.mailbox.send(
+                thread_id=thread_id,
+                sender_agent_id=router_context.agent_id,
+                recipient_agent_id=recipient.agent_id,
+                task_id=router_context.task_id,
+                message_type="plan_published",
+                artifact_ids=(
+                    route_artifact.artifact_id,
+                    plan_artifact.artifact_id,
+                ),
+                public_summary=(
+                    f"Router published authoritative plan {plan.plan_id} "
+                    f"from {plan.source}"
+                ),
+                reply_to_message_id=self.mailbox.latest_message_id(thread_id),
+            )
+            return {
+                "route_artifact_id": route_artifact.artifact_id,
+                "plan_artifact_id": plan_artifact.artifact_id,
+                "plan_message_id": message.message_id,
+            }
 
     def _ensure_agent(self, role: str, descriptor: str = "default") -> AgentInstance:
         key = (role, descriptor)
@@ -73,23 +182,73 @@ class SessionAgentRuntime:
                 raise RuntimeError("Agent runtime has been released")
             hinted_role = str(agent_hint).split(":", 1)[0]
             role = hinted_role if hinted_role in self.definitions.roles() else _ROLE_BY_STAGE.get(stage, "PrimarySolver")
-            descriptor = str(agent_hint).split(":", 1)[1] if ":" in str(agent_hint) else str(turn_kind)
+            descriptor = (
+                str(agent_hint).split(":", 1)[1]
+                if ":" in str(agent_hint)
+                else "default"
+                if hinted_role in self.definitions.roles()
+                else str(turn_kind)
+            )
             instance = self._ensure_agent(role, descriptor or "default")
             task_type = _TASK_BY_ROLE[role]
-            key = (instance.agent_id, task_type)
+            plan_id, subgoal_ids, method_family = self._task_plan(role, descriptor)
+            key = (instance.agent_id, task_type, plan_id)
             task_id = self._task_keys.get(key)
             if not task_id:
-                task_id = self.tasks.create(task_type, instance.agent_id).task_id
+                task_id = self.tasks.create(
+                    task_type,
+                    instance.agent_id,
+                    plan_id=plan_id,
+                    subgoal_ids=subgoal_ids,
+                    method_family=method_family,
+                ).task_id
                 self._task_keys[key] = task_id
             artifact_type, message_type, recipient_role = _OUTPUT_BY_ROLE[role]
             if turn_kind == "solver_progress":
                 artifact_type, message_type, recipient_role = "ProgressArtifact", "progress_shared", "RouterPlanner"
             self._sequence += 1
             turn_id = f"turn-{self.session_id[:8]}-{self._sequence:04d}"
-            context = TurnContext(instance.agent_id, role, instance.mode, task_id, task_type, turn_id, turn_kind, artifact_type, message_type, recipient_role)
+            context = TurnContext(
+                instance.agent_id,
+                role,
+                instance.mode,
+                task_id,
+                task_type,
+                turn_id,
+                turn_kind,
+                artifact_type,
+                message_type,
+                recipient_role,
+                plan_id,
+                subgoal_ids,
+                method_family,
+            )
             self._turn_contexts[turn_id] = context
             self._turns[turn_id] = TurnLineage(instance.agent_id, task_id, turn_id)
             return context
+
+    def _task_plan(
+        self,
+        role: str,
+        descriptor: str,
+    ) -> tuple[str, tuple[str, ...], str]:
+        plan = self._authoritative_plan
+        if plan is None or role == "RouterPlanner":
+            return "", (), ""
+        proposals = [
+            proposal
+            for proposal in plan.task_proposals
+            if proposal.agent_role == role
+        ]
+        if not proposals:
+            return plan.plan_id, (), ""
+        index = 0
+        if role == "AlternativeSolver":
+            match = re.search(r"(\d+)$", descriptor)
+            if match:
+                index = max(0, int(match.group(1)) - 1)
+        proposal = proposals[min(index, len(proposals) - 1)]
+        return plan.plan_id, proposal.subgoal_ids, proposal.method_family
 
     def mark_dispatched(self, turn_id: str, *, budget_snapshot: dict[str, Any] | None = None) -> None:
         with self._lock:
@@ -168,7 +327,22 @@ class SessionAgentRuntime:
             mailbox_snapshot = self.mailbox.snapshot()
             turns = [item.to_dict() for item in self._turns.values()]
             return {
-                "schema_version": PROTOCOL_SCHEMA_VERSION, "mode": "shadow_protocol", "selection_authority": "legacy_flow",
+                "schema_version": PROTOCOL_SCHEMA_VERSION,
+                "mode": (
+                    "hybrid_router_authoritative"
+                    if self._authoritative_plan is not None
+                    else "shadow_protocol"
+                ),
+                "selection_authority": (
+                    "authoritative_router_plan_then_legacy_candidate_flow"
+                    if self._authoritative_plan is not None
+                    else "legacy_flow"
+                ),
+                "active_plan_id": (
+                    self._authoritative_plan.plan_id
+                    if self._authoritative_plan is not None
+                    else ""
+                ),
                 "counts": {"model_calls": len(model_call_records), "turns": len(turns), "agents": len(self.agents.snapshot()), "tasks": len(self.tasks.snapshot()), "artifacts": len(artifacts), "messages": len(mailbox_snapshot["messages"]), "threads": len(mailbox_snapshot["threads"])},
                 "call_turn_count_match": len(model_call_records) == len(turns), "agents": self.agents.snapshot(), "tasks": self.tasks.snapshot(),
                 "artifacts": artifacts, "messages": mailbox_snapshot["messages"], "threads": mailbox_snapshot["threads"], "turn_lineage": turns,
@@ -181,6 +355,7 @@ class SessionAgentRuntime:
             self.tasks.clear()
             self.agents.clear()
             self._agent_keys.clear(); self._task_keys.clear(); self._thread_keys.clear(); self._turns.clear(); self._turn_contexts.clear()
+            self._authoritative_plan = None
             self._released = True
 
     @property

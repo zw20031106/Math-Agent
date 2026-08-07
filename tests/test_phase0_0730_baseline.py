@@ -147,7 +147,7 @@ def test_true_multi_agent_phase0_registry_is_reproducible():
         assert len(artifact["sha256"]) == 64
 
 
-def test_prompt_skill_and_model_identity_match_frozen_governance_sources():
+def test_frozen_prompt_baseline_is_preserved_while_current_review_can_advance():
     baseline = json.loads(MULTI_AGENT_BASELINE.read_text(encoding="utf-8"))
     review = json.loads(
         (ROOT / "docs" / "content_review_manifest.json").read_text(
@@ -157,11 +157,17 @@ def test_prompt_skill_and_model_identity_match_frozen_governance_sources():
     scopes = {item["id"]: item for item in review["scopes"]}
     content = baseline["content_baseline"]
 
-    assert content["prompt_contracts"]["sha256"] == scopes["prompt-contracts"][
-        "sha256"
-    ]
+    assert content["prompt_contracts"]["sha256"] == (
+        "4778b9fe970aec42da4ec4baa2dbd3187bb1832867753842bc29c3f4fdfc4e74"
+    )
     assert content["prompt_contracts"]["count"] == scopes["prompt-contracts"][
         "expected_count"
+    ]
+    assert scopes["prompt-contracts"]["version"] == (
+        "prompt-contract-8-authoritative-router-plan-3.0"
+    )
+    assert content["prompt_contracts"]["sha256"] != scopes["prompt-contracts"][
+        "sha256"
     ]
     assert content["prompt_compiler"]["sha256"] == scopes["prompt-compiler"][
         "sha256"

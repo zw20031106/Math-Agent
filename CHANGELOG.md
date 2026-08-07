@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Completed true multi-Agent remediation Phase F3. Production profiles now
+  require an independent RouterPlanner model call before every Solver call.
+  Router output contains a validated route, method families, acyclic subgoal
+  DAG, and Agent task proposals; its Plan ID, subgoals, and method assignment
+  causally bind subsequent Solver tasks and prompts. Added authoritative
+  Route/Plan Artifacts, versioned replan inheritance, explicit rule-engine
+  fallback reasons, production-config guards, and F3 ordering/DAG/replan tests.
 - Completed true multi-Agent remediation Phase F2 in Shadow Protocol mode.
   Added immutable Agent definitions, per-solve Agent instances and validated
   lifecycle/task state, typed turn payloads, content-addressed Artifact

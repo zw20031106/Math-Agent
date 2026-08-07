@@ -12,7 +12,7 @@ from mathforge.agents.router_planner import (
 from mathforge.parsing.problem_parser import ProblemParser
 
 
-def test_rule_router_classifies_clear_problem_without_llm():
+def test_clear_problem_still_runs_independent_router_model_turn():
     calls = 0
 
     def consume():
@@ -22,7 +22,7 @@ def test_rule_router_classifies_clear_problem_without_llm():
     parsed = ProblemParser().parse("计算矩阵的特征值")
     plan = RouterPlanner().plan(parsed, llm_chat=lambda **_: "{}", consume_call=consume)
     assert plan.primary_subject == "advanced-linear-algebra"
-    assert calls == 0
+    assert calls == 1
     assert len(plan.method_families) == len(set(plan.method_families)) == 3
 
 
@@ -82,8 +82,50 @@ def test_final_risk_recomputes_every_derived_route_field():
     problem = ProblemParser().parse("solve this problem")
     plan = RouterPlanner().plan(
         problem,
-        llm_chat=lambda **_: (
-            '{"primary_subject":"general-math","risk_level":"high"}'
+        llm_chat=lambda **_: json.dumps(
+            {
+                "primary_subject": "general-math",
+                "auxiliary_subject": None,
+                "risk_level": "high",
+                "method_families": [
+                    "direct-deduction",
+                    "constructive-computation",
+                    "contradiction-extremal",
+                ],
+                "subgoals": [
+                    {
+                        "subgoal_id": "sg-1",
+                        "objective": "solve",
+                        "depends_on": [],
+                    }
+                ],
+                "task_proposals": [
+                    {
+                        "proposal_id": "p-primary",
+                        "agent_role": "PrimarySolver",
+                        "task_type": "solve_primary",
+                        "subgoal_ids": ["sg-1"],
+                        "method_family": "direct-deduction",
+                        "priority": 100,
+                    },
+                    {
+                        "proposal_id": "p-alt-1",
+                        "agent_role": "AlternativeSolver",
+                        "task_type": "solve_alternative",
+                        "subgoal_ids": ["sg-1"],
+                        "method_family": "constructive-computation",
+                        "priority": 80,
+                    },
+                    {
+                        "proposal_id": "p-alt-2",
+                        "agent_role": "AlternativeSolver",
+                        "task_type": "solve_alternative",
+                        "subgoal_ids": ["sg-1"],
+                        "method_family": "contradiction-extremal",
+                        "priority": 70,
+                    },
+                ],
+            }
         ),
         consume_call=lambda: None,
     )

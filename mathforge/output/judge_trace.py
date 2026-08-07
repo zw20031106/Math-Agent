@@ -15,7 +15,7 @@ from mathforge.output.loop_health import (
 )
 
 
-JUDGE_TRACE_SCHEMA_VERSION = "3.8"
+JUDGE_TRACE_SCHEMA_VERSION = "3.9"
 JUDGE_EVENT_STAGES = {
     "solution_process": "solution",
     "workflow_overview": "workflow",
@@ -311,6 +311,18 @@ def project_judge_trace(
         _select(
             route,
             (
+                "router_llm_attempted",
+                "router_source",
+                "router_fallback_reason",
+                "plan_id",
+                "plan_version",
+                "parent_plan_id",
+                "original_condition_digest",
+                "subgoals",
+                "task_proposals",
+                "route_artifact_id",
+                "plan_artifact_id",
+                "plan_message_id",
                 "primary_subject",
                 "auxiliary_subject",
                 "risk_level",
@@ -1717,6 +1729,13 @@ def _model_activity(
                 "agent_id": str(record.get("agent_id", "")),
                 "task_id": str(record.get("task_id", "")),
                 "turn_id": str(record.get("turn_id", "")),
+                "plan_id": str(record.get("plan_id", "")),
+                "subgoal_ids": _plain_string_list(
+                    record.get("subgoal_ids", [])
+                ),
+                "planned_method_family": str(
+                    record.get("planned_method_family", "")
+                ),
                 "output_artifact_id": str(record.get("output_artifact_id", "")),
                 "message_id": str(record.get("message_id", "")),
                 "role": _model_role(stage),

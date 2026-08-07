@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from typing import Callable
 
 from mathforge.agents.router_planner import RouterPlanner
+from mathforge.agent_runtime.router_protocol import (
+    AuthoritativePlan,
+    RouterPlanningOutcome,
+)
 from mathforge.context.assembler import RawContextStore
 from mathforge.context.role_views import RoleContextFactory
 from mathforge.context.snapshots import RoleContextView
@@ -174,6 +178,29 @@ class ContextRouteStage:
             max_tokens=max_tokens,
             context_view=context_view,
             record_prompt_chars=record_prompt_chars,
+        )
+
+    def plan_authoritative(
+        self,
+        problem: ProblemIR,
+        *,
+        llm_chat: Callable[..., str] | None = None,
+        consume_call: Callable[[], None] | None = None,
+        max_tokens: int = 0,
+        context_view: RoleContextView | None = None,
+        record_prompt_chars: Callable[[int], None] | None = None,
+        previous_plan: AuthoritativePlan | None = None,
+        verified_fact_ids: tuple[str, ...] = (),
+    ) -> RouterPlanningOutcome:
+        return self._router.plan_authoritative(
+            problem,
+            llm_chat=llm_chat,
+            consume_call=consume_call,
+            max_tokens=max_tokens,
+            context_view=context_view,
+            record_prompt_chars=record_prompt_chars,
+            previous_plan=previous_plan,
+            verified_fact_ids=verified_fact_ids,
         )
 
     def routing_reasons(

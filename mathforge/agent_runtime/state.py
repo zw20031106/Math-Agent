@@ -57,6 +57,9 @@ class AgentTask:
     input_artifact_ids: tuple[str, ...] = ()
     output_artifact_ids: tuple[str, ...] = ()
     created_sequence: int = 0
+    plan_id: str = ""
+    subgoal_ids: tuple[str, ...] = ()
+    method_family: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -139,7 +142,16 @@ class AgentTaskRegistry:
         self._sequence = 0
         self._lock = RLock()
 
-    def create(self, task_type: str, agent_id: str, *, parent_task_id: str = "") -> AgentTask:
+    def create(
+        self,
+        task_type: str,
+        agent_id: str,
+        *,
+        parent_task_id: str = "",
+        plan_id: str = "",
+        subgoal_ids: tuple[str, ...] = (),
+        method_family: str = "",
+    ) -> AgentTask:
         with self._lock:
             instance = self._agents.instance(agent_id)
             if instance.session_id != self.session_id:
@@ -150,7 +162,18 @@ class AgentTaskRegistry:
                 raise ValueError("parent task does not exist")
             self._sequence += 1
             task_id = f"task-{self.session_id[:8]}-{self._sequence:04d}"
-            task = AgentTask(task_id, self.session_id, task_type, agent_id, status="ready", parent_task_id=parent_task_id, created_sequence=self._sequence)
+            task = AgentTask(
+                task_id,
+                self.session_id,
+                task_type,
+                agent_id,
+                status="ready",
+                parent_task_id=parent_task_id,
+                created_sequence=self._sequence,
+                plan_id=str(plan_id),
+                subgoal_ids=tuple(subgoal_ids),
+                method_family=str(method_family),
+            )
             self._tasks[task_id] = task
             self._agents.append(agent_id, "accepted_task_ids", task_id)
             self._agents.update(agent_id, current_task_id=task_id)

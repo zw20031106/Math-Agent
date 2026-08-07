@@ -598,29 +598,13 @@ class MathForgeHarness:
                 "problem_parsed",
             )
             router_context = None
-            router_enabled = (
-                self._config.enable_router
-                and self._provider_allows_optional_model_work()
-            )
-            if self._config.enable_router and not router_enabled:
-                trace.add(
-                    "call_allocation_rebalanced",
-                    reason="provider_degraded",
-                    provider_health=self._provider_health_state(),
-                    disabled=["router"],
-                )
+            router_enabled = self._config.enable_router
             potential_verifier = (
                 self._config.enable_verifier
                 and self._config.enable_evidence
                 and self._config.enable_proof_obligations
             )
-            router_unreachable = (
-                router_enabled
-                and self._config.max_model_calls
-                <= 1 + int(potential_verifier)
-            )
-            if router_unreachable:
-                router_enabled = False
+            router_unreachable = False
             try:
                 router_context = self._build_role_context(
                     session,
@@ -629,8 +613,13 @@ class MathForgeHarness:
                     role="RouterPlanner",
                 )
             except (ContextBudgetExceeded, BudgetExceeded):
-                router_enabled = False
-            session.route_plan = self._context_route_stage.plan(
+                router_context = None
+                trace.add(
+                    "context_budget_infeasible",
+                    role="RouterPlanner",
+                    action="use_minimal_router_context",
+                )
+            router_outcome = self._context_route_stage.plan_authoritative(
                 session.problem_ir,
                 llm_chat=(
                     (
@@ -649,7 +638,8 @@ class MathForgeHarness:
                     (
                         lambda: session.budget.consume(
                             stage="router",
-                            optional=True,
+                            optional=False,
+                            action_category="replan",
                         )
                     )
                     if router_enabled
@@ -660,6 +650,12 @@ class MathForgeHarness:
                 record_prompt_chars=(
                     session.budget.record_prompt_chars if router_enabled else None
                 ),
+            )
+            session.route_plan = router_outcome.route_plan
+            session.agent_plan = router_outcome.authoritative_plan
+            router_protocol_refs = session.agent_runtime.publish_router_decision(
+                route_payload=session.route_plan.to_dict(),
+                plan=session.agent_plan,
             )
             if not self._config.enable_alternatives:
                 session.route_plan = replace(session.route_plan, candidate_count=1)
@@ -842,6 +838,23 @@ class MathForgeHarness:
                 )
             trace.add(
                 "route_planned",
+                router_llm_attempted=router_outcome.llm_attempted,
+                router_source=router_outcome.source,
+                router_fallback_reason=router_outcome.fallback_reason,
+                plan_id=session.agent_plan.plan_id,
+                plan_version=session.agent_plan.version,
+                parent_plan_id=session.agent_plan.parent_plan_id,
+                original_condition_digest=(
+                    session.agent_plan.original_condition_digest
+                ),
+                subgoals=[
+                    item.to_dict() for item in session.agent_plan.subgoals
+                ],
+                task_proposals=[
+                    item.to_dict()
+                    for item in session.agent_plan.task_proposals
+                ],
+                **router_protocol_refs,
                 primary_subject=session.route_plan.primary_subject,
                 auxiliary_subject=session.route_plan.auxiliary_subject,
                 risk_level=session.route_plan.risk_level,
@@ -2867,8 +2880,11 @@ class MathForgeHarness:
             ),
             {
                 "schema_version": "1.0",
-                "mode": "shadow_protocol",
-                "selection_authority": "legacy_flow",
+                "mode": "hybrid_router_authoritative",
+                "selection_authority": (
+                    "authoritative_router_plan_then_legacy_candidate_flow"
+                ),
+                "active_plan_id": "",
                 "counts": {},
                 "call_turn_count_match": False,
                 "agents": [],

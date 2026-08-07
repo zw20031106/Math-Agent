@@ -63,6 +63,32 @@ class SkillCaptureClient:
     def chat(self, *, messages, temperature, max_tokens):
         del temperature, max_tokens
         self.calls.append(messages)
+        if messages[0]["content"].startswith("You are RouterPlanner"):
+            return json.dumps(
+                {
+                    "primary_subject": "advanced-linear-algebra",
+                    "auxiliary_subject": None,
+                    "risk_level": "low",
+                    "method_families": ["spectral"],
+                    "subgoals": [
+                        {
+                            "subgoal_id": "sg-1",
+                            "objective": "compute the eigenvalue",
+                            "depends_on": [],
+                        }
+                    ],
+                    "task_proposals": [
+                        {
+                            "proposal_id": "p-primary",
+                            "agent_role": "PrimarySolver",
+                            "task_type": "solve_primary",
+                            "subgoal_ids": ["sg-1"],
+                            "method_family": "spectral",
+                            "priority": 100,
+                        }
+                    ],
+                }
+            )
         method = messages[-1]["content"].split(
             "Required core method family: ",
             1,
@@ -102,7 +128,7 @@ class SkillCaptureClient:
 def _skill_runtime_config() -> HarnessConfig:
     return replace(
         HarnessConfig(),
-        max_model_calls=1,
+        max_model_calls=2,
         enable_router=True,
         enable_skills=True,
         enable_alternatives=False,
@@ -251,8 +277,41 @@ def test_llm_router_override_has_an_explicit_trace_reason():
     router = RouterPlanner()
     plan = router.plan(
         problem,
-        llm_chat=lambda **_: (
-            '{"primary_subject":"topology","risk_level":"medium"}'
+        llm_chat=lambda **_: json.dumps(
+            {
+                "primary_subject": "topology",
+                "auxiliary_subject": None,
+                "risk_level": "medium",
+                "method_families": [
+                    "structural-transform",
+                    "contradiction",
+                ],
+                "subgoals": [
+                    {
+                        "subgoal_id": "sg-1",
+                        "objective": "identify the invariant structure",
+                        "depends_on": [],
+                    }
+                ],
+                "task_proposals": [
+                    {
+                        "proposal_id": "p-primary",
+                        "agent_role": "PrimarySolver",
+                        "task_type": "solve_primary",
+                        "subgoal_ids": ["sg-1"],
+                        "method_family": "structural-transform",
+                        "priority": 100,
+                    },
+                    {
+                        "proposal_id": "p-alt",
+                        "agent_role": "AlternativeSolver",
+                        "task_type": "solve_alternative",
+                        "subgoal_ids": ["sg-1"],
+                        "method_family": "contradiction",
+                        "priority": 80,
+                    },
+                ],
+            }
         ),
         consume_call=lambda: None,
     )
@@ -290,7 +349,11 @@ def test_runtime_injects_role_skill_blocks_and_records_route_evidence():
     selected = next(
         event for event in result["trace"] if event["event"] == "skills_selected"
     )
-    solver_prompt = client.calls[0][-1]["content"]
+    solver_prompt = next(
+        messages[-1]["content"]
+        for messages in client.calls
+        if messages[0]["content"].startswith("You are PrimarySolver")
+    )
 
     assert result["run_metrics"]["outcome"] == "primary"
     assert route["primary_subject"] == "advanced-linear-algebra"

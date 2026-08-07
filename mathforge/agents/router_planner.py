@@ -7,7 +7,14 @@ from typing import Callable
 
 from mathforge.agents.prompt_compiler import PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
+from mathforge.agent_runtime.router_protocol import (
+    AuthoritativePlan,
+    RouterPlanningOutcome,
+    build_authoritative_plan,
+    valid_method_families,
+)
 from mathforge.context.snapshots import RoleContextView
+from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.harness.errors import BudgetExceeded, ModelTransportError
 from mathforge.harness.schemas import ProblemIR, RoutePlan
 
@@ -764,10 +771,45 @@ class RouterPlanner:
         context_view: RoleContextView | None = None,
         record_prompt_chars: Callable[[int], None] | None = None,
     ) -> RoutePlan:
+        return self.plan_authoritative(
+            problem,
+            llm_chat=llm_chat,
+            consume_call=consume_call,
+            max_tokens=max_tokens,
+            context_view=context_view,
+            record_prompt_chars=record_prompt_chars,
+        ).route_plan
+
+    def plan_authoritative(
+        self,
+        problem: ProblemIR,
+        *,
+        llm_chat: Callable[..., str] | None = None,
+        consume_call: Callable[[], None] | None = None,
+        max_tokens: int = 0,
+        context_view: RoleContextView | None = None,
+        record_prompt_chars: Callable[[int], None] | None = None,
+        previous_plan: AuthoritativePlan | None = None,
+        verified_fact_ids: tuple[str, ...] = (),
+    ) -> RouterPlanningOutcome:
         rule_plan = self._rules.plan(problem)
-        top_score = rule_plan.routing_confidence
-        if top_score >= 0.75 or llm_chat is None or consume_call is None:
-            return rule_plan
+        if llm_chat is None or consume_call is None:
+            fallback = build_authoritative_plan(
+                problem,
+                rule_plan,
+                None,
+                source="router_rule_fallback",
+                fallback_reason="router_model_unavailable",
+                previous=previous_plan,
+                verified_fact_ids=verified_fact_ids,
+            )
+            return RouterPlanningOutcome(
+                rule_plan,
+                fallback,
+                False,
+                "router_rule_fallback",
+                "router_model_unavailable",
+            )
         try:
             consume_call()
             context = (
@@ -775,11 +817,24 @@ class RouterPlanner:
                 if context_view is not None
                 else ""
             )
+            prior_context = (
+                "\n\nReplan from this public prior plan without changing the "
+                "original conditions or verified facts:\n"
+                + json.dumps(
+                    {
+                        "prior_plan": previous_plan.to_dict(),
+                        "verified_fact_ids": list(verified_fact_ids),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                if previous_plan is not None
+                else ""
+            )
             user = (
                 f"Problem:\n{problem.normalized_problem}\n\n"
-                'Return {"primary_subject":"...","auxiliary_subject":null,'
-                '"risk_level":"low|medium|high","method_families":["...","...","..."]}.'
-                f"{context}"
+                "Return a route, an acyclic subgoal DAG, and concrete Agent task "
+                f"proposals using the exact contract schema.{prior_context}{context}"
             )
             compilation = self._compiler.compile_role(
                 "router_planner",
@@ -801,18 +856,31 @@ class RouterPlanner:
             )
             match = re.search(r"\{.*\}", response, re.DOTALL)
             payload = json.loads(match.group(0)) if match else {}
-            primary = str(payload.get("primary_subject", "general-math"))
+            required = {
+                "primary_subject",
+                "auxiliary_subject",
+                "risk_level",
+                "method_families",
+                "subgoals",
+                "task_proposals",
+            }
+            if set(payload) != required:
+                raise ValueError("Router response schema is invalid")
+            primary = str(payload["primary_subject"])
             if primary not in {*_SUBJECT_SIGNALS, "general-math"}:
-                primary = "general-math"
+                raise ValueError("Router selected an invalid subject")
             auxiliary = payload.get("auxiliary_subject")
-            if auxiliary not in _SUBJECT_SIGNALS or auxiliary == primary:
-                auxiliary = None
-            risk = str(payload.get("risk_level", rule_plan.risk_level))
+            if auxiliary is not None and (
+                auxiliary not in _SUBJECT_SIGNALS or auxiliary == primary
+            ):
+                raise ValueError("Router selected an invalid auxiliary subject")
+            risk = str(payload["risk_level"])
             if risk not in {"low", "medium", "high"}:
-                risk = rule_plan.risk_level
+                raise ValueError("Router selected an invalid risk")
             risk_order = {"low": 0, "medium": 1, "high": 2}
             if risk_order[risk] < risk_order[rule_plan.risk_level]:
                 risk = rule_plan.risk_level
+            methods = valid_method_families(payload["method_families"])
             policy = derive_route_policy(risk, problem.problem_type)
             selected = selected_skills_for(
                 problem,
@@ -837,16 +905,65 @@ class RouterPlanner:
                 use_rag=policy.use_rag,
                 use_lemma_loop=policy.use_lemma_loop,
                 use_llm_finalizer=policy.use_llm_finalizer,
-                method_families=method_families_for(primary, problem.problem_type),
+                method_families=methods,
             )
             planned.validate()
-            return planned
+            authoritative = build_authoritative_plan(
+                problem,
+                planned,
+                payload,
+                source="llm_router",
+                previous=previous_plan,
+                verified_fact_ids=verified_fact_ids,
+            )
+            return RouterPlanningOutcome(
+                planned,
+                authoritative,
+                True,
+                "llm_router",
+            )
         except (
             BudgetExceeded,
+            ContextBudgetExceeded,
             ModelTransportError,
             ValueError,
             TypeError,
             json.JSONDecodeError,
             RuntimeError,
-        ):
-            return rule_plan
+        ) as error:
+            failure_reason = _router_failure_reason(error)
+            fallback = build_authoritative_plan(
+                problem,
+                rule_plan,
+                None,
+                source="router_rule_fallback",
+                fallback_reason=failure_reason,
+                previous=previous_plan,
+                verified_fact_ids=verified_fact_ids,
+            )
+            return RouterPlanningOutcome(
+                rule_plan,
+                fallback,
+                True,
+                "router_rule_fallback",
+                failure_reason,
+            )
+
+
+def _router_failure_reason(error: Exception) -> str:
+    if isinstance(error, BudgetExceeded):
+        return "router_budget_unavailable"
+    if isinstance(error, ContextBudgetExceeded):
+        return "router_context_infeasible"
+    if isinstance(error, ModelTransportError):
+        return f"router_{error.code}"
+    if isinstance(error, json.JSONDecodeError):
+        return "router_json_invalid"
+    if isinstance(error, (ValueError, TypeError)):
+        text = str(error).lower()
+        if "cycle" in text:
+            return "router_subgoal_cycle"
+        if "method" in text:
+            return "router_method_invalid"
+        return "router_schema_invalid"
+    return "router_execution_failed"

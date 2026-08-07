@@ -135,6 +135,9 @@ class TurnContext:
     artifact_type: str
     message_type: str
     recipient_role: str
+    plan_id: str = ""
+    subgoal_ids: tuple[str, ...] = ()
+    method_family: str = ""
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -148,6 +151,9 @@ class TurnContext:
             "artifact_type": self.artifact_type,
             "message_type": self.message_type,
             "recipient_role": self.recipient_role,
+            "plan_id": self.plan_id,
+            "subgoal_ids": list(self.subgoal_ids),
+            "method_family": self.method_family,
         }
 
 
