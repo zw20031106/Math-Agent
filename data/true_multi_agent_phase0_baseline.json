@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0",
+  "phase": "F0",
+  "captured_at": "2026-08-07",
+  "status": "governance-frozen-runtime-unmodified",
+  "review_source_commit": "b5a743426a85c7d843215dec590497a61f0067f2",
+  "authoritative_plan": {
+    "path": "docs/MATH_AGENT_TRUE_MULTI_AGENT_FINAL_ARCHITECTURE_AND_IMPLEMENTATION_PLAN_2026-08-02.md",
+    "sha256": "72b019813f840877e6c9ae5c9ecade902a0d00643d49e19ed244e556c313febb"
+  },
+  "superseded_plan": {
+    "path": "docs/MATH_AGENT_TRUE_MULTI_AGENT_AUDIT_AND_REMEDIATION_PLAN_2026-08-01.md",
+    "status": "superseded-design-history"
+  },
+  "runtime_baseline": {
+    "source_path": "config/competition.json",
+    "snapshot_path": "data/true_multi_agent_phase0_competition_snapshot.json",
+    "sha256": "9d8bc2668735dd56f6483e4cd6f57493b6ec6705a0586e65434f8c50e54db194",
+    "schema_version": "1.5",
+    "status": "candidate-unvalidated",
+    "model_max_concurrency": 16,
+    "max_model_calls": 6,
+    "enable_router": false
+  },
+  "target_design": {
+    "implementation_status": "not-started-after-f0",
+    "case_max_concurrency": 3,
+    "model_requests_per_minute": 200,
+    "initial_max_logical_model_calls_per_problem": 48,
+    "soft_call_checkpoints": [16, 28, 40],
+    "closure_reserve_calls": 8,
+    "router_llm_required": true,
+    "minimum_independent_solver_agents": 2,
+    "explicit_agent_communication_required": true,
+    "solver_peer_cross_review_required": true,
+    "stage_execution_policy_status": "candidate-unvalidated"
+  },
+  "content_baseline": {
+    "phase0_dataset_manifest": {
+      "path": "data/phase0_baseline_manifest.json",
+      "sha256": "33ffcb2b780dd8e78f089cc2c40249814a0959aa88537e3910cf635826b04d00"
+    },
+    "content_review_manifest": {
+      "path": "docs/content_review_manifest.json",
+      "sha256": "ea19b5961bee1ddf74e0103a1cbfd5c07aadf19357a3baccee3135d95a7bd731"
+    },
+    "build_provenance_manifest": {
+      "path": "data/build_provenance_manifest.json",
+      "sha256": "c985c1a8c46accf0348ce6ab6774d1924022b803f3720a172df5a21605d9c2dc"
+    },
+    "prompt_contracts": {
+      "version": "prompt-contract-7-response-mode-candidate-2.1",
+      "count": 7,
+      "sha256": "4778b9fe970aec42da4ec4baa2dbd3187bb1832867753842bc29c3f4fdfc4e74"
+    },
+    "prompt_compiler": {
+      "version": "prompt-compiler-9-response-mode-candidate-2.1",
+      "sha256": "a2a0644878499ddafce2528f80a3b1a883ceafa58c7084ca19c98e0b053e259a"
+    },
+    "domain_skills": {
+      "version": "skill-2.0",
+      "count": 29,
+      "sha256": "79f40028c1e2e2d0cc08ed55273c877348cf2fccb12c6ec04650177ab3321b63"
+    },
+    "general_skills": {
+      "version": "skill-2.0",
+      "count": 6,
+      "sha256": "db7d866c278f8e6e91e303d8aa72681963bf420b4c33081b6060f175e06605be"
+    }
+  },
+  "model_identity": {
+    "public_entry_client": "InternChatClient",
+    "default_requested_model": "intern-s2-preview",
+    "default_model_source": "llm_client.py:DEFAULT_MODEL",
+    "environment_override_name": "INTERN_MODEL",
+    "response_model_observable": false,
+    "thinking_mode_observable": false,
+    "custom_benchmark_exact_model": "intern-s2-preview-397b"
+  },
+  "privacy": {
+    "contains_credentials": false,
+    "contains_absolute_paths": false,
+    "contains_private_reasoning_transcripts": false
+  }
+}

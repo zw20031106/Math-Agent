@@ -261,6 +261,18 @@ The competition profile intentionally remains `candidate-unvalidated`. Content
 hashes have engineering review, but human signatures and representative
 repeated A0–A10 evidence are still required before S6 can freeze the profile.
 
+### True multi-Agent remediation status
+
+Phase F0 freezes governance and the pre-remediation baseline only. The current
+six-call, optional-Router Competition behavior described above remains an
+accurate runtime fact at this phase; it is not the target architecture. The
+authoritative phased design is
+`docs/MATH_AGENT_TRUE_MULTI_AGENT_FINAL_ARCHITECTURE_AND_IMPLEMENTATION_PLAN_2026-08-02.md`.
+It requires subsequent phases to implement mandatory LLM routing, independent
+Agent calls and communication, multiple Candidates with cross-review, bounded
+long-horizon reasoning, case concurrency 3, and a global 200 RPM admission
+limit. F0 completion must not be represented as completion of that architecture.
+
 Evaluation evidence uses an explicit-allow registry at
 `data/evaluation_evidence_registry.json`. Historical case directories and
 diagnostic provider failures are ineligible unless a completed, exact-model,

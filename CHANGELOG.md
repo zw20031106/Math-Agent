@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Completed true multi-Agent remediation Phase F0 without changing runtime
+  behavior: synchronized the authoritative final plan, marked the obsolete
+  six-call design as superseded, froze the source/config/Prompt/Skill/Data/model
+  baseline, restored the deleted Phase 0 regression suite, and documented the
+  Definition of Done and phased governance decision in ADR-003. The active
+  Competition profile remains `candidate-unvalidated`; concurrency 3, 200 RPM,
+  mandatory Router, the 48-call bounded policy, and typed timeout/Token policies
+  remain targets for later phases.
 - Added the shared executable `ModelCandidatePayload 2.1` boundary used by
   Prompt compilation and Candidate parsing. Solver prompts now receive the
   Host-owned response mode, require LaTeX-delimited public mathematics, retain
