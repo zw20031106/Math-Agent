@@ -15,7 +15,7 @@ from mathforge.output.loop_health import (
 )
 
 
-JUDGE_TRACE_SCHEMA_VERSION = "3.7"
+JUDGE_TRACE_SCHEMA_VERSION = "3.8"
 JUDGE_EVENT_STAGES = {
     "solution_process": "solution",
     "workflow_overview": "workflow",
@@ -30,6 +30,7 @@ JUDGE_EVENT_STAGES = {
     "reasoning_loop_completed": "reasoning",
     "skills_selected": "skill_selection",
     "model_activity": "model_activity",
+    "agent_protocol": "orchestration",
     "tool_feedback_completed": "evidence",
     "verifier_completed": "verification",
     "candidate_summaries": "candidate_generation",
@@ -457,6 +458,24 @@ def project_judge_trace(
                 "calls": model_calls,
             },
         )
+    protocol = _last(by_name, "agent_protocol")
+    append(
+        "agent_protocol",
+        protocol,
+        _select(
+            protocol,
+            (
+                "protocol_schema_version",
+                "mode",
+                "selection_authority",
+                "counts",
+                "call_turn_count_match",
+                "turn_lineage",
+                "messages",
+                "threads",
+            ),
+        ),
+    )
 
     case_summary_event = _last(by_name, "case_trace_summary")
     case_summary = (
@@ -1695,6 +1714,11 @@ def _model_activity(
                 "dispatched": bool(record.get("dispatched", False)),
                 "stage": stage,
                 "turn_kind": str(record.get("turn_kind", stage)),
+                "agent_id": str(record.get("agent_id", "")),
+                "task_id": str(record.get("task_id", "")),
+                "turn_id": str(record.get("turn_id", "")),
+                "output_artifact_id": str(record.get("output_artifact_id", "")),
+                "message_id": str(record.get("message_id", "")),
                 "role": _model_role(stage),
                 "purpose": _model_purpose(stage),
                 "candidate_ids": candidate_ids,

@@ -125,10 +125,10 @@
         "mathforge/harness/schemas.py"
       ],
       "expected_count": 3,
-      "version": "typed-lemma-feedback-3-response-mode",
-      "engineering_reviewer": "codex-phase-t1-response-mode-audit",
-      "review_date": "2026-07-31",
-      "sha256": "d1f0f01fab51655e76cb8d7376f2b579297baeb9dc893786b38e1858aa712f3b"
+      "version": "typed-lemma-feedback-phase-f2-agent-session-field",
+      "engineering_reviewer": "codex-phase-f2-agent-protocol-audit",
+      "review_date": "2026-08-07",
+      "sha256": "4eed96756cb3426b9861e428ab6203df6d63a063787f03a2f7c42bda1b7eeb3d"
     },
     {
       "id": "verification-closure",
@@ -150,10 +150,10 @@
         "mathforge/verification/proof_obligations.py"
       ],
       "expected_count": 14,
-      "version": "verification-closure-phase-f1-resource-governance",
-      "engineering_reviewer": "codex-phase-f1-resource-governance-audit",
+      "version": "verification-closure-phase-f2-agent-protocol",
+      "engineering_reviewer": "codex-phase-f2-agent-protocol-audit",
       "review_date": "2026-08-07",
-      "sha256": "7b757c8974383acd8ce7bbcc5d65881d664dca2d2829b80e5d24faa4e47e0394"
+      "sha256": "d0f3fc2ddf05ca45680e8f9747cd7348ce3e4d62579a6d872283e669fab0b21e"
     },
     {
       "id": "reviewed-method-cards",

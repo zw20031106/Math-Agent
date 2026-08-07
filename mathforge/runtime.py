@@ -11,6 +11,8 @@ from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.adaptive_fanout import AdaptiveFanoutPolicy
 from mathforge.agent_runtime.session_call_budget import SessionCallBudget
+from mathforge.agent_runtime.definitions import AgentRegistry
+from mathforge.agent_runtime.runtime import SessionAgentRuntime
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.debug import DebugSink, sanitized_failure_record
 from mathforge.harness.errors import (
@@ -205,6 +207,7 @@ class MathForgeHarness:
         ) = None,
     ) -> None:
         self._config = config or load_competition_config()
+        self._agent_definitions = AgentRegistry.default()
         self._debug_sink = debug_sink
         self._trace_sink_factory = trace_sink_factory
         self._context_budget = ModelContextBudget(
@@ -405,6 +408,11 @@ class MathForgeHarness:
             ),
             raw_context_max_chars=self._config.raw_context_max_chars,
         )
+        session.agent_runtime = SessionAgentRuntime(
+            session.session_id,
+            self._agent_definitions,
+        )
+        session.budget.bind_agent_runtime(session.agent_runtime)
         fingerprint_nonce = str(safe_metadata.get("benchmark_nonce", session.session_id))
         run_fingerprint = request_fingerprint(normalized_problem, fingerprint_nonce)
         trace_sink = None
@@ -2852,6 +2860,41 @@ class MathForgeHarness:
                 )
 
         problem_memo.clear()
+        protocol_snapshot: dict[str, Any] = terminalizer.safe(
+            "agent_protocol_finalize",
+            lambda: session.agent_runtime.finalize(
+                session.budget.model_call_records
+            ),
+            {
+                "schema_version": "1.0",
+                "mode": "shadow_protocol",
+                "selection_authority": "legacy_flow",
+                "counts": {},
+                "call_turn_count_match": False,
+                "agents": [],
+                "tasks": [],
+                "artifacts": [],
+                "messages": [],
+                "threads": [],
+                "turn_lineage": [],
+            },
+        )
+        terminalizer.safe(
+            "agent_protocol_trace",
+            lambda: trace.add(
+                "agent_protocol",
+                protocol_schema_version=protocol_snapshot.get(
+                    "schema_version",
+                    "1.0",
+                ),
+                **{
+                    key: value
+                    for key, value in protocol_snapshot.items()
+                    if key != "schema_version"
+                },
+            ),
+            None,
+        )
         terminalizer.safe(
             "session_freeze",
             session.freeze,
@@ -3076,6 +3119,16 @@ class MathForgeHarness:
                 self._config.candidate_summary_max_count
             ),
         }
+        terminalizer.safe(
+            "agent_runtime_release",
+            session.agent_runtime.release,
+            None,
+        )
+        terminalizer.safe(
+            "agent_runtime_unbind",
+            session.budget.release_agent_runtime,
+            None,
+        )
         return result
 
     def _run_long_horizon_primary(

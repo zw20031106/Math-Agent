@@ -68,6 +68,7 @@ class CallBudget:
         self._lock = Lock()
         self._frozen = False
         self._scheduler_case_id = ""
+        self._agent_runtime = None
         self._stage_calls: dict[str, int] = {}
         self._allocation_plan: CallAllocationPlan | None = None
         self.used_claims = 0
@@ -145,6 +146,22 @@ class CallBudget:
     def scheduler_case_id(self) -> str:
         with self._lock:
             return self._scheduler_case_id
+
+    def bind_agent_runtime(self, runtime) -> None:
+        with self._lock:
+            self._ensure_mutable_locked()
+            if runtime.session_id != self._scheduler_case_id:
+                raise ValueError("Agent runtime must match the scheduler session")
+            self._agent_runtime = runtime
+
+    @property
+    def agent_runtime(self):
+        with self._lock:
+            return self._agent_runtime
+
+    def release_agent_runtime(self) -> None:
+        with self._lock:
+            self._agent_runtime = None
 
     def set_allocation_plan(self, plan: CallAllocationPlan) -> None:
         with self._lock:
@@ -269,6 +286,11 @@ class CallBudget:
                 index,
                 {"dispatched": True, "logical_call_consumed": True},
             )
+
+    def record_model_call_lineage(self, index: int, lineage: dict) -> None:
+        with self._lock:
+            self._ensure_mutable_locked()
+            self._call_ledger.update(index, dict(lineage))
 
     def record_model_call_completed(
         self,

@@ -1489,6 +1489,7 @@ class MathSession:
     working_memory: Any = None
     lemma_memory: Any = None
     raw_context_store: Any = None
+    agent_runtime: Any = None
     lemmas: list[LemmaCard] = field(default_factory=list)
     rounds: list[RoundState] = field(default_factory=list)
     trace_events: list[dict[str, Any]] = field(default_factory=list)

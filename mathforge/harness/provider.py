@@ -34,6 +34,42 @@ if TYPE_CHECKING:
     from mathforge.harness.deadline import DeadlineController
 
 
+def _record_protocol_dispatch(budget, call_index, runtime, turn) -> None:
+    budget.record_model_call_dispatched(call_index)
+    if runtime is not None and turn is not None:
+        try:
+            runtime.mark_dispatched(
+                turn.turn_id,
+                budget_snapshot={
+                    "used_calls": budget.used_calls,
+                    "max_calls": budget.max_calls,
+                },
+            )
+        except Exception:
+            budget.record_model_call_lineage(
+                call_index,
+                {"agent_protocol_status": "shadow_dispatch_failed"},
+            )
+
+
+def _fail_protocol_turn(runtime, turn, failure_code: str) -> None:
+    if runtime is None or turn is None:
+        return
+    try:
+        runtime.fail_model_turn(turn.turn_id, failure_code)
+    except Exception:
+        return
+
+
+def _complete_protocol_turn(runtime, turn, response: str) -> dict:
+    if runtime is None or turn is None:
+        return {}
+    try:
+        return runtime.complete_model_turn(turn.turn_id, response)
+    except Exception:
+        return {"agent_protocol_status": "shadow_publish_failed"}
+
+
 class ModelCallGate:
     """Bound concurrent access to the shared official client."""
 
@@ -489,6 +525,7 @@ class OfficialClientProvider:
         agent_id: str | None = None,
     ) -> str:
         active_turn_kind = turn_kind or stage
+        protocol_runtime = budget.agent_runtime if budget is not None else None
         effective_max_tokens = effective_output_tokens(
             active_turn_kind,
             max_tokens,
@@ -516,6 +553,18 @@ class OfficialClientProvider:
             messages,
             configured_max_output_tokens=effective_max_tokens,
         )
+        try:
+            protocol_turn = (
+                protocol_runtime.begin_model_turn(
+                    stage=stage,
+                    turn_kind=active_turn_kind,
+                    agent_hint=agent_id or "",
+                )
+                if protocol_runtime is not None
+                else None
+            )
+        except Exception:
+            protocol_turn = None
         allocation_payload = {
             **allocation.to_dict(),
             "configured_output_tokens": max_tokens,
@@ -540,6 +589,11 @@ class OfficialClientProvider:
             ),
             "stage_p95_seconds": stage_p95_seconds(active_turn_kind),
             "effective_queue_budget_seconds": queue_budget,
+            "agent_id": protocol_turn.agent_id if protocol_turn else (agent_id or ""),
+            "agent_role": protocol_turn.role if protocol_turn else "",
+            "agent_mode": protocol_turn.mode if protocol_turn else "",
+            "task_id": protocol_turn.task_id if protocol_turn else "",
+            "turn_id": protocol_turn.turn_id if protocol_turn else "",
         }
         call_index = (
             budget.record_model_call_started(stage, allocation_payload)
@@ -553,7 +607,7 @@ class OfficialClientProvider:
                 deadline=active_deadline,
                 stage=stage,
                 case_id=(budget.scheduler_case_id if budget is not None else ""),
-                agent_id=(agent_id or active_turn_kind),
+                agent_id=(protocol_turn.agent_id if protocol_turn else (agent_id or active_turn_kind)),
                 queue_budget_seconds=queue_budget,
                 stage_timeout_seconds=configured_stage_timeout,
                 minimum_start_window_seconds=(
@@ -583,17 +637,15 @@ class OfficialClientProvider:
                     else None
                 ),
                 dispatch_callback=(
-                    (
-                        lambda: budget.record_model_call_dispatched(call_index)
-                    )
-                    if budget is not None and call_index is not None
-                    else None
+                    (lambda: _record_protocol_dispatch(budget, call_index, protocol_runtime, protocol_turn))
+                    if budget is not None and call_index is not None else None
                 ),
                 messages=messages,
                 temperature=temperature,
                 max_tokens=allocation.max_output_tokens,
             )
         except ModelCallRejected as error:
+            _fail_protocol_turn(protocol_runtime, protocol_turn, error.code)
             if budget is not None and call_index is not None:
                 if not error.dispatched:
                     budget.refund(stage=stage)
@@ -613,9 +665,11 @@ class OfficialClientProvider:
                     )
             raise
         except BudgetExceeded:
+            _fail_protocol_turn(protocol_runtime, protocol_turn, "budget_exceeded")
             raise
         except Exception as error:
             failure_code = classify_transport_failure(error)
+            _fail_protocol_turn(protocol_runtime, protocol_turn, failure_code)
             attempts = transport_attempts(error)
             self._gate.record_provider_result(
                 success=False,
@@ -636,6 +690,7 @@ class OfficialClientProvider:
             if budget is not None:
                 budget.record_provider_health(self._gate.health_snapshot())
         if not isinstance(response, str):
+            _fail_protocol_turn(protocol_runtime, protocol_turn, "response_shape_invalid")
             self._gate.record_provider_result(
                 success=False,
                 failure_code="response_shape_invalid",
@@ -651,6 +706,7 @@ class OfficialClientProvider:
             raise ModelTransportError("response_shape_invalid")
         attempts = transport_attempts(response)
         if not response.strip():
+            _fail_protocol_turn(protocol_runtime, protocol_turn, "empty_response")
             self._gate.record_provider_result(
                 success=False,
                 failure_code="empty_response",
@@ -680,6 +736,13 @@ class OfficialClientProvider:
                 transport_attempts=attempts,
                 output_budget_exceeded=output_budget_exceeded,
             )
+            if protocol_runtime is not None and protocol_turn is not None:
+                lineage = _complete_protocol_turn(
+                    protocol_runtime,
+                    protocol_turn,
+                    response,
+                )
+                budget.record_model_call_lineage(call_index, lineage)
             budget.record_tokens(output.tokens)
         if (
             allocation.prompt_tokens

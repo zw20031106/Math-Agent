@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Completed true multi-Agent remediation Phase F2 in Shadow Protocol mode.
+  Added immutable Agent definitions, per-solve Agent instances and validated
+  lifecycle/task state, typed turn payloads, content-addressed Artifact
+  envelopes, conversation threads, deduplicated Message envelopes, and complete
+  call-to-turn-to-artifact-to-message lineage. Every successful model response
+  now publishes a safe hash-only Artifact and a visible inter-Agent message;
+  all protocol state is isolated per problem and released before `solve()`
+  returns. The legacy flow remains the sole candidate-selection authority until
+  the later authoritative migration phase.
 - Completed true multi-Agent remediation Phase F1 resource governance: case
   concurrency is configuration-driven and capped at 3; the shared Provider now
   applies weighted rolling 200 RPM admission, six-call physical concurrency,

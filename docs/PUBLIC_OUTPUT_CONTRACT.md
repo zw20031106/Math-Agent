@@ -1,6 +1,6 @@
 # MathForge 公共输出契约
 
-版本：3.7
+版本：3.8
 
 ## 对外字段
 
@@ -53,7 +53,7 @@ Repair 输出不带定界符的标准 LaTeX 源，Host Formatter 负责唯一化
 
 ## Trace 内容
 
-公共 `trace` 使用 Judge Trace V3.7，是面向判分的有界审计叙事，不是内部
+公共 `trace` 使用 Judge Trace V3.8，是面向判分的有界审计叙事，不是内部
 框架日志或 Debug Journal：
 
 - `trace[0]` 固定为 `solution_process`，记录选中 Candidate 的公开方法、
@@ -66,6 +66,10 @@ Repair 输出不带定界符的标准 LaTeX 源，Host Formatter 负责唯一化
 - `model_activity` 按实际调用序号记录固定 LLM 角色、调用目的、关联 Candidate、
   成败状态、Schema 校验结果、Transport 尝试次数、Token 和耗时；不记录 Prompt、
   原始响应或异常正文。
+- `agent_protocol` 在 F2 Shadow Protocol 阶段公开 Agent/Task/Turn/Artifact/Message
+  的安全因果摘要；模型调用记录同步提供 `agent_id`、`task_id`、`turn_id`、
+  `output_artifact_id` 和 `message_id`。Artifact 只保存响应哈希与字符数，既有流程
+  仍是候选选择的唯一权威。
 - `candidate_summaries` 必须包含选中 Candidate 的 `trace[0]` 引用，并为每个成功
   生成但未选中的 Candidate 保留有界 `public_final_answer` 与
   `public_solution_steps`，使候选对比可审计；生成失败的候选不伪造内容。
