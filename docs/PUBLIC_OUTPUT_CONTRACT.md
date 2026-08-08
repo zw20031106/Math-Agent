@@ -80,6 +80,12 @@ Repair 输出不带定界符的标准 LaTeX 源，Host Formatter 负责唯一化
 - `llm_lemma_curator_completed`、`lemma_request_completed`、
   `agent_tool_request_completed`、`agent_replan_completed`、
   `candidate_partial_recovery_started` 和 `proof_token_canary_degraded` 记录 F4
+
+- F5 的 `candidate_pool_initialized` 公开候选作者、独立模型 Turn、方法签名和
+  结构独立性门结果；`peer_review_completed` 与 `rebuttal_completed` 分别记录
+  双向 Solver 审阅和作者回应的 Finding/Claim 引用、Artifact/Message/Thread
+  谱系。`solver_peer_review_phase_completed` 记录 Concede 或重复候选对下游活动
+  Candidate 集合的实际影响。公开 Trace 不包含审阅者或作者的私有思维链。
   的公开通信与降级结果。`agent_protocol.messages` 展示线程化消息引用，但不公开
   Prompt、原始响应、完整失败 Candidate 或私有推理。
 - `candidate_summaries` 必须包含选中 Candidate 的 `trace[0]` 引用，并为每个成功

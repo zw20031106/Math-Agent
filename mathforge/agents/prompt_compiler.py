@@ -119,6 +119,34 @@ _PROGRESS_DELTA_PROTOCOL = (
     '"closed_obligation_ids":[],"contradictions":[],"next_step":'
     '"<one bounded action>","stop_reason":""}.'
 )
+_PEER_REVIEW_PROTOCOL = (
+    _AGENT_TURN_ENVELOPE_PROTOCOL
+    + "Public protocol mode is peer_review. Use task_result_type "
+    "PeerReviewArtifact and action challenge_candidate. Put exactly these "
+    "fields in result_payload: finding_items, answer_assessment, "
+    "method_overlap_assessment, missing_conditions, counterexample_attempts, "
+    "unresolved_obligations, recommended_action, stop_reason. finding_items "
+    "must be a non-empty array. Every item must contain exactly finding_id, "
+    "candidate_id, claim_id, method_step_id, obligation_ids, status, "
+    "public_rationale, missing_condition, counterexample_summary, severity. "
+    "Cite the exact supplied candidate_id and a real supplied claim_id. status "
+    "is pass, fail, or unknown; severity is info, warning, error, or critical. "
+    "Use public_state_delta {} and outbound_intents []. Review the Candidate; "
+    "do not rewrite it, generate a replacement answer, or reveal private "
+    "reasoning."
+)
+_REBUTTAL_PROTOCOL = (
+    _AGENT_TURN_ENVELOPE_PROTOCOL
+    + "Public protocol mode is respond_to_review. Use task_result_type "
+    "RebuttalArtifact and action publish_rebuttal. Put exactly responses and "
+    "stop_reason in result_payload. responses is non-empty; each item contains "
+    "exactly finding_id, response, action, supporting_claim_ids, evidence_refs, "
+    "requested_followup. Cite only supplied Finding and Claim ids. action is "
+    "defend, clarify, or concede. A concession must be explicit; do not silently "
+    "repair or rewrite the Candidate in F5. Use public_state_delta {} and "
+    "outbound_intents []. Add only public content that responds to the Finding, "
+    "not private reasoning or a repeated debate."
+)
 _REPAIR_PATCH_PROTOCOL = (
     "Return exactly one bare JSON object containing replacement_claims, "
     "final_answer, public_solution_steps, and unresolved_obligations. "
@@ -331,6 +359,29 @@ class PromptCompiler:
             user_content,
             "\n".join(instructions),
             4096,
+        )
+
+    def compile_solver_collaboration(
+        self,
+        role_directory: str,
+        *,
+        user_content: str,
+        mode: str,
+    ) -> PromptCompilation:
+        if role_directory not in {"primary_solver", "alternative_solver"}:
+            raise ValueError("solver collaboration role is invalid")
+        if mode == "peer_review":
+            protocol = _PEER_REVIEW_PROTOCOL
+        elif mode == "respond_to_review":
+            protocol = _REBUTTAL_PROTOCOL
+        else:
+            raise ValueError("solver collaboration mode is invalid")
+        return self._compile(
+            role_directory,
+            mode,
+            user_content,
+            protocol,
+            stage_output_cap("peer_review"),
         )
 
     def compile_role(

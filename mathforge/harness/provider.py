@@ -540,6 +540,7 @@ class OfficialClientProvider:
         turn_kind: str | None = None,
         agent_id: str | None = None,
         agent_action_protocol: bool = False,
+        input_artifact_ids: tuple[str, ...] = (),
     ) -> str:
         active_turn_kind = turn_kind or stage
         protocol_runtime = budget.agent_runtime if budget is not None else None
@@ -576,6 +577,7 @@ class OfficialClientProvider:
                     stage=stage,
                     turn_kind=active_turn_kind,
                     agent_hint=agent_id or "",
+                    input_artifact_ids=tuple(input_artifact_ids),
                 )
                 if protocol_runtime is not None
                 else None

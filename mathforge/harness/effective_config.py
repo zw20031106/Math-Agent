@@ -155,6 +155,16 @@ def build_effective_config_snapshot(
                 ),
                 "claim_linked_public_review": config.enable_verifier,
                 "conflict_targeted_review": config.enable_verifier,
+                "solver_peer_cross_review": config.enable_peer_cross_review,
+                "peer_review_directions": (
+                    [
+                        "PrimarySolver->AlternativeSolver",
+                        "AlternativeSolver->PrimarySolver",
+                    ]
+                    if config.enable_peer_cross_review
+                    else []
+                ),
+                "author_rebuttal": config.enable_peer_cross_review,
                 "evidence_tiers": [
                     "hard_evidence",
                     "independent_corroboration",

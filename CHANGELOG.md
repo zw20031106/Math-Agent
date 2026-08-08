@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Completed true multi-Agent remediation Phase F5. Added a per-problem
+  CandidatePool with author/Turn/Artifact lineage, measurable MethodSignature
+  fields (`representation`, `core_invariant`, and `proof_direction`), and a
+  structural gate that rejects same-author, same-call, or substantively
+  duplicate candidates. After both independent Candidates publish, isolation
+  is released into two explicit review threads: PrimarySolver reviews the
+  Alternative and AlternativeSolver reviews the Primary in separate model
+  calls, then each author answers the resulting Claim-linked Findings in a new
+  rebuttal model Turn. Review and Rebuttal Artifacts, Task/message/thread
+  lineage, no-new-content close/reopen rules, Candidate concession state, and
+  downstream candidate filtering/conflict targets are now auditable in Trace.
+  The Competition profile enables this bounded F5 closure path; F6 Verifier
+  cross-exam, repair/new-branch policy, and final audit remain out of scope.
 - Completed true multi-Agent remediation Phase F4. PrimarySolver and
   AlternativeSolver now run isolated, independently stateful Agent Action
   loops without fixed planned rounds; public information gain, repeated

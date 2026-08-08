@@ -1,0 +1,343 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from dataclasses import asdict, dataclass, field, replace
+from hashlib import sha256
+import json
+import re
+from typing import Any
+
+from mathforge.harness.schemas import CandidateSolution
+from mathforge.verification.answer_normalization import canonical_answer
+
+
+_CANDIDATE_STATES = frozenset(
+    {
+        "draft",
+        "submitted",
+        "peer_reviewing",
+        "challenged",
+        "rebutted",
+        "repair_requested",
+        "revised",
+        "verified",
+        "incomplete",
+        "rejected",
+        "superseded",
+        "selected",
+    }
+)
+
+
+def _normalized(value: str) -> str:
+    return " ".join(re.sub(r"[^\w]+", " ", str(value).casefold()).split())
+
+
+def _digest(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True)
+class MethodSignature:
+    method_family: str
+    representation: str
+    core_invariant: str
+    proof_direction: str
+    claim_topology_sha256: str
+
+    @classmethod
+    def from_candidate(cls, candidate: CandidateSolution) -> "MethodSignature":
+        method_family = candidate.planned_method_family or candidate.method
+        step_kinds = [step.kind for step in candidate.method_steps]
+        claim_kinds = [claim.claim_kind for claim in candidate.claims]
+        representation = _normalized(
+            " ".join(
+                (
+                    method_family,
+                    candidate.method,
+                    *step_kinds[:8],
+                    *claim_kinds[:8],
+                )
+            )
+        )
+        critical = [
+            _normalized(claim.statement)
+            for claim in candidate.claims
+            if claim.importance == "critical" and claim.statement.strip()
+        ]
+        if not critical:
+            critical = [
+                _normalized(claim.statement)
+                for claim in candidate.claims[:4]
+                if claim.statement.strip()
+            ]
+        core_invariant = _digest(critical)[:16]
+        topology = [
+            {
+                "importance": claim.importance,
+                "check_type": claim.check_type,
+                "dependency_count": len(claim.depends_on),
+            }
+            for claim in candidate.claims
+        ]
+        proof_direction = "->".join(step_kinds) or "dependency-forward"
+        return cls(
+            method_family=_normalized(method_family),
+            representation=representation,
+            core_invariant=core_invariant,
+            proof_direction=proof_direction,
+            claim_topology_sha256=_digest(topology),
+        )
+
+    def to_dict(self) -> dict[str, str]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class IndependenceAssessment:
+    independent: bool
+    score: int
+    reason_codes: tuple[str, ...]
+    compared_candidate_id: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["reason_codes"] = list(self.reason_codes)
+        return payload
+
+
+@dataclass(frozen=True)
+class CandidatePoolEntry:
+    candidate_id: str
+    author_agent_id: str
+    source_turn_id: str
+    candidate_artifact_id: str
+    method_signature: MethodSignature
+    version: int
+    parent_candidate_id: str = ""
+    status: str = "submitted"
+    independent: bool = True
+    duplicate_of: str = ""
+    independence_score: int = 4
+    independence_reason_codes: tuple[str, ...] = ()
+    peer_review_ids: tuple[str, ...] = ()
+    rebuttal_ids: tuple[str, ...] = ()
+    conceded_finding_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.status not in _CANDIDATE_STATES:
+            raise ValueError("invalid CandidatePool state")
+        if not self.candidate_id or not self.author_agent_id:
+            raise ValueError("candidate and author identities are required")
+        if not self.source_turn_id or not self.candidate_artifact_id:
+            raise ValueError("candidate publication lineage is required")
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["method_signature"] = self.method_signature.to_dict()
+        for name in (
+            "independence_reason_codes",
+            "peer_review_ids",
+            "rebuttal_ids",
+            "conceded_finding_ids",
+        ):
+            payload[name] = list(payload[name])
+        return payload
+
+
+class CandidatePool:
+    """Per-problem immutable-version candidate registry and independence gate."""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, CandidatePoolEntry] = {}
+        self._candidates: dict[str, CandidateSolution] = {}
+
+    def submit(
+        self,
+        candidate: CandidateSolution,
+        *,
+        author_agent_id: str,
+        source_turn_id: str,
+        candidate_artifact_id: str,
+    ) -> CandidatePoolEntry:
+        if candidate.candidate_id in self._entries:
+            raise ValueError("candidate version is already registered")
+        signature = MethodSignature.from_candidate(candidate)
+        assessment = self._assess(candidate, signature, author_agent_id, source_turn_id)
+        entry = CandidatePoolEntry(
+            candidate_id=candidate.candidate_id,
+            author_agent_id=author_agent_id,
+            source_turn_id=source_turn_id,
+            candidate_artifact_id=candidate_artifact_id,
+            method_signature=signature,
+            version=candidate.version,
+            status="submitted" if assessment.independent else "rejected",
+            independent=assessment.independent,
+            duplicate_of=(
+                "" if assessment.independent else assessment.compared_candidate_id
+            ),
+            independence_score=assessment.score,
+            independence_reason_codes=assessment.reason_codes,
+        )
+        self._entries[candidate.candidate_id] = entry
+        self._candidates[candidate.candidate_id] = deepcopy(candidate)
+        return entry
+
+    def _assess(
+        self,
+        candidate: CandidateSolution,
+        signature: MethodSignature,
+        author_agent_id: str,
+        source_turn_id: str,
+    ) -> IndependenceAssessment:
+        if not self._entries:
+            return IndependenceAssessment(True, 4, ("first_candidate",))
+        for other_id, other in self._entries.items():
+            other_candidate = self._candidates[other_id]
+            reasons: list[str] = []
+            score = 0
+            if author_agent_id != other.author_agent_id:
+                score += 1
+            else:
+                reasons.append("same_author_agent")
+            if source_turn_id != other.source_turn_id:
+                score += 1
+            else:
+                reasons.append("same_model_turn")
+            if signature.method_family != other.method_signature.method_family:
+                score += 1
+            else:
+                reasons.append("same_method_family")
+            structural_same = sum(
+                (
+                    signature.representation
+                    == other.method_signature.representation,
+                    signature.core_invariant
+                    == other.method_signature.core_invariant,
+                    signature.proof_direction
+                    == other.method_signature.proof_direction,
+                    signature.claim_topology_sha256
+                    == other.method_signature.claim_topology_sha256,
+                )
+            )
+            same_answer = canonical_answer(
+                candidate.final_answer,
+                candidate.answer_type,
+            ) == canonical_answer(
+                other_candidate.final_answer,
+                other_candidate.answer_type,
+            )
+            if structural_same < 3:
+                score += 1
+            elif same_answer:
+                reasons.append("semantic_candidate_duplicate")
+            independent = (
+                author_agent_id != other.author_agent_id
+                and source_turn_id != other.source_turn_id
+                and not (same_answer and structural_same >= 3)
+            )
+            if not independent:
+                return IndependenceAssessment(
+                    False,
+                    score,
+                    tuple(dict.fromkeys(reasons)),
+                    other_id,
+                )
+        return IndependenceAssessment(True, 4, ("structurally_distinct",))
+
+    def mark_peer_reviewing(self, candidate_id: str) -> CandidatePoolEntry:
+        return self._update(candidate_id, status="peer_reviewing")
+
+    def attach_review(
+        self,
+        candidate_id: str,
+        review_id: str,
+        *,
+        challenged: bool,
+    ) -> CandidatePoolEntry:
+        entry = self._entries[candidate_id]
+        return self._update(
+            candidate_id,
+            status="challenged" if challenged else "peer_reviewing",
+            peer_review_ids=tuple(dict.fromkeys((*entry.peer_review_ids, review_id))),
+        )
+
+    def attach_rebuttal(
+        self,
+        candidate_id: str,
+        rebuttal_id: str,
+        *,
+        conceded_finding_ids: tuple[str, ...] = (),
+    ) -> CandidatePoolEntry:
+        entry = self._entries[candidate_id]
+        conceded = tuple(
+            dict.fromkeys((*entry.conceded_finding_ids, *conceded_finding_ids))
+        )
+        return self._update(
+            candidate_id,
+            status="rejected" if conceded else "rebutted",
+            rebuttal_ids=tuple(dict.fromkeys((*entry.rebuttal_ids, rebuttal_id))),
+            conceded_finding_ids=conceded,
+        )
+
+    def _update(self, candidate_id: str, **changes: Any) -> CandidatePoolEntry:
+        entry = replace(self._entries[candidate_id], **changes)
+        self._entries[candidate_id] = entry
+        return entry
+
+    def entry(self, candidate_id: str) -> CandidatePoolEntry:
+        return self._entries[candidate_id]
+
+    def independent_entries(self) -> tuple[CandidatePoolEntry, ...]:
+        return tuple(
+            entry
+            for entry in self._entries.values()
+            if entry.independent and entry.status != "rejected"
+        )
+
+    def active_candidate_ids(self) -> tuple[str, ...]:
+        return tuple(
+            entry.candidate_id
+            for entry in self._entries.values()
+            if entry.independent
+            and entry.status not in {"rejected", "superseded", "incomplete"}
+        )
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        return [entry.to_dict() for entry in self._entries.values()]
+
+
+@dataclass
+class ReviewThreadGuard:
+    """Stops circular review replies that add no new public content."""
+
+    thread_id: str
+    payload_hashes: set[str] = field(default_factory=set)
+    status: str = "open"
+
+    def record(self, payload: dict[str, Any]) -> bool:
+        if self.status != "open":
+            return False
+        digest = _digest(payload)
+        if digest in self.payload_hashes:
+            self.status = "closed"
+            return False
+        self.payload_hashes.add(digest)
+        return True
+
+    def close(self) -> None:
+        self.status = "closed"
+
+    def reopen(self, payload: dict[str, Any]) -> bool:
+        digest = _digest(payload)
+        if digest in self.payload_hashes:
+            return False
+        self.status = "open"
+        self.payload_hashes.add(digest)
+        return True

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import re
+from typing import Any
 
 from mathforge.agents.prompt_compiler import PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
@@ -81,12 +82,16 @@ class VerifierSkepticAgent:
         context_view: RoleContextView | None = None,
         evidence: list[EvidenceRecord] | None = None,
         skill_context: str = "",
+        peer_reviews: list[Any] | None = None,
+        rebuttals: list[Any] | None = None,
     ) -> BatchVerificationResult:
         payload = self._review_payload(
             problem,
             candidates,
             obligations,
             evidence or [],
+            peer_reviews or [],
+            rebuttals or [],
         )
         if (
             not payload["reviewable_obligation_ids"]
@@ -183,12 +188,14 @@ class VerifierSkepticAgent:
         candidates: list[CandidateSolution],
         obligations: dict[str, list[ProofObligation]],
         evidence: list[EvidenceRecord],
+        peer_reviews: list[Any] | None = None,
+        rebuttals: list[Any] | None = None,
     ) -> dict:
         summaries = [
             CandidateReviewSummary.from_candidate(candidate)
             for candidate in candidates
         ]
-        matrix = CandidateConflictMatrix.build(summaries)
+        matrix = CandidateConflictMatrix.build(summaries, peer_reviews or [])
         reviewable_ids = reviewable_obligation_ids(
             candidates,
             obligations,
@@ -211,6 +218,14 @@ class VerifierSkepticAgent:
             "review_targets": [
                 target.to_dict()
                 for target in matrix.review_targets()
+            ],
+            "solver_peer_reviews": [
+                item.to_dict() if hasattr(item, "to_dict") else dict(item)
+                for item in (peer_reviews or [])
+            ],
+            "solver_rebuttals": [
+                item.to_dict() if hasattr(item, "to_dict") else dict(item)
+                for item in (rebuttals or [])
             ],
             "reviewable_obligation_ids": list(reviewable_ids),
             "unreviewable_obligation_ids": sorted(

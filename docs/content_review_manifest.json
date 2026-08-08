@@ -33,20 +33,20 @@
       "path": "prompts",
       "pattern": "contract.md",
       "expected_count": 7,
-        "version": "prompt-contract-9-f4-agent-action-lemma-llm",
-        "engineering_reviewer": "codex-phase-f4-autonomous-agent-audit",
-        "review_date": "2026-08-07",
-        "sha256": "137f7e7787e84422bbfcc5d3d9188cd83109c2d64166303ed9c6daec774c3508"
+        "version": "prompt-contract-10-f5-peer-review-rebuttal",
+        "engineering_reviewer": "codex-phase-f5-peer-review-audit",
+        "review_date": "2026-08-08",
+        "sha256": "d2b6d56c2bf030afc8466798286722c084e920631b098de642ea16ca66038388"
     },
     {
       "id": "prompt-compiler",
       "kind": "file",
       "path": "mathforge/agents/prompt_compiler.py",
       "expected_count": 1,
-      "version": "prompt-compiler-10-f4-typed-turn-tokens",
-      "engineering_reviewer": "codex-phase-f4-autonomous-agent-audit",
-      "review_date": "2026-08-07",
-      "sha256": "1b5c248c4c109de3a0fd71c4c628c9469e746c1f90c97b86406064b85d008b9c"
+      "version": "prompt-compiler-11-f5-collaboration-turns",
+      "engineering_reviewer": "codex-phase-f5-peer-review-audit",
+      "review_date": "2026-08-08",
+      "sha256": "9a1790d48e38c634b4184cd0c22ccc7461ab0b3388a86c72ae584d8e70f94727"
     },
     {
       "id": "model-candidate-boundary",
@@ -61,10 +61,10 @@
         "mathforge/parsing/solution_parser.py"
       ],
       "expected_count": 7,
-      "version": "model-candidate-boundary-2.1-f4-agent-envelope",
-      "engineering_reviewer": "codex-phase-f4-autonomous-agent-audit",
-      "review_date": "2026-08-07",
-      "sha256": "c044fc7dc0172ad6ca540b7096a37fa86d1259573099427824dc415efd3931cf"
+      "version": "model-candidate-boundary-2.1-f5-review-input",
+      "engineering_reviewer": "codex-phase-f5-peer-review-audit",
+      "review_date": "2026-08-08",
+      "sha256": "0e03ea7dc2737df907112a77b9a7eb4ce0eaec4302925cf242f12083fe2e3894"
     },
     {
       "id": "reasoning-state",
@@ -125,16 +125,17 @@
         "mathforge/harness/schemas.py"
       ],
       "expected_count": 3,
-        "version": "typed-lemma-feedback-phase-f4-independent-llm-agent",
-        "engineering_reviewer": "codex-phase-f4-autonomous-agent-audit",
-        "review_date": "2026-08-07",
-        "sha256": "f1f9cd5b8a78f92b4a1b9f1236f55388b826a549798cc0ff572a912a38e06b98"
+        "version": "typed-lemma-feedback-phase-f5-session-collaboration",
+        "engineering_reviewer": "codex-phase-f5-peer-review-audit",
+        "review_date": "2026-08-08",
+        "sha256": "afb1a7b5f5cbb8cbec735f4c0ec91ed6ee808832990e927aa02d09e34735a416"
     },
     {
       "id": "verification-closure",
       "kind": "file_set",
       "paths": [
         "mathforge/agents/verifier.py",
+        "mathforge/agents/peer_review.py",
         "mathforge/context/compressor.py",
         "mathforge/context/views.py",
         "mathforge/harness/effective_config.py",
@@ -146,14 +147,40 @@
         "mathforge/verification/admission.py",
         "mathforge/verification/completion.py",
         "mathforge/verification/cross_review.py",
+        "mathforge/verification/candidate_pool.py",
+        "mathforge/verification/peer_review.py",
         "mathforge/verification/evidence.py",
         "mathforge/verification/proof_obligations.py"
       ],
-      "expected_count": 14,
-        "version": "verification-closure-phase-f4-autonomous-candidates",
-        "engineering_reviewer": "codex-phase-f4-autonomous-agent-audit",
-        "review_date": "2026-08-07",
-        "sha256": "5104bd65bd46a84f1b18e087a218037f907ac0cb09bb4962e46aa7b29d66c7ee"
+      "expected_count": 17,
+        "version": "verification-closure-phase-f5-solver-peer-review",
+        "engineering_reviewer": "codex-phase-f5-peer-review-audit",
+        "review_date": "2026-08-08",
+        "sha256": "e0c72ed6cc9f6f26b9c0a3ef9f98f9b8e496a1440fcefa9bb97b1807ff548dcb"
+    },
+    {
+      "id": "phase-f5-agent-review-protocol",
+      "kind": "file_set",
+      "paths": [
+        "mathforge/agent_runtime/mailbox.py",
+        "mathforge/agent_runtime/protocol.py",
+        "mathforge/agent_runtime/runtime.py",
+        "mathforge/agent_runtime/state.py",
+        "mathforge/agents/peer_review.py",
+        "mathforge/config.py",
+        "mathforge/harness/events.py",
+        "mathforge/harness/provider.py",
+        "mathforge/harness/schemas.py",
+        "mathforge/output/judge_trace.py",
+        "mathforge/runtime.py",
+        "mathforge/verification/candidate_pool.py",
+        "mathforge/verification/peer_review.py"
+      ],
+      "expected_count": 13,
+      "version": "phase-f5-agent-review-protocol-1",
+      "engineering_reviewer": "codex-phase-f5-peer-review-audit",
+      "review_date": "2026-08-08",
+      "sha256": "c6e0210844dab2d600dbe28c234ad96dee8cfa78793c659a9b3a7cba9f1cbf18"
     },
     {
       "id": "reviewed-method-cards",
@@ -211,10 +238,10 @@
         "scripts/propose_competition_config.py"
       ],
       "expected_count": 4,
-      "version": "phase-f4-turn-policy-trace-4.0",
-      "engineering_reviewer": "codex-phase-f4-autonomous-agent-audit",
-      "review_date": "2026-08-07",
-      "sha256": "b0044111fc2e6608709e9fcb6b4c80bb30c5b4db46e24ffb1fa35ced40cc4fbf"
+      "version": "phase-f5-peer-review-enabled-trace-4.0",
+      "engineering_reviewer": "codex-phase-f5-peer-review-audit",
+      "review_date": "2026-08-08",
+      "sha256": "38f3d42e5b285882cbf8d652de364782f2c1f424b4c129c3a1be6e20af983ef1"
     },
     {
       "id": "router-calibration",

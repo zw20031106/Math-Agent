@@ -78,11 +78,13 @@ class CandidateConflict:
 class CandidateConflictMatrix:
     candidate_ids: tuple[str, ...]
     conflicts: tuple[CandidateConflict, ...]
+    peer_review_targets: tuple["ReviewTarget", ...] = ()
 
     @classmethod
     def build(
         cls,
         summaries: list[CandidateReviewSummary],
+        peer_reviews: list[Any] | tuple[Any, ...] = (),
     ) -> "CandidateConflictMatrix":
         ordered = sorted(summaries, key=lambda item: item.candidate_id)
         conflicts = []
@@ -121,9 +123,31 @@ class CandidateConflictMatrix:
                     ),
                 )
             )
+        peer_targets = []
+        for review in peer_reviews:
+            review_id = str(getattr(review, "review_id", ""))
+            candidate_id = str(getattr(review, "candidate_id", ""))
+            for finding in getattr(review, "finding_items", ()):
+                if str(getattr(finding, "status", "")) == "pass":
+                    continue
+                finding_id = str(getattr(finding, "finding_id", ""))
+                if not review_id or not candidate_id or not finding_id:
+                    continue
+                peer_targets.append(
+                    ReviewTarget(
+                        target_id=f"peer:{review_id}:{finding_id}",
+                        level="claim",
+                        candidate_ids=(candidate_id,),
+                        reason_codes=(
+                            f"peer_review_{getattr(finding, 'status', 'unknown')}",
+                            f"severity_{getattr(finding, 'severity', 'warning')}",
+                        ),
+                    )
+                )
         return cls(
             candidate_ids=tuple(item.candidate_id for item in ordered),
             conflicts=tuple(conflicts),
+            peer_review_targets=tuple(peer_targets),
         )
 
     def to_dict(self) -> dict:
@@ -185,7 +209,7 @@ class CandidateConflictMatrix:
                         reason_codes=claim_reasons,
                     )
                 )
-        return tuple(targets)
+        return tuple((*targets, *self.peer_review_targets))
 
 
 @dataclass(frozen=True)

@@ -53,6 +53,7 @@ from mathforge.agents.lemma_curator import (
     LLMLemmaCuratorAgent,
     LLMLemmaRequest,
 )
+from mathforge.agents.peer_review import SolverPeerReviewAgent
 from mathforge.harness.orchestration import (
     BranchFailure,
     CandidateOrchestrator,
@@ -127,6 +128,7 @@ from mathforge.verification.cross_review import (
     CandidateReviewSummary,
     has_reviewable_work,
 )
+from mathforge.verification.candidate_pool import CandidatePool
 from mathforge.tools.shadow_solver import ShadowOutcome
 from mathforge.verification.answer_normalization import canonical_answer
 
@@ -283,6 +285,10 @@ class MathForgeHarness:
         self._arbitration = ArbitrationPolicy(self._tool_executor)
         self._lemma_loop = VerifiedLemmaLoop()
         self._llm_lemma_curator = LLMLemmaCuratorAgent(
+            self._provider,
+            self._contracts,
+        )
+        self._peer_review_agent = SolverPeerReviewAgent(
             self._provider,
             self._contracts,
         )
@@ -1229,6 +1235,17 @@ class MathForgeHarness:
             )
             if not fanout.candidates:
                 raise RuntimeError("all solver branches failed")
+            if (
+                self._config.enable_peer_cross_review
+                and autonomous_agents_enabled
+            ):
+                fanout.candidates = self._run_solver_peer_review_phase(
+                    session,
+                    trace,
+                    fanout.candidates,
+                )
+                if not fanout.candidates:
+                    raise RuntimeError("all independent candidates were conceded")
             if session.budget.must_finalize():
                 trace.add(
                     "deadline_finalize",
@@ -1921,7 +1938,8 @@ class MathForgeHarness:
                 for item in viable
             ]
             conflict_matrix = CandidateConflictMatrix.build(
-                review_summaries
+                review_summaries,
+                session.peer_reviews,
             )
             review_targets = conflict_matrix.review_targets()
             trace.add(
@@ -3647,6 +3665,226 @@ class MathForgeHarness:
             },
         )
 
+    def _run_solver_peer_review_phase(
+        self,
+        session,
+        trace: TraceBuilder,
+        candidates: list,
+    ) -> list:
+        pool = CandidatePool()
+        session.candidate_pool = pool
+        solver_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.role in {"PrimarySolver", "AlternativeSolver"}
+            and candidate.source.startswith("llm_")
+        ]
+        for candidate in solver_candidates:
+            try:
+                lineage = session.agent_runtime.candidate_publication(
+                    candidate.candidate_id
+                )
+                pool.submit(candidate, **{
+                    key: lineage[key]
+                    for key in (
+                        "author_agent_id",
+                        "source_turn_id",
+                        "candidate_artifact_id",
+                    )
+                })
+            except (KeyError, ValueError) as error:
+                trace.add(
+                    "candidate_pool_registration_failed",
+                    candidate_id=candidate.candidate_id,
+                    failure_code=type(error).__name__,
+                )
+        independent = list(pool.independent_entries())
+        trace.add(
+            "candidate_pool_initialized",
+            entries=pool.snapshot(),
+            submitted_count=len(solver_candidates),
+            independent_count=len(independent),
+            structural_independence_gate=True,
+            candidate_isolation_released=True,
+        )
+        by_role = {
+            next(
+                candidate.role
+                for candidate in solver_candidates
+                if candidate.candidate_id == entry.candidate_id
+            ): entry
+            for entry in independent
+        }
+        if not {"PrimarySolver", "AlternativeSolver"} <= set(by_role):
+            trace.add(
+                "solver_peer_review_phase_completed",
+                status="independence_gate_failed",
+                bidirectional_reviews=0,
+                rebuttals=0,
+                candidate_pool=pool.snapshot(),
+            )
+            active_ids = set(pool.active_candidate_ids())
+            return [
+                candidate
+                for candidate in candidates
+                if candidate.role not in {"PrimarySolver", "AlternativeSolver"}
+                or candidate.candidate_id in active_ids
+            ]
+
+        candidate_by_id = {
+            candidate.candidate_id: candidate for candidate in solver_candidates
+        }
+        pairs = (
+            (by_role["PrimarySolver"], by_role["AlternativeSolver"]),
+            (by_role["AlternativeSolver"], by_role["PrimarySolver"]),
+        )
+        review_outcomes = []
+        for reviewer_entry, target_entry in pairs:
+            reviewer = candidate_by_id[reviewer_entry.candidate_id]
+            target = candidate_by_id[target_entry.candidate_id]
+            pool.mark_peer_reviewing(target.candidate_id)
+            trace.add(
+                "peer_review_started",
+                reviewer_role=reviewer.role,
+                reviewer_agent_id=reviewer_entry.author_agent_id,
+                author_agent_id=target_entry.author_agent_id,
+                candidate_id=target.candidate_id,
+                candidate_version=target.version,
+                candidate_artifact_id=target_entry.candidate_artifact_id,
+                independent_model_call=True,
+            )
+            try:
+                outcome = self._peer_review_agent.review(
+                    problem=session.problem_ir,
+                    candidate=target,
+                    candidate_artifact_id=target_entry.candidate_artifact_id,
+                    author_agent_id=target_entry.author_agent_id,
+                    reviewer_agent_id=reviewer_entry.author_agent_id,
+                    reviewer_role=reviewer.role,
+                    reviewer_candidate_id=reviewer.candidate_id,
+                    obligations=session.problem_obligations,
+                    budget=session.budget,
+                    max_tokens=self._config.primary_max_tokens,
+                )
+            except Exception as error:
+                trace.add(
+                    "peer_review_completed",
+                    status="failed",
+                    reviewer_role=reviewer.role,
+                    candidate_id=target.candidate_id,
+                    independent_model_call=True,
+                    failure_code=self._reasoning_failure_code(error),
+                )
+                continue
+            session.peer_reviews.append(outcome.record)
+            review_outcomes.append(outcome)
+            pool.attach_review(
+                target.candidate_id,
+                outcome.record.review_id,
+                challenged=outcome.record.challenged,
+            )
+            trace.add(
+                "peer_review_completed",
+                status="completed",
+                review_id=outcome.record.review_id,
+                reviewer_role=reviewer.role,
+                reviewer_agent_id=reviewer_entry.author_agent_id,
+                author_agent_id=target_entry.author_agent_id,
+                candidate_id=target.candidate_id,
+                candidate_version=target.version,
+                finding_ids=[
+                    item.finding_id for item in outcome.record.finding_items
+                ],
+                claim_ids=[item.claim_id for item in outcome.record.finding_items],
+                challenged=outcome.record.challenged,
+                independent_model_call=True,
+                host_generated=False,
+                artifact_id=outcome.artifact_id,
+                message_id=outcome.message_id,
+                thread_id=outcome.thread_id,
+            )
+
+        rebuttal_count = 0
+        for review_outcome in review_outcomes:
+            review = review_outcome.record
+            target = candidate_by_id[review.candidate_id]
+            target_entry = pool.entry(target.candidate_id)
+            trace.add(
+                "rebuttal_started",
+                review_id=review.review_id,
+                candidate_id=target.candidate_id,
+                author_agent_id=target_entry.author_agent_id,
+                reviewer_agent_id=review.reviewer_agent_id,
+                finding_ids=[item.finding_id for item in review.finding_items],
+                independent_model_call=True,
+                thread_id=review_outcome.thread_id,
+            )
+            try:
+                outcome = self._peer_review_agent.rebut(
+                    candidate=target,
+                    review=review,
+                    author_agent_id=target_entry.author_agent_id,
+                    reviewer_agent_id=review.reviewer_agent_id,
+                    author_role=target.role,
+                    author_candidate_id=target.candidate_id,
+                    budget=session.budget,
+                    max_tokens=self._config.primary_max_tokens,
+                )
+            except Exception as error:
+                trace.add(
+                    "rebuttal_completed",
+                    status="failed",
+                    review_id=review.review_id,
+                    candidate_id=target.candidate_id,
+                    independent_model_call=True,
+                    failure_code=self._reasoning_failure_code(error),
+                    thread_id=review_outcome.thread_id,
+                )
+                continue
+            rebuttal_count += 1
+            session.rebuttals.append(outcome.record)
+            pool.attach_rebuttal(
+                target.candidate_id,
+                outcome.record.rebuttal_id,
+                conceded_finding_ids=outcome.record.conceded_finding_ids,
+            )
+            trace.add(
+                "rebuttal_completed",
+                status="completed",
+                rebuttal_id=outcome.record.rebuttal_id,
+                review_id=review.review_id,
+                candidate_id=target.candidate_id,
+                finding_ids=[item.finding_id for item in outcome.record.responses],
+                actions=[item.action for item in outcome.record.responses],
+                conceded_finding_ids=list(outcome.record.conceded_finding_ids),
+                independent_model_call=True,
+                artifact_id=outcome.artifact_id,
+                message_id=outcome.message_id,
+                thread_id=outcome.thread_id,
+                thread_status="closed",
+            )
+
+        active_ids = set(pool.active_candidate_ids())
+        trace.add(
+            "solver_peer_review_phase_completed",
+            status=(
+                "completed"
+                if len(review_outcomes) == 2 and rebuttal_count == 2
+                else "partial"
+            ),
+            bidirectional_reviews=len(review_outcomes),
+            rebuttals=rebuttal_count,
+            active_candidate_ids=sorted(active_ids),
+            candidate_pool=pool.snapshot(),
+            downstream_candidate_filter_applied=True,
+        )
+        return [
+            candidate
+            for candidate in candidates
+            if candidate.role not in {"PrimarySolver", "AlternativeSolver"}
+            or candidate.candidate_id in active_ids
+        ]
+
     def _run_initial_llm_lemma_curator(
         self,
         session,
@@ -4518,6 +4756,8 @@ class MathForgeHarness:
                 context_view=verifier_context,
                 evidence=session.evidence,
                 skill_context=skill_context,
+                peer_reviews=session.peer_reviews,
+                rebuttals=session.rebuttals,
             )
         except (
             BudgetExceeded,
@@ -4579,7 +4819,8 @@ class MathForgeHarness:
             [
                 CandidateReviewSummary.from_candidate(candidate)
                 for candidate in candidates
-            ]
+            ],
+            session.peer_reviews,
         )
         expected_review_target_ids = {
             target.target_id

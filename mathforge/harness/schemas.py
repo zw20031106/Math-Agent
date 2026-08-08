@@ -1483,6 +1483,9 @@ class MathSession:
     route_plan: RoutePlan | None = None
     reasoning_state: Any = None
     candidates: list[CandidateSolution] = field(default_factory=list)
+    candidate_pool: Any = None
+    peer_reviews: list[Any] = field(default_factory=list)
+    rebuttals: list[Any] = field(default_factory=list)
     evidence: list[EvidenceRecord] = field(default_factory=list)
     problem_obligations: list[ProofObligation] = field(default_factory=list)
     proof_obligations: dict[str, list[ProofObligation]] = field(default_factory=dict)
@@ -1540,6 +1543,19 @@ class MathSession:
             "problem_ir": self.problem_ir.to_dict() if self.problem_ir else None,
             "route_plan": self.route_plan.to_dict() if self.route_plan else None,
             "candidates": [candidate.to_dict() for candidate in self.candidates],
+            "candidate_pool": (
+                self.candidate_pool.snapshot()
+                if self.candidate_pool is not None
+                else []
+            ),
+            "peer_reviews": [
+                item.to_dict() if hasattr(item, "to_dict") else dict(item)
+                for item in self.peer_reviews
+            ],
+            "rebuttals": [
+                item.to_dict() if hasattr(item, "to_dict") else dict(item)
+                for item in self.rebuttals
+            ],
             "evidence": [record.to_dict() for record in self.evidence],
             "problem_obligations": [
                 obligation.to_dict()

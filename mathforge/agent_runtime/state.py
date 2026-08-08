@@ -151,6 +151,7 @@ class AgentTaskRegistry:
         plan_id: str = "",
         subgoal_ids: tuple[str, ...] = (),
         method_family: str = "",
+        input_artifact_ids: tuple[str, ...] = (),
     ) -> AgentTask:
         with self._lock:
             instance = self._agents.instance(agent_id)
@@ -173,10 +174,13 @@ class AgentTaskRegistry:
                 plan_id=str(plan_id),
                 subgoal_ids=tuple(subgoal_ids),
                 method_family=str(method_family),
+                input_artifact_ids=tuple(input_artifact_ids),
             )
             self._tasks[task_id] = task
             self._agents.append(agent_id, "accepted_task_ids", task_id)
             self._agents.update(agent_id, current_task_id=task_id)
+            for artifact_id in input_artifact_ids:
+                self._agents.append(agent_id, "input_artifact_ids", artifact_id)
             return task
 
     def transition(self, task_id: str, status: str) -> AgentTask:

@@ -244,6 +244,11 @@ class TurnContext:
     plan_id: str = ""
     subgoal_ids: tuple[str, ...] = ()
     method_family: str = ""
+    input_artifact_ids: tuple[str, ...] = ()
+    recipient_agent_id: str = ""
+    thread_id: str = ""
+    reply_to_message_id: str = ""
+    close_thread_after_publish: bool = False
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -260,6 +265,11 @@ class TurnContext:
             "plan_id": self.plan_id,
             "subgoal_ids": list(self.subgoal_ids),
             "method_family": self.method_family,
+            "input_artifact_ids": list(self.input_artifact_ids),
+            "recipient_agent_id": self.recipient_agent_id,
+            "thread_id": self.thread_id,
+            "reply_to_message_id": self.reply_to_message_id,
+            "close_thread_after_publish": self.close_thread_after_publish,
         }
 
 

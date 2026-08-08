@@ -35,6 +35,10 @@ JUDGE_EVENT_STAGES = {
     "skills_selected": "skill_selection",
     "model_activity": "model_activity",
     "agent_protocol": "orchestration",
+    "candidate_pool_initialized": "peer_review",
+    "peer_review_completed": "peer_review",
+    "rebuttal_completed": "peer_review",
+    "solver_peer_review_phase_completed": "peer_review",
     "tool_feedback_completed": "evidence",
     "agent_tool_request_completed": "evidence",
     "llm_lemma_curator_completed": "lemma",
@@ -65,6 +69,8 @@ _PROTECTED_EVENTS = frozenset(
         "solution_process",
         "workflow_overview",
         "session_started",
+        "candidate_pool_initialized",
+        "solver_peer_review_phase_completed",
         "tool_feedback_completed",
         "evidence_summary",
         "proof_completion_summary",
@@ -534,17 +540,142 @@ def project_judge_trace(
     append(
         "agent_protocol",
         protocol,
+        {
+            **_select(
+                protocol,
+                (
+                    "protocol_schema_version",
+                    "mode",
+                    "selection_authority",
+                    "counts",
+                    "call_turn_count_match",
+                ),
+            ),
+            "tasks": [
+                _select(
+                    item,
+                    (
+                        "task_id",
+                        "task_type",
+                        "assigned_agent_id",
+                        "status",
+                        "input_artifact_ids",
+                        "output_artifact_ids",
+                    ),
+                )
+                for item in (protocol or {}).get("tasks", [])
+                if isinstance(item, dict)
+            ],
+            "messages": [
+                _select(
+                    item,
+                    (
+                        "message_id",
+                        "thread_id",
+                        "sender_agent_id",
+                        "recipient_agent_id",
+                        "message_type",
+                        "task_id",
+                        "artifact_ids",
+                        "reply_to_message_id",
+                    ),
+                )
+                for item in (protocol or {}).get("messages", [])
+                if isinstance(item, dict)
+            ],
+            "threads": [
+                _select(
+                    item,
+                    (
+                        "thread_id",
+                        "participant_agent_ids",
+                        "message_ids",
+                        "status",
+                    ),
+                )
+                for item in (protocol or {}).get("threads", [])
+                if isinstance(item, dict)
+            ],
+        },
+    )
+
+    candidate_pool = _last(by_name, "candidate_pool_initialized")
+    append(
+        "candidate_pool_initialized",
+        candidate_pool,
         _select(
-            protocol,
+            candidate_pool,
             (
-                "protocol_schema_version",
-                "mode",
-                "selection_authority",
-                "counts",
-                "call_turn_count_match",
-                "turn_lineage",
-                "messages",
-                "threads",
+                "submitted_count",
+                "independent_count",
+                "structural_independence_gate",
+                "candidate_isolation_released",
+                "entries",
+            ),
+        ),
+    )
+    for review_event in by_name.get("peer_review_completed", []):
+        append(
+            "peer_review_completed",
+            review_event,
+            _select(
+                review_event,
+                (
+                    "status",
+                    "review_id",
+                    "reviewer_role",
+                    "reviewer_agent_id",
+                    "author_agent_id",
+                    "candidate_id",
+                    "candidate_version",
+                    "finding_ids",
+                    "claim_ids",
+                    "challenged",
+                    "independent_model_call",
+                    "host_generated",
+                    "artifact_id",
+                    "message_id",
+                    "thread_id",
+                    "failure_code",
+                ),
+            ),
+        )
+    for rebuttal_event in by_name.get("rebuttal_completed", []):
+        append(
+            "rebuttal_completed",
+            rebuttal_event,
+            _select(
+                rebuttal_event,
+                (
+                    "status",
+                    "rebuttal_id",
+                    "review_id",
+                    "candidate_id",
+                    "finding_ids",
+                    "actions",
+                    "conceded_finding_ids",
+                    "independent_model_call",
+                    "artifact_id",
+                    "message_id",
+                    "thread_id",
+                    "thread_status",
+                    "failure_code",
+                ),
+            ),
+        )
+    review_phase = _last(by_name, "solver_peer_review_phase_completed")
+    append(
+        "solver_peer_review_phase_completed",
+        review_phase,
+        _select(
+            review_phase,
+            (
+                "status",
+                "bidirectional_reviews",
+                "rebuttals",
+                "active_candidate_ids",
+                "candidate_pool",
+                "downstream_candidate_filter_applied",
             ),
         ),
     )
@@ -1689,7 +1820,6 @@ def _workflow_overview(
             ["repair_history"],
         )
 
-    arbitration = _last(by_name, "candidate_arbitrated") or {}
     add(
         "arbitration",
         "selected" if selected_id else "no_selection",
@@ -1798,8 +1928,12 @@ def _model_activity(
                 ),
                 "output_artifact_id": str(record.get("output_artifact_id", "")),
                 "message_id": str(record.get("message_id", "")),
-                "role": _model_role(stage),
-                "purpose": _model_purpose(stage),
+                "agent_mode": str(record.get("agent_mode", "")),
+                "role": str(record.get("agent_role", "")) or _model_role(stage),
+                "purpose": _model_purpose(
+                    stage,
+                    str(record.get("turn_kind", stage)),
+                ),
                 "candidate_ids": candidate_ids,
                 "status": str(record.get("status", "unknown")),
                 "failure_code": str(record.get("failure_code", "")),
@@ -1907,7 +2041,48 @@ def _model_activity(
                 ),
             }
         )
-    return calls
+    public_fields = {
+        "call_index",
+        "call_id",
+        "logical_call_index",
+        "logical_call_consumed",
+        "dispatched",
+        "stage",
+        "turn_kind",
+        "agent_id",
+        "agent_mode",
+        "task_id",
+        "turn_id",
+        "role",
+        "purpose",
+        "candidate_ids",
+        "status",
+        "failure_code",
+        "response_validation",
+        "prompt_tokens",
+        "configured_output_tokens",
+        "requested_max_output_tokens",
+        "effective_max_output_tokens",
+        "stage_output_cap_tokens",
+        "max_output_tokens",
+        "context_window_tokens",
+        "safety_margin_tokens",
+        "agent_wait_seconds",
+        "scheduler_wait_seconds",
+        "rate_wait_seconds",
+        "stage_p95_seconds",
+        "effective_queue_budget_seconds",
+        "stage_timeout_seconds",
+        "effective_stage_timeout_seconds",
+        "finish_reason",
+        "tail_state",
+        "stop_reason",
+        "total_elapsed_seconds",
+    }
+    return [
+        {key: value for key, value in call.items() if key in public_fields}
+        for call in calls
+    ]
 
 
 def _model_role(stage: str) -> str:
@@ -1922,7 +2097,9 @@ def _model_role(stage: str) -> str:
     }.get(stage, "UnknownRole")
 
 
-def _model_purpose(stage: str) -> str:
+def _model_purpose(stage: str, turn_kind: str = "") -> str:
+    if turn_kind == "peer_review":
+        return "solver_peer_review_or_rebuttal"
     return {
         "router": "route_planning",
         "primary": "candidate_reasoning",

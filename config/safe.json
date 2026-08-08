@@ -68,6 +68,7 @@
   "enable_tools": false,
   "enable_evidence": false,
   "enable_proof_obligations": false,
+  "enable_peer_cross_review": false,
   "enable_verifier": false,
   "enable_memory": false,
   "enable_lemma_loop": false,

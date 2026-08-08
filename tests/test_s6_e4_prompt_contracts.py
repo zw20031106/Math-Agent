@@ -68,8 +68,8 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
     )
     expected_versions = {
         "router_planner": "3",
-        "primary_solver": "8",
-        "alternative_solver": "6",
+        "primary_solver": "9",
+        "alternative_solver": "7",
         "lemma_curator": "3",
         "repair": "4",
         "verifier_skeptic": "4",

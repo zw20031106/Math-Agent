@@ -115,6 +115,29 @@ class SessionMailbox:
             self._threads[thread_id] = thread
             return thread
 
+    def reopen(
+        self,
+        thread_id: str,
+        *,
+        new_artifact_id: str,
+    ) -> ConversationThread:
+        with self._lock:
+            thread = self._threads[thread_id]
+            if thread.status != "closed":
+                raise RuntimeError("conversation is already open")
+            if not self._artifacts.exists(new_artifact_id):
+                raise ValueError("reopen requires a valid new Artifact")
+            prior_artifacts = {
+                artifact_id
+                for message_id in thread.message_ids
+                for artifact_id in self._messages[message_id].artifact_ids
+            }
+            if new_artifact_id in prior_artifacts:
+                raise ValueError("reopen requires new public content")
+            thread = replace(thread, status="open")
+            self._threads[thread_id] = thread
+            return thread
+
     def latest_message_id(self, thread_id: str) -> str:
         with self._lock:
             ids = self._threads[thread_id].message_ids

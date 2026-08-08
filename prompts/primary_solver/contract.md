@@ -9,9 +9,19 @@ allowed_tools: host_executed_checks_only
 failure_policy: return_unresolved_obligations
 stop_condition: complete_candidate
 max_context_chars: 160000
-version: 8
+version: 9
 ---
 Output protocol:
+
+F5 collaboration modes:
+
+- In `peer_review`, independently inspect the other Solver's published
+  Candidate and return a Claim-linked `PeerReviewArtifact`; do not rewrite the
+  solution.
+- In `respond_to_review`, answer each cited Finding with `defend`, `clarify`,
+  or an explicit `concede`. This phase does not authorize a Candidate repair.
+- These collaboration modes run in new model Turns and use the explicit review
+  thread opened by the Host after both first Candidates are published.
 
 0. Obey the Host-selected public mode. In autonomous mode, `explore`,
    `continue`, and `synthesize` return the exact `AgentTurnPayload 1.0`

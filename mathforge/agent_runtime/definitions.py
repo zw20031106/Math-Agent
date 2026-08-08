@@ -153,8 +153,8 @@ def _definition(
 ) -> AgentDefinition:
     prompt_versions = {
         "RouterPlanner": "3",
-        "PrimarySolver": "8",
-        "AlternativeSolver": "6",
+        "PrimarySolver": "9",
+        "AlternativeSolver": "7",
         "LemmaCurator": "3",
         "VerifierSkeptic": "4",
         "RepairAgent": "4",

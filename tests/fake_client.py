@@ -64,6 +64,69 @@ class FakeClient:
                 if system_content.startswith("You are PrimarySolver")
                 else "AlternativeSolver"
             )
+            if "Public protocol mode is peer_review" in system_content:
+                review_input = json.loads(user_content)
+                candidate = review_input["candidate"]
+                claim_id = candidate["claims"][0]["claim_id"]
+                return json.dumps(
+                    _agent_envelope(
+                        task_result_type="PeerReviewArtifact",
+                        action="challenge_candidate",
+                        result_payload={
+                            "finding_items": [
+                                {
+                                    "finding_id": f"{role}-f1",
+                                    "candidate_id": candidate["candidate_id"],
+                                    "claim_id": claim_id,
+                                    "method_step_id": "",
+                                    "obligation_ids": [],
+                                    "status": "pass",
+                                    "public_rationale": "The cited public Claim supports the answer.",
+                                    "missing_condition": "",
+                                    "counterexample_summary": "No counterexample was found.",
+                                    "severity": "info",
+                                }
+                            ],
+                            "answer_assessment": "consistent",
+                            "method_overlap_assessment": "structurally distinct",
+                            "missing_conditions": [],
+                            "counterexample_attempts": ["Checked the stated boundary."],
+                            "unresolved_obligations": [],
+                            "recommended_action": "retain",
+                            "stop_reason": "review_complete",
+                        },
+                        progress_summary=f"{role} published a Claim-linked peer review.",
+                        stop_reason="review_complete",
+                    ),
+                    ensure_ascii=False,
+                )
+            if "Public protocol mode is respond_to_review" in system_content:
+                rebuttal_input = json.loads(user_content)
+                review = rebuttal_input["peer_review"]
+                claim_id = rebuttal_input["candidate"]["claims"][0]["claim_id"]
+                return json.dumps(
+                    _agent_envelope(
+                        task_result_type="RebuttalArtifact",
+                        action="publish_rebuttal",
+                        result_payload={
+                            "responses": [
+                                {
+                                    "finding_id": finding["finding_id"],
+                                    "response": "The cited Claim is retained as published.",
+                                    "action": "defend",
+                                    "supporting_claim_ids": [claim_id],
+                                    "evidence_refs": [],
+                                    "requested_followup": "",
+                                }
+                                for finding in review["finding_items"]
+                            ],
+                            "stop_reason": "all_findings_answered",
+                        },
+                        progress_summary=f"{role} answered every peer Finding.",
+                        stop_reason="all_findings_answered",
+                    ),
+                    ensure_ascii=False,
+                )
             if "Public protocol mode is explore" in system_content or (
                 "Public protocol mode is continue" in system_content
             ):
@@ -97,7 +160,12 @@ class FakeClient:
                     "claims": [
                         {
                             "claim_id": "c1",
-                            "statement": f"The requested result is {problem}.",
+                            "statement": (
+                                f"The {role} public route establishes the requested "
+                                f"result {problem}."
+                                if "AgentTurnPayload 1.0" in system_content
+                                else f"The requested result is {problem}."
+                            ),
                             "depends_on": [],
                             "check_type": "reasoning",
                             "importance": "critical",

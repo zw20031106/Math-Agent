@@ -52,6 +52,7 @@ class SessionAgentRuntime:
         self._thread_keys: dict[tuple[str, str], str] = {}
         self._turns: dict[str, TurnLineage] = {}
         self._turn_contexts: dict[str, TurnContext] = {}
+        self._review_thread_by_artifact: dict[str, str] = {}
         self._sequence = 0
         self._authoritative_plan: AuthoritativePlan | None = None
         self._agent_action_turns = False
@@ -177,7 +178,14 @@ class SessionAgentRuntime:
         self._agent_keys[key] = agent_id
         return instance
 
-    def begin_model_turn(self, *, stage: str, turn_kind: str, agent_hint: str = "") -> TurnContext:
+    def begin_model_turn(
+        self,
+        *,
+        stage: str,
+        turn_kind: str,
+        agent_hint: str = "",
+        input_artifact_ids: tuple[str, ...] = (),
+    ) -> TurnContext:
         with self._lock:
             if self._released:
                 raise RuntimeError("Agent runtime has been released")
@@ -193,7 +201,34 @@ class SessionAgentRuntime:
             instance = self._ensure_agent(role, descriptor or "default")
             task_type = _TASK_BY_ROLE[role]
             plan_id, subgoal_ids, method_family = self._task_plan(role, descriptor)
-            key = (instance.agent_id, task_type, plan_id)
+            artifact_type, message_type, recipient_role = _OUTPUT_BY_ROLE[role]
+            mode = instance.mode
+            recipient_agent_id = ""
+            thread_id = ""
+            reply_to_message_id = ""
+            close_thread_after_publish = False
+            if turn_kind == "peer_review" and input_artifact_ids:
+                (
+                    mode,
+                    task_type,
+                    artifact_type,
+                    message_type,
+                    recipient_role,
+                    recipient_agent_id,
+                    thread_id,
+                    reply_to_message_id,
+                    close_thread_after_publish,
+                ) = self._collaboration_turn_route(
+                    instance,
+                    input_artifact_ids[0],
+                )
+            if mode not in self.definitions.get(role).allowed_modes:
+                raise ValueError("Agent collaboration mode is not allowed")
+            key = (
+                instance.agent_id,
+                task_type,
+                plan_id + ":" + ":".join(input_artifact_ids),
+            )
             task_id = self._task_keys.get(key)
             if not task_id:
                 task_id = self.tasks.create(
@@ -202,9 +237,9 @@ class SessionAgentRuntime:
                     plan_id=plan_id,
                     subgoal_ids=subgoal_ids,
                     method_family=method_family,
+                    input_artifact_ids=tuple(input_artifact_ids),
                 ).task_id
                 self._task_keys[key] = task_id
-            artifact_type, message_type, recipient_role = _OUTPUT_BY_ROLE[role]
             if turn_kind == "solver_progress":
                 artifact_type, message_type, recipient_role = "ProgressArtifact", "progress_shared", "RouterPlanner"
             self._sequence += 1
@@ -212,7 +247,7 @@ class SessionAgentRuntime:
             context = TurnContext(
                 instance.agent_id,
                 role,
-                instance.mode,
+                mode,
                 task_id,
                 task_type,
                 turn_id,
@@ -223,10 +258,71 @@ class SessionAgentRuntime:
                 plan_id,
                 subgoal_ids,
                 method_family,
+                tuple(input_artifact_ids),
+                recipient_agent_id,
+                thread_id,
+                reply_to_message_id,
+                close_thread_after_publish,
             )
             self._turn_contexts[turn_id] = context
             self._turns[turn_id] = TurnLineage(instance.agent_id, task_id, turn_id)
             return context
+
+    def _collaboration_turn_route(
+        self,
+        instance: AgentInstance,
+        input_artifact_id: str,
+    ) -> tuple[str, str, str, str, str, str, str, str, bool]:
+        source = self.artifacts.get(
+            input_artifact_id,
+            reader_agent_id=instance.agent_id,
+        )
+        recipient = self.agents.instance(source.producer_agent_id)
+        if source.artifact_type == "CandidateArtifact":
+            if instance.role == recipient.role:
+                raise ValueError("a Solver cannot peer-review its own Candidate")
+            thread = self.mailbox.create_thread(
+                (source.producer_agent_id, instance.agent_id)
+            )
+            request = self.mailbox.send(
+                thread_id=thread.thread_id,
+                sender_agent_id=source.producer_agent_id,
+                recipient_agent_id=instance.agent_id,
+                task_id=source.task_id,
+                message_type="peer_review_requested",
+                artifact_ids=(source.artifact_id,),
+                public_summary=(
+                    "Published Candidate released from isolation for independent "
+                    "Solver peer review"
+                ),
+            )
+            return (
+                "peer_review",
+                "peer_review_candidate",
+                "PeerReviewArtifact",
+                "peer_review_published",
+                recipient.role,
+                recipient.agent_id,
+                thread.thread_id,
+                request.message_id,
+                False,
+            )
+        if source.artifact_type == "PeerReviewArtifact":
+            thread_id = self._review_thread_by_artifact.get(source.artifact_id, "")
+            if not thread_id:
+                raise ValueError("PeerReview Artifact has no open review thread")
+            return (
+                "rebuttal",
+                "respond_to_peer_review",
+                "RebuttalArtifact",
+                "rebuttal_published",
+                recipient.role,
+                recipient.agent_id,
+                thread_id,
+                self.mailbox.latest_message_id(thread_id),
+                True,
+            )
+        raise ValueError("collaboration Turn input Artifact is invalid")
 
     def _task_plan(
         self,
@@ -323,6 +419,11 @@ class SessionAgentRuntime:
                 artifact_payload = self._public_candidate_artifact_payload(
                     artifact_payload
                 )
+            elif artifact_type in {"PeerReviewArtifact", "RebuttalArtifact"}:
+                artifact_payload = self._public_collaboration_artifact_payload(
+                    artifact_payload,
+                    context,
+                )
             artifact = self.artifacts.publish(
                 artifact_type=artifact_type, producer_agent_id=context.agent_id, task_id=context.task_id,
                 turn_id=context.turn_id,
@@ -336,31 +437,61 @@ class SessionAgentRuntime:
                         "response_sha256": digest,
                     },
                 },
-                parent_artifact_ids=(previous[-1],) if previous else (),
+                parent_artifact_ids=(
+                    tuple(context.input_artifact_ids)
+                    if context.input_artifact_ids
+                    else (previous[-1],) if previous else ()
+                ),
             )
             self.tasks.append_output(context.task_id, artifact.artifact_id)
             self.agents.append(context.agent_id, "output_artifact_ids", artifact.artifact_id)
-            recipient = self._ensure_agent(
-                recipient_role,
-                self._mailbox_descriptor(recipient_role, context),
+            recipient = (
+                self.agents.instance(context.recipient_agent_id)
+                if context.recipient_agent_id
+                else self._ensure_agent(
+                    recipient_role,
+                    self._mailbox_descriptor(recipient_role, context),
+                )
             )
-            pair = tuple(sorted((context.agent_id, recipient.agent_id)))
-            thread_id = self._thread_keys.get(pair)
+            thread_id = context.thread_id
             if not thread_id:
-                thread_id = self.mailbox.create_thread((context.agent_id, recipient.agent_id)).thread_id
-                self._thread_keys[pair] = thread_id
+                pair = tuple(sorted((context.agent_id, recipient.agent_id)))
+                thread_id = self._thread_keys.get(pair)
+                if not thread_id:
+                    thread_id = self.mailbox.create_thread((context.agent_id, recipient.agent_id)).thread_id
+                    self._thread_keys[pair] = thread_id
             message = self.mailbox.send(
                 thread_id=thread_id, sender_agent_id=context.agent_id, recipient_agent_id=recipient.agent_id,
                 task_id=context.task_id, message_type=message_type, artifact_ids=(artifact.artifact_id,),
-                public_summary=payload.progress_summary, reply_to_message_id=self.mailbox.latest_message_id(thread_id),
+                public_summary=payload.progress_summary,
+                reply_to_message_id=(
+                    context.reply_to_message_id
+                    or self.mailbox.latest_message_id(thread_id)
+                ),
             )
-            if payload.action in {"publish_candidate", "abstain"} and not response_truncated:
+            if artifact_type == "PeerReviewArtifact":
+                self._review_thread_by_artifact[artifact.artifact_id] = thread_id
+            if context.close_thread_after_publish:
+                self.mailbox.close(thread_id)
+            if payload.action in {
+                "publish_candidate",
+                "challenge_candidate",
+                "publish_rebuttal",
+                "abstain",
+            } and not response_truncated:
                 self.tasks.transition(context.task_id, "completed")
             else:
                 self.tasks.transition(context.task_id, "ready")
             self.agents.transition(context.agent_id, "ready")
             self._turns[turn_id] = replace(self._turns[turn_id], artifact_id=artifact.artifact_id, message_id=message.message_id, status="completed")
-            return {"agent_id": context.agent_id, "task_id": context.task_id, "turn_id": turn_id, "output_artifact_id": artifact.artifact_id, "message_id": message.message_id}
+            return {
+                "agent_id": context.agent_id,
+                "task_id": context.task_id,
+                "turn_id": turn_id,
+                "output_artifact_id": artifact.artifact_id,
+                "message_id": message.message_id,
+                "thread_id": thread_id,
+            }
 
     @staticmethod
     def _mailbox_descriptor(role: str, context: TurnContext) -> str:
@@ -395,6 +526,30 @@ class SessionAgentRuntime:
         return {**payload, "result_payload": public_result}
 
     @staticmethod
+    def _public_collaboration_artifact_payload(
+        payload: dict[str, Any],
+        context: TurnContext,
+    ) -> dict[str, Any]:
+        result = payload.get("result_payload", {})
+        if not isinstance(result, dict):
+            return payload
+        identity = (
+            {"review_id": f"review-{context.turn_id}"}
+            if context.artifact_type == "PeerReviewArtifact"
+            else {"rebuttal_id": f"rebuttal-{context.turn_id}"}
+        )
+        return {
+            **payload,
+            "result_payload": {
+                **identity,
+                "producer_agent_id": context.agent_id,
+                "recipient_agent_id": context.recipient_agent_id,
+                "input_artifact_ids": list(context.input_artifact_ids),
+                **result,
+            },
+        }
+
+    @staticmethod
     def _action_protocol_route(
         context: TurnContext,
         payload: AgentTurnPayload,
@@ -405,11 +560,21 @@ class SessionAgentRuntime:
             "request_tool_check": ("ToolRequestArtifact", "tool_check_requested", "RouterPlanner"),
             "request_replan": ("ProgressArtifact", "replan_requested", "RouterPlanner"),
             "publish_candidate": ("CandidateArtifact", "candidate_published", "VerifierSkeptic"),
+            "challenge_candidate": (
+                "PeerReviewArtifact",
+                "peer_review_published",
+                context.recipient_role,
+            ),
+            "publish_rebuttal": (
+                "RebuttalArtifact",
+                "rebuttal_published",
+                context.recipient_role,
+            ),
             "abstain": ("CheckpointArtifact", "task_abstained", "RouterPlanner"),
             "complete": (context.artifact_type, context.message_type, context.recipient_role),
         }.get(payload.action)
         if expected is None:
-            raise ValueError("Agent Action is not implemented by the F4 Host")
+            raise ValueError("Agent Action is not implemented by the Host")
         artifact_type, message_type, recipient_role = expected
         if payload.task_result_type != artifact_type:
             raise ValueError("Agent Action task_result_type is inconsistent")
@@ -472,6 +637,46 @@ class SessionAgentRuntime:
             )
             return message.message_id
 
+    def candidate_publication(self, candidate_id: str) -> dict[str, str]:
+        """Return Host-owned publication lineage for a Solver Candidate."""
+
+        with self._lock:
+            agents = {
+                row["agent_id"]: row
+                for row in self.agents.snapshot()
+                if row["descriptor"] == str(candidate_id)
+                and row["role"] in {"PrimarySolver", "AlternativeSolver"}
+            }
+            artifacts = [
+                item
+                for item in self.artifacts.snapshot()
+                if item["artifact_type"] == "CandidateArtifact"
+                and item["producer_agent_id"] in agents
+                and item["payload"].get("host_completion", {}).get("status")
+                == "complete"
+            ]
+            if not artifacts:
+                raise KeyError("Candidate publication lineage is unavailable")
+            artifact = artifacts[-1]
+            return {
+                "candidate_id": str(candidate_id),
+                "author_agent_id": artifact["producer_agent_id"],
+                "source_turn_id": artifact["turn_id"],
+                "candidate_artifact_id": artifact["artifact_id"],
+            }
+
+    def reopen_review_thread(
+        self,
+        thread_id: str,
+        *,
+        new_candidate_artifact_id: str,
+    ) -> None:
+        with self._lock:
+            self.mailbox.reopen(
+                thread_id,
+                new_artifact_id=new_candidate_artifact_id,
+            )
+
     def finalize(self, model_call_records: list[dict[str, Any]]) -> dict[str, Any]:
         with self._lock:
             mailbox_snapshot = self.mailbox.snapshot()
@@ -525,7 +730,12 @@ class SessionAgentRuntime:
             self.artifacts.clear()
             self.tasks.clear()
             self.agents.clear()
-            self._agent_keys.clear(); self._task_keys.clear(); self._thread_keys.clear(); self._turns.clear(); self._turn_contexts.clear()
+            self._agent_keys.clear()
+            self._task_keys.clear()
+            self._thread_keys.clear()
+            self._turns.clear()
+            self._turn_contexts.clear()
+            self._review_thread_by_artifact.clear()
             self._authoritative_plan = None
             self._agent_action_turns = False
             self._released = True
