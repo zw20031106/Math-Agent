@@ -165,15 +165,29 @@ class SessionAgentRuntime:
                 "plan_message_id": message.message_id,
             }
 
-    def _ensure_agent(self, role: str, descriptor: str = "default") -> AgentInstance:
+    def _ensure_agent(
+        self,
+        role: str,
+        descriptor: str = "default",
+        *,
+        mode: str | None = None,
+    ) -> AgentInstance:
         key = (role, descriptor)
         agent_id = self._agent_keys.get(key)
         if agent_id:
             return self.agents.instance(agent_id)
-        mode = _MODE_BY_ROLE[role]
+        active_mode = mode or _MODE_BY_ROLE[role]
+        if active_mode not in self.definitions.get(role).allowed_modes:
+            raise ValueError("Agent mode is not allowed for this role")
         ordinal = 1 + sum(1 for item in self._agent_keys if item[0] == role)
-        agent_id = f"{self.session_id}:{role}:{mode}:{ordinal}"
-        instance = AgentInstance(agent_id, self.session_id, role, mode, descriptor)
+        agent_id = f"{self.session_id}:{role}:{active_mode}:{ordinal}"
+        instance = AgentInstance(
+            agent_id,
+            self.session_id,
+            role,
+            active_mode,
+            descriptor,
+        )
         self.agents.create(instance)
         self._agent_keys[key] = agent_id
         return instance
@@ -198,7 +212,17 @@ class SessionAgentRuntime:
                 if hinted_role in self.definitions.roles()
                 else str(turn_kind)
             )
-            instance = self._ensure_agent(role, descriptor or "default")
+            requested_mode = (
+                "final_audit"
+                if role == "VerifierSkeptic"
+                and str(descriptor).startswith("final-audit")
+                else _MODE_BY_ROLE[role]
+            )
+            instance = self._ensure_agent(
+                role,
+                descriptor or "default",
+                mode=requested_mode,
+            )
             task_type = _TASK_BY_ROLE[role]
             plan_id, subgoal_ids, method_family = self._task_plan(role, descriptor)
             artifact_type, message_type, recipient_role = _OUTPUT_BY_ROLE[role]
@@ -222,6 +246,21 @@ class SessionAgentRuntime:
                     instance,
                     input_artifact_ids[0],
                 )
+            elif role == "VerifierSkeptic":
+                if mode == "final_audit":
+                    task_type = "final_audit"
+                    artifact_type = "AuditArtifact"
+                    message_type = "audit_published"
+                else:
+                    task_type = "cross_exam_candidates"
+                    artifact_type = "CritiqueArtifact"
+                    message_type = "conflict_escalated"
+            elif (
+                role in {"PrimarySolver", "AlternativeSolver"}
+                and str(descriptor).startswith("new-branch-")
+                and input_artifact_ids
+            ):
+                task_type = "solve_new_branch"
             if mode not in self.definitions.get(role).allowed_modes:
                 raise ValueError("Agent collaboration mode is not allowed")
             key = (
@@ -339,6 +378,22 @@ class SessionAgentRuntime:
         ]
         if not proposals:
             return plan.plan_id, (), ""
+        if descriptor.startswith("new-branch-"):
+            used_methods = {
+                context.method_family
+                for context in self._turn_contexts.values()
+                if context.role in {"PrimarySolver", "AlternativeSolver"}
+                and context.method_family
+            }
+            proposal = next(
+                (
+                    item
+                    for item in proposals
+                    if item.method_family not in used_methods
+                ),
+                proposals[-1],
+            )
+            return plan.plan_id, proposal.subgoal_ids, proposal.method_family
         index = 0
         if role == "AlternativeSolver":
             match = re.search(r"(\d+)$", descriptor)
@@ -561,9 +616,17 @@ class SessionAgentRuntime:
             "request_replan": ("ProgressArtifact", "replan_requested", "RouterPlanner"),
             "publish_candidate": ("CandidateArtifact", "candidate_published", "VerifierSkeptic"),
             "challenge_candidate": (
-                "PeerReviewArtifact",
-                "peer_review_published",
-                context.recipient_role,
+                (
+                    "CritiqueArtifact",
+                    "conflict_escalated",
+                    context.recipient_role,
+                )
+                if context.role == "VerifierSkeptic"
+                else (
+                    "PeerReviewArtifact",
+                    "peer_review_published",
+                    context.recipient_role,
+                )
             ),
             "publish_rebuttal": (
                 "RebuttalArtifact",
@@ -664,6 +727,36 @@ class SessionAgentRuntime:
                 "source_turn_id": artifact["turn_id"],
                 "candidate_artifact_id": artifact["artifact_id"],
             }
+
+    def publish_deterministic_decision(
+        self,
+        *,
+        candidate_id: str,
+        candidate_version: int,
+        selection_mode: str,
+        selection_reason: str,
+        audit_artifact_id: str = "",
+    ) -> dict[str, Any]:
+        """Commit deterministic arbitration as a service-authored Artifact."""
+
+        with self._lock:
+            candidate = self.candidate_publication(candidate_id)
+            parents = [candidate["candidate_artifact_id"]]
+            if audit_artifact_id:
+                parents.append(audit_artifact_id)
+            artifact = self.artifacts.publish_deterministic_decision(
+                payload={
+                    "candidate_id": str(candidate_id),
+                    "candidate_version": int(candidate_version),
+                    "selection_mode": str(selection_mode),
+                    "selection_reason": str(selection_reason),
+                    "audit_artifact_id": str(audit_artifact_id),
+                    "authority": "deterministic_host_arbitration",
+                    "status": "committed",
+                },
+                parent_artifact_ids=tuple(dict.fromkeys(parents)),
+            )
+            return artifact.to_dict()
 
     def reopen_review_thread(
         self,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 from dataclasses import dataclass, replace
+import json
 from time import perf_counter
 
 from mathforge.agents.registry import PromptContractLoader, SkillRegistry
@@ -119,6 +120,7 @@ from mathforge.verification.repair_scope import (
 )
 from mathforge.agents.finalizer import LLMFinalizer
 from mathforge.agents.verifier import VerifierSkepticAgent
+from mathforge.agents.verification_closure import VerificationClosureAgent
 from mathforge.verification.admission import (
     CandidateAdmissionError,
     CandidateAdmissionGate,
@@ -357,6 +359,10 @@ class MathForgeHarness:
             ),
         )
         self._verifier_agent = VerifierSkepticAgent(self._provider, self._contracts)
+        self._verification_closure_agent = VerificationClosureAgent(
+            self._provider,
+            self._contracts,
+        )
         self._run_provenance = build_run_provenance(
             self._config,
             contracts=self._contracts,
@@ -1957,7 +1963,7 @@ class MathForgeHarness:
                 viable,
                 session.proof_obligations,
                 conflict_matrix,
-            )
+            ) or self._config.enable_verification_closure
             verifier_required = (
                 self._config.enable_verifier
                 and self._config.enable_evidence
@@ -2018,11 +2024,53 @@ class MathForgeHarness:
                     role_skill_contexts.get("VerifierSkeptic", ""),
                     round_name="initial",
                 )
+            if (
+                self._config.enable_verification_closure
+                and verifier_result is not None
+                and verifier_result.requires_new_branch
+            ):
+                new_branch = self._run_new_branch_cycle(
+                    session,
+                    blackboard,
+                    trace,
+                    viable,
+                    ledger,
+                    role_skill_contexts,
+                )
+                if new_branch is not None:
+                    viable.append(new_branch)
+                    required_obligations.extend(
+                        item
+                        for item in session.proof_obligations.get(
+                            new_branch.candidate_id,
+                            [],
+                        )
+                        if item.required
+                    )
+                    (
+                        verifier_result,
+                        verifier_reason,
+                        branch_reviewed,
+                        _,
+                    ) = self._run_skeptic_review(
+                        session,
+                        blackboard,
+                        trace,
+                        viable,
+                        ledger,
+                        role_skill_contexts.get("VerifierSkeptic", ""),
+                        round_name="post_new_branch",
+                    )
+                    skeptic_reviewed.update(branch_reviewed)
             post_repair_revalidated = False
             verifier_triggers: dict[str, list[str]] = {}
             if verifier_result is not None:
-                verifier_triggers = actionable_verifier_failures(
-                    verifier_result.findings
+                verifier_triggers = (
+                    verifier_result.actionable_claims()
+                    if self._config.enable_verification_closure
+                    else actionable_verifier_failures(
+                        verifier_result.findings
+                    )
                 )
             atomic_repair_budget = session.budget.snapshot()
             repair_pair_time_reserve = stage_sequence_reserve_seconds(
@@ -2074,6 +2122,20 @@ class MathForgeHarness:
                     )
                     if not trigger_claim_ids:
                         continue
+                    trigger_critique = next(
+                        (
+                            critique
+                            for critique in reversed(session.critiques)
+                            if any(
+                                finding.candidate_id == item.candidate_id
+                                and finding.claim_id in trigger_claim_ids
+                                and finding.status == "fail"
+                                and finding.actionability == "local_repair"
+                                for finding in critique.findings
+                            )
+                        ),
+                        None,
+                    )
                     before_decision = self._proof_stage.evaluate(
                         item,
                         session.evidence,
@@ -2229,6 +2291,43 @@ class MathForgeHarness:
                             repair_stage="post_verifier",
                         )
                     if repair_result.triggered:
+                        session.repair_lineage.append(
+                            {
+                                "source_candidate_id": item.candidate_id,
+                                "proposed_candidate_id": (
+                                    repair_result.proposed.candidate_id
+                                    if repair_result.proposed is not None
+                                    else ""
+                                ),
+                                "critique_id": (
+                                    trigger_critique.critique_id
+                                    if trigger_critique is not None
+                                    else ""
+                                ),
+                                "critique_artifact_id": (
+                                    trigger_critique.artifact_id
+                                    if trigger_critique is not None
+                                    else ""
+                                ),
+                                "repair_artifact_id": next(
+                                    (
+                                        artifact["artifact_id"]
+                                        for artifact in reversed(
+                                            session.agent_runtime.artifacts.snapshot()
+                                        )
+                                        if artifact["artifact_type"]
+                                        == "RepairPatchArtifact"
+                                    ),
+                                    "",
+                                ),
+                                "affected_claim_ids": list(
+                                    repair_result.affected_claim_ids
+                                ),
+                                "rolled_back": repair_result.rolled_back,
+                                "reason": repair_result.reason,
+                                "reverified": bool(repair_result.new_evidence),
+                            }
+                        )
                         trace.add(
                             "repair_completed",
                             source_candidate_id=item.candidate_id,
@@ -2261,6 +2360,24 @@ class MathForgeHarness:
                             rolled_back=repair_result.rolled_back,
                             reason=repair_result.reason,
                             repair_stage="post_verifier",
+                            critique_id=(
+                                trigger_critique.critique_id
+                                if trigger_critique is not None
+                                else ""
+                            ),
+                            critique_artifact_id=(
+                                trigger_critique.artifact_id
+                                if trigger_critique is not None
+                                else ""
+                            ),
+                            repair_artifact_id=(
+                                session.repair_lineage[-1].get(
+                                    "repair_artifact_id",
+                                    "",
+                                )
+                                if session.repair_lineage
+                                else ""
+                            ),
                         )
                     viable = [
                         (
@@ -2361,6 +2478,15 @@ class MathForgeHarness:
                     for item in viable
                     if item.candidate_id in retained_ids
                 ]
+            if self._config.enable_verification_closure and viable:
+                viable = self._run_final_audit_phase(
+                    session,
+                    blackboard,
+                    trace,
+                    viable,
+                    ledger,
+                    role_skill_contexts.get("VerifierSkeptic", ""),
+                )
             self._transition(
                 session,
                 trace,
@@ -2538,6 +2664,11 @@ class MathForgeHarness:
                 used_llm_arbiter = arbitration.used_llm_arbiter
                 tie_break_reason = arbitration.tie_break_reason
                 selection_mode = "multi_candidate_arbitration"
+            selection_reason = (
+                "prefer hard evidence, independent corroboration, and "
+                "targeted model review in that order; exact substantive "
+                "ties use a stable public-content digest"
+            )
             trace.add(
                 "candidate_arbitrated",
                 selected=candidate.candidate_id,
@@ -2549,11 +2680,7 @@ class MathForgeHarness:
                     viable,
                     candidate_precheck_rejections,
                 ),
-                selection_reason=(
-                    "prefer hard evidence, independent corroboration, and "
-                    "targeted model review in that order; exact substantive "
-                    "ties use a stable public-content digest"
-                ),
+                selection_reason=selection_reason,
                 tie_break_reason=tie_break_reason,
                 selected_verification_status=completion_status_by_id.get(
                     candidate.candidate_id,
@@ -2575,6 +2702,52 @@ class MathForgeHarness:
                 equivalence_disagreement_pairs=equivalence_disagreement_pairs,
                 used_llm_arbiter=used_llm_arbiter,
             )
+            if self._config.enable_verification_closure:
+                matching_audit = next(
+                    (
+                        item
+                        for item in reversed(session.audits)
+                        if item.candidate_id == candidate.candidate_id
+                    ),
+                    None,
+                )
+                try:
+                    decision_artifact = (
+                        session.agent_runtime.publish_deterministic_decision(
+                            candidate_id=candidate.candidate_id,
+                            candidate_version=candidate.version,
+                            selection_mode=selection_mode,
+                            selection_reason=selection_reason,
+                            audit_artifact_id=(
+                                matching_audit.artifact_id
+                                if matching_audit is not None
+                                else ""
+                            ),
+                        )
+                    )
+                    trace.add(
+                        "decision_committed",
+                        status="committed",
+                        selected_candidate_id=candidate.candidate_id,
+                        candidate_version=candidate.version,
+                        decision_artifact_id=decision_artifact["artifact_id"],
+                        audit_artifact_id=(
+                            matching_audit.artifact_id
+                            if matching_audit is not None
+                            else ""
+                        ),
+                        authority="deterministic_host_arbitration",
+                    )
+                except (KeyError, ValueError):
+                    trace.add(
+                        "decision_committed",
+                        status="unavailable",
+                        selected_candidate_id=candidate.candidate_id,
+                        candidate_version=candidate.version,
+                        decision_artifact_id="",
+                        audit_artifact_id="",
+                        authority="deterministic_host_arbitration",
+                    )
             selected_candidate_id = candidate.candidate_id
             remember_safe_candidate([candidate], "arbitrated")
             candidate_states = self._candidate_final_states(
@@ -3670,8 +3843,15 @@ class MathForgeHarness:
         session,
         trace: TraceBuilder,
         candidates: list,
+        *,
+        review_candidate_ids: tuple[str, str] | None = None,
     ) -> list:
-        pool = CandidatePool()
+        incremental = review_candidate_ids is not None
+        pool = (
+            session.candidate_pool
+            if incremental and session.candidate_pool is not None
+            else CandidatePool()
+        )
         session.candidate_pool = pool
         solver_candidates = [
             candidate
@@ -3680,6 +3860,12 @@ class MathForgeHarness:
             and candidate.source.startswith("llm_")
         ]
         for candidate in solver_candidates:
+            try:
+                pool.entry(candidate.candidate_id)
+            except KeyError:
+                pass
+            else:
+                continue
             try:
                 lineage = session.agent_runtime.candidate_publication(
                     candidate.candidate_id
@@ -3706,16 +3892,30 @@ class MathForgeHarness:
             independent_count=len(independent),
             structural_independence_gate=True,
             candidate_isolation_released=True,
+            incremental=incremental,
         )
-        by_role = {
-            next(
-                candidate.role
-                for candidate in solver_candidates
-                if candidate.candidate_id == entry.candidate_id
-            ): entry
-            for entry in independent
-        }
-        if not {"PrimarySolver", "AlternativeSolver"} <= set(by_role):
+        if review_candidate_ids is None:
+            by_role = {
+                next(
+                    candidate.role
+                    for candidate in solver_candidates
+                    if candidate.candidate_id == entry.candidate_id
+                ): entry
+                for entry in independent
+            }
+            review_entries = (
+                by_role.get("PrimarySolver"),
+                by_role.get("AlternativeSolver"),
+            )
+        else:
+            independent_by_id = {
+                entry.candidate_id: entry for entry in independent
+            }
+            review_entries = tuple(
+                independent_by_id.get(candidate_id)
+                for candidate_id in review_candidate_ids
+            )
+        if any(entry is None for entry in review_entries):
             trace.add(
                 "solver_peer_review_phase_completed",
                 status="independence_gate_failed",
@@ -3734,9 +3934,10 @@ class MathForgeHarness:
         candidate_by_id = {
             candidate.candidate_id: candidate for candidate in solver_candidates
         }
+        first_entry, second_entry = review_entries
         pairs = (
-            (by_role["PrimarySolver"], by_role["AlternativeSolver"]),
-            (by_role["AlternativeSolver"], by_role["PrimarySolver"]),
+            (first_entry, second_entry),
+            (second_entry, first_entry),
         )
         review_outcomes = []
         for reviewer_entry, target_entry in pairs:
@@ -4079,14 +4280,27 @@ class MathForgeHarness:
             session.route_plan = outcome.route_plan
             session.agent_plan = outcome.authoritative_plan
             methods = session.route_plan.method_families
-            method_index = 0 if branch.role == "PrimarySolver" else 1
-            if method_index < len(methods):
-                branch.method_family = methods[method_index]
-                branch.forbidden_method_families = tuple(
-                    method
-                    for index, method in enumerate(methods[:2])
-                    if index != method_index
+            if branch.candidate_id.startswith("new-branch-"):
+                prior_methods = set(branch.forbidden_method_families)
+                branch.method_family = next(
+                    (
+                        proposal.method_family
+                        for proposal in session.agent_plan.task_proposals
+                        if proposal.agent_role == branch.role
+                        and proposal.method_family not in prior_methods
+                    ),
+                    branch.method_family,
                 )
+                branch.forbidden_method_families = tuple(sorted(prior_methods))
+            else:
+                method_index = 0 if branch.role == "PrimarySolver" else 1
+                if method_index < len(methods):
+                    branch.method_family = methods[method_index]
+                    branch.forbidden_method_families = tuple(
+                        method
+                        for index, method in enumerate(methods[:2])
+                        if index != method_index
+                    )
             refs = session.agent_runtime.publish_router_decision(
                 route_payload=session.route_plan.to_dict(),
                 plan=session.agent_plan,
@@ -4622,6 +4836,18 @@ class MathForgeHarness:
             evidence=local_evidence,
             focus_claim_ids=affected_claim_ids,
         )
+        critique = next(
+            (
+                item
+                for item in reversed(session.critiques)
+                if any(
+                    finding.candidate_id == candidate.candidate_id
+                    and finding.claim_id in affected_claim_ids
+                    for finding in item.findings
+                )
+            ),
+            None,
+        )
         return self._repair_agent.repair(
             session.problem_ir,
             candidate,
@@ -4631,6 +4857,10 @@ class MathForgeHarness:
             max_tokens=self._config.primary_max_tokens,
             context_view=context_view,
             skill_context=skill_context,
+            critique=critique.to_dict() if critique is not None else None,
+            critique_artifact_id=(
+                critique.artifact_id if critique is not None else ""
+            ),
         )
 
     def _run_answer_type_check(self, session, candidate, ledger: EvidenceLedger):
@@ -4727,6 +4957,379 @@ class MathForgeHarness:
         )
         return records
 
+    def _run_new_branch_cycle(
+        self,
+        session,
+        blackboard: MemoryBlackboard,
+        trace: TraceBuilder,
+        candidates: list,
+        ledger: EvidenceLedger,
+        role_skill_contexts: dict[str, str],
+    ):
+        budget = session.budget.snapshot()
+        if budget.remaining_calls < 7 or session.budget.deadline.must_finalize():
+            trace.add(
+                "new_branch_completed",
+                status="not_started",
+                reason="insufficient_closure_capacity",
+                remaining_calls=budget.remaining_calls,
+            )
+            return None
+        critique = session.critiques[-1]
+        base = next(
+            (item for item in candidates if item.role == "PrimarySolver"),
+            candidates[0],
+        )
+        role = (
+            "AlternativeSolver"
+            if base.role == "PrimarySolver"
+            else "PrimarySolver"
+        )
+        ordinal = 1 + sum(
+            item.candidate_id.startswith("new-branch-")
+            for item in session.candidates
+        )
+        candidate_id = f"new-branch-{ordinal}"
+        prior_method_families = {
+            item.method
+            for item in session.candidates
+            if item.role in {"PrimarySolver", "AlternativeSolver"}
+        }
+        if session.candidate_pool is not None:
+            prior_method_families.update(
+                str(item.get("method_signature", {}).get("method_family", ""))
+                .strip()
+                .replace(" ", "-")
+                for item in session.candidate_pool.snapshot()
+            )
+            prior_method_families.discard("")
+        methods = [
+            method
+            for method in session.route_plan.method_families
+            if method not in prior_method_families
+        ]
+        method = methods[0] if methods else "independent-new-branch"
+        context_view = self._build_role_context(
+            session,
+            blackboard,
+            trace,
+            role=role,
+            candidates=candidates,
+            evidence=session.evidence,
+        )
+        branch = _AutonomousBranch(
+            role=role,
+            candidate_id=candidate_id,
+            solver=(
+                AlternativeSolver(self._contracts)
+                if role == "AlternativeSolver"
+                else PrimarySolver(self._contracts)
+            ),
+            method_family=method,
+            forbidden_method_families=tuple(
+                sorted(prior_method_families)
+            ),
+            context_view=context_view,
+            skill_context=(
+                role_skill_contexts.get(role, "")
+                + "\n\nVerifier Critique requiring a genuinely new method branch:\n"
+                + json.dumps(
+                    critique.to_dict(),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            ),
+            state=ReasoningState.initialize(
+                session.problem_ir,
+                strategy=method,
+            ),
+        )
+        prior_plan_id = session.agent_plan.plan_id
+        self._answer_solver_replan_request(session, trace, branch)
+        if session.agent_plan.plan_id == prior_plan_id:
+            trace.add(
+                "new_branch_completed",
+                status="failed",
+                reason="router_replan_failed",
+                critique_id=critique.critique_id,
+            )
+            return None
+        trace.add(
+            "new_branch_started",
+            candidate_id=candidate_id,
+            role=role,
+            critique_id=critique.critique_id,
+            critique_artifact_id=critique.artifact_id,
+            plan_id=session.agent_plan.plan_id,
+            planned_method_family=branch.method_family,
+            independent_model_call=True,
+        )
+        trace.add(
+            "candidate_generation_started",
+            candidate_id=candidate_id,
+            role=role,
+            planned_method_family=branch.method_family,
+            turn_kind=(
+                "solver_candidate_proof"
+                if session.problem_ir.response_mode == "proof_full"
+                else "solver_candidate_standard"
+            ),
+            autonomous=True,
+            new_branch=True,
+        )
+        try:
+            compressed = self._compress_reasoning_state(branch.state, trace)
+            request = SolverRequest(
+                candidate_id,
+                session.problem_ir,
+                session.route_plan,
+                branch.skill_context,
+                branch.method_family,
+                branch.forbidden_method_families,
+                context_view,
+                compressed.prompt_json,
+            )
+            turn = self._solver_executor.execute_autonomous_candidate(
+                branch.solver,
+                request,
+                session.budget,
+                temperature=max(self._config.primary_temperature, 0.35),
+                max_tokens=self._config.primary_max_tokens,
+                input_artifact_ids=(
+                    (critique.artifact_id,)
+                    if critique.artifact_id
+                    else ()
+                ),
+            )
+            candidate = turn.candidate
+            if turn.partial or candidate is None or turn.action == "abstain":
+                raise ValueError("new branch did not publish a complete Candidate")
+            admission = self._candidate_stage.evaluate(candidate, session.problem_ir)
+            if not admission.accepted:
+                raise CandidateAdmissionError(",".join(admission.rejection_codes))
+        except Exception as error:
+            trace.add(
+                "new_branch_completed",
+                status="failed",
+                candidate_id=candidate_id,
+                critique_id=critique.critique_id,
+                failure_code=self._reasoning_failure_code(error),
+            )
+            return None
+        session.candidates.append(candidate)
+        trace.add(
+            "candidate_generated",
+            **candidate_trace_payload(candidate),
+            autonomous=True,
+            new_branch=True,
+            parent_critique_id=critique.critique_id,
+        )
+        ledger.register_candidate(candidate)
+        reviewed = self._run_solver_peer_review_phase(
+            session,
+            trace,
+            [base, candidate],
+            review_candidate_ids=(base.candidate_id, candidate.candidate_id),
+        )
+        if candidate.candidate_id not in {item.candidate_id for item in reviewed}:
+            trace.add(
+                "new_branch_completed",
+                status="rejected",
+                candidate_id=candidate_id,
+                critique_id=critique.critique_id,
+                reason="new_branch_peer_review_rejected",
+            )
+            return None
+        answer_shape, _ = self._run_answer_type_check(session, candidate, ledger)
+        admission = self._candidate_stage.evaluate(
+            candidate,
+            session.problem_ir,
+            answer_shape_status=answer_shape.status,
+        )
+        if not admission.accepted:
+            trace.add(
+                "new_branch_completed",
+                status="rejected",
+                candidate_id=candidate_id,
+                critique_id=critique.critique_id,
+                reason="new_branch_answer_shape_rejected",
+            )
+            return None
+        if self._config.enable_tools and self._config.enable_evidence:
+            self._evidence_stage.verify(
+                candidate,
+                ledger,
+                domains=session.problem_ir.domains,
+                assumptions=session.problem_ir.assumptions,
+                budget=session.budget,
+                selected_tools=session.route_plan.selected_tools,
+            )
+        session.proof_obligations[candidate.candidate_id] = self._proof_stage.generate(
+            session.problem_ir,
+            candidate,
+            problem_obligations=session.problem_obligations,
+        )
+        trace.add(
+            "new_branch_completed",
+            status="completed",
+            candidate_id=candidate.candidate_id,
+            role=candidate.role,
+            critique_id=critique.critique_id,
+            plan_id=session.agent_plan.plan_id,
+            candidate_artifact_id=session.agent_runtime.candidate_publication(
+                candidate.candidate_id
+            )["candidate_artifact_id"],
+            peer_review_reentered=True,
+            independently_authored=True,
+        )
+        return candidate
+
+    def _run_final_audit_phase(
+        self,
+        session,
+        blackboard: MemoryBlackboard,
+        trace: TraceBuilder,
+        candidates: list,
+        ledger: EvidenceLedger,
+        skill_context: str,
+    ) -> list:
+        remaining = list(candidates)
+        seen_audits: set[tuple] = set()
+        while remaining and not session.budget.deadline.must_finalize():
+            candidate = (
+                remaining[0]
+                if len(remaining) == 1
+                else self._arbitration.select(
+                    remaining,
+                    session.evidence,
+                    session.proof_obligations,
+                ).selected
+            )
+            input_artifacts = list(
+                self._verification_input_artifact_ids(
+                    session,
+                    {candidate.candidate_id},
+                )
+            )
+            input_artifacts.extend(
+                str(item.get("repair_artifact_id", ""))
+                for item in session.repair_lineage
+                if item.get("proposed_candidate_id") == candidate.candidate_id
+            )
+            input_artifacts = list(
+                dict.fromkeys(item for item in input_artifacts if item)
+            )
+            trace.add(
+                "final_audit_started",
+                candidate_id=candidate.candidate_id,
+                candidate_version=candidate.version,
+                verifier_instance_ordinal=len(session.audits) + 1,
+                input_artifact_ids=input_artifacts,
+                independent_model_call=True,
+            )
+            try:
+                outcome = self._verification_closure_agent.final_audit(
+                    problem=session.problem_ir,
+                    candidate=candidate,
+                    obligations=session.proof_obligations.get(
+                        candidate.candidate_id,
+                        [],
+                    ),
+                    evidence=session.evidence,
+                    critiques=session.critiques,
+                    peer_reviews=session.peer_reviews,
+                    rebuttals=session.rebuttals,
+                    repair_lineage=session.repair_lineage,
+                    input_artifact_ids=tuple(input_artifacts),
+                    budget=session.budget,
+                    max_tokens=self._config.primary_max_tokens,
+                    ordinal=len(session.audits) + 1,
+                )
+            except Exception as error:
+                trace.add(
+                    "final_audit_completed",
+                    status="unavailable",
+                    candidate_id=candidate.candidate_id,
+                    independent_model_call=True,
+                    failure_code=self._reasoning_failure_code(error),
+                    degraded=True,
+                )
+                break
+            audit = outcome.record
+            session.audits.append(audit)
+            signature = (
+                audit.candidate_id,
+                audit.candidate_version,
+                audit.status,
+                audit.open_finding_ids,
+                audit.open_obligation_ids,
+                audit.requested_action,
+            )
+            trace.add(
+                "final_audit_completed",
+                **audit.to_dict(),
+                independent_model_call=True,
+                verifier_instance_distinct_from_cross_exam=True,
+                candidate_scope_count=1,
+            )
+            if audit.complete:
+                return remaining
+            if audit.status == "failed" or audit.requested_action == "reject":
+                remaining = [
+                    item
+                    for item in remaining
+                    if item.candidate_id != candidate.candidate_id
+                ]
+                if session.candidate_pool is not None:
+                    try:
+                        session.candidate_pool.reject(
+                            candidate.candidate_id,
+                        )
+                    except (KeyError, ValueError):
+                        pass
+                continue
+            budget = session.budget.snapshot()
+            can_reenter = (
+                signature not in seen_audits
+                and budget.remaining_calls >= 2
+                and not session.budget.deadline.must_finalize()
+                and audit.requested_action
+                in {
+                    "continue_review",
+                    "local_repair",
+                    "new_branch",
+                    "replan",
+                }
+            )
+            trace.add(
+                "audit_reentry_decision",
+                candidate_id=candidate.candidate_id,
+                audit_id=audit.audit_id,
+                requested_action=audit.requested_action,
+                reentered=can_reenter,
+                reason=(
+                    "new_action_and_capacity"
+                    if can_reenter
+                    else "no_new_action_or_capacity"
+                ),
+            )
+            if not can_reenter:
+                break
+            seen_audits.add(signature)
+            before = len(session.critiques)
+            self._run_skeptic_review(
+                session,
+                blackboard,
+                trace,
+                [candidate],
+                ledger,
+                skill_context,
+                round_name=f"audit_reentry_{len(session.audits)}",
+            )
+            if len(session.critiques) == before:
+                break
+        return remaining
+
     def _run_skeptic_review(
         self,
         session,
@@ -4739,26 +5342,50 @@ class MathForgeHarness:
         round_name: str,
     ):
         try:
-            verifier_context = self._build_role_context(
-                session,
-                blackboard,
-                trace,
-                role="VerifierSkeptic",
-                candidates=candidates,
-                evidence=session.evidence,
-            )
-            verifier_result = self._verifier_agent.review(
-                session.problem_ir,
-                candidates,
-                session.proof_obligations,
-                session.budget,
-                max_tokens=self._config.primary_max_tokens,
-                context_view=verifier_context,
-                evidence=session.evidence,
-                skill_context=skill_context,
-                peer_reviews=session.peer_reviews,
-                rebuttals=session.rebuttals,
-            )
+            if self._config.enable_verification_closure:
+                outcome = self._verification_closure_agent.cross_exam(
+                    problem=session.problem_ir,
+                    candidates=list(candidates),
+                    candidate_pool=(
+                        session.candidate_pool.snapshot()
+                        if session.candidate_pool is not None
+                        else []
+                    ),
+                    obligations=session.proof_obligations,
+                    evidence=session.evidence,
+                    peer_reviews=session.peer_reviews,
+                    rebuttals=session.rebuttals,
+                    input_artifact_ids=self._verification_input_artifact_ids(
+                        session,
+                        {item.candidate_id for item in candidates},
+                    ),
+                    budget=session.budget,
+                    max_tokens=self._config.primary_max_tokens,
+                    ordinal=len(session.critiques) + 1,
+                )
+                verifier_result = outcome.record
+                session.critiques.append(outcome.record)
+            else:
+                verifier_context = self._build_role_context(
+                    session,
+                    blackboard,
+                    trace,
+                    role="VerifierSkeptic",
+                    candidates=candidates,
+                    evidence=session.evidence,
+                )
+                verifier_result = self._verifier_agent.review(
+                    session.problem_ir,
+                    candidates,
+                    session.proof_obligations,
+                    session.budget,
+                    max_tokens=self._config.primary_max_tokens,
+                    context_view=verifier_context,
+                    evidence=session.evidence,
+                    skill_context=skill_context,
+                    peer_reviews=session.peer_reviews,
+                    rebuttals=session.rebuttals,
+                )
         except (
             BudgetExceeded,
             ModelTransportError,
@@ -4766,14 +5393,14 @@ class MathForgeHarness:
         ):
             verifier_result = None
         verifier_reason = (
-            verifier_result.reason
+            getattr(verifier_result, "reason", "accepted")
             if verifier_result is not None
             else "verifier_unavailable"
         )
         if (
             verifier_result is None
             or (
-                not verifier_result.used_llm
+                not getattr(verifier_result, "used_llm", True)
                 and verifier_reason
                 in {"verifier_unavailable", "finalize_cutoff"}
             )
@@ -4807,11 +5434,19 @@ class MathForgeHarness:
                     claim_id=finding.claim_id,
                     obligation_ids=finding.obligation_ids,
                     status=finding.status,
-                    description=finding.description,
+                    description=getattr(
+                        finding,
+                        "description",
+                        getattr(finding, "public_rationale", "Verifier finding"),
+                    ),
                     missing_condition=finding.missing_condition,
                     counterexample_summary=finding.counterexample_summary,
-                    review_level=finding.review_level,
-                    review_target_ids=finding.review_target_ids,
+                    review_level=getattr(
+                        finding,
+                        "review_level",
+                        "obligation",
+                    ),
+                    review_target_ids=getattr(finding, "review_target_ids", ()),
                 )
             )
             reviewed.add(finding.candidate_id)
@@ -4837,7 +5472,7 @@ class MathForgeHarness:
         trace.add(
             "verifier_completed",
             used_llm=(
-                verifier_result.used_llm
+                getattr(verifier_result, "used_llm", True)
                 if verifier_result is not None
                 else False
             ),
@@ -4856,8 +5491,71 @@ class MathForgeHarness:
                 expected_review_target_ids
                 - completed_review_target_ids
             ),
+            critique_id=getattr(verifier_result, "critique_id", ""),
+            critique_artifact_id=getattr(verifier_result, "artifact_id", ""),
+            recommended_action=getattr(
+                verifier_result,
+                "recommended_action",
+                "",
+            ),
+            peer_review_assessment_count=len(
+                getattr(verifier_result, "peer_review_assessments", ())
+            ),
+            independent_model_call=bool(
+                self._config.enable_verification_closure
+                and verifier_result is not None
+            ),
         )
         return verifier_result, verifier_reason, reviewed, records
+
+    @staticmethod
+    def _verification_input_artifact_ids(
+        session,
+        candidate_ids: set[str] | None = None,
+    ) -> tuple[str, ...]:
+        allowed = candidate_ids or set()
+        values: list[str] = []
+        if session.candidate_pool is not None:
+            values.extend(
+                str(item.get("candidate_artifact_id", ""))
+                for item in session.candidate_pool.snapshot()
+                if not allowed or str(item.get("candidate_id", "")) in allowed
+            )
+        known_candidate_artifacts = set(values)
+        for candidate_id in sorted(allowed):
+            try:
+                publication = session.agent_runtime.candidate_publication(
+                    candidate_id
+                )
+            except KeyError:
+                continue
+            artifact_id = publication["candidate_artifact_id"]
+            if artifact_id not in known_candidate_artifacts:
+                values.append(artifact_id)
+                known_candidate_artifacts.add(artifact_id)
+        values.extend(
+            item.artifact_id
+            for item in session.peer_reviews
+            if (not allowed or item.candidate_id in allowed)
+        )
+        values.extend(
+            item.artifact_id
+            for item in session.rebuttals
+            if (not allowed or item.candidate_id in allowed)
+        )
+        values.extend(
+            item.artifact_id
+            for item in session.critiques
+            if item.artifact_id
+            and (
+                not allowed
+                or any(
+                    finding.candidate_id in allowed
+                    for finding in item.findings
+                )
+            )
+        )
+        return tuple(dict.fromkeys(item for item in values if item))
 
     def _expand_with_verified_lemmas(
         self,

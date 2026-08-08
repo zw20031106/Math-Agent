@@ -156,8 +156,8 @@ def _definition(
         "PrimarySolver": "9",
         "AlternativeSolver": "7",
         "LemmaCurator": "3",
-        "VerifierSkeptic": "4",
-        "RepairAgent": "4",
+        "VerifierSkeptic": "5",
+        "RepairAgent": "5",
         "LLMFinalizer": "3",
     }
     return AgentDefinition(

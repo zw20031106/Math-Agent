@@ -286,6 +286,9 @@ class CandidatePool:
             conceded_finding_ids=conceded,
         )
 
+    def reject(self, candidate_id: str) -> CandidatePoolEntry:
+        return self._update(candidate_id, status="rejected")
+
     def _update(self, candidate_id: str, **changes: Any) -> CandidatePoolEntry:
         entry = replace(self._entries[candidate_id], **changes)
         self._entries[candidate_id] = entry

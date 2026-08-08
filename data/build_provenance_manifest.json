@@ -4,7 +4,7 @@
   "content_reviews": {
     "schema_version": "1.0",
     "status": "pending-human",
-      "manifest_sha256": "f008521c5a7978221b613e2bdbaccda295020107b6405de33e581450e3d9cff9"
+      "manifest_sha256": "f442ab584ba119e2dd492bc6d9d62cec10820835f3b28bf291093817a8ab122b"
   },
   "component_decisions": {
     "schema_version": "1.0",

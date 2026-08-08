@@ -44,6 +44,8 @@ class RepairAgent:
         max_tokens: int,
         context_view: RoleContextView | None = None,
         skill_context: str = "",
+        critique: dict | None = None,
+        critique_artifact_id: str = "",
     ) -> CandidatePatch:
         local_claims = [
             claim.to_dict() for claim in candidate.claims if claim.claim_id in affected_claim_ids
@@ -68,6 +70,12 @@ class RepairAgent:
             + (
                 f"\n\nAuthorized skill guidance:\n{skill_context}"
                 if skill_context.strip()
+                else ""
+            )
+            + (
+                "\n\nAuthorized CritiqueArtifact:\n"
+                + json.dumps(critique, ensure_ascii=False, separators=(",", ":"))
+                if critique
                 else ""
             )
         )
@@ -96,7 +104,12 @@ class RepairAgent:
             budget=budget,
             stage="repair",
             turn_kind="repair",
-            agent_id="RepairAgent",
+            agent_id=f"RepairAgent:{candidate.candidate_id}",
+            input_artifact_ids=(
+                (critique_artifact_id,)
+                if critique_artifact_id
+                else ()
+            ),
         )
         if budget.deadline.must_finalize():
             raise RuntimeError("repair response arrived after finalize cutoff")

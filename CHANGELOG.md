@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Completed true multi-Agent remediation Phase F6. VerifierSkeptic now runs
+  independent `cross_exam` Turns over CandidatePool, Solver Peer Reviews,
+  Rebuttals, Evidence, and Proof Obligations, publishes strict Claim-linked
+  CritiqueArtifacts, and performs second-order assessment of every Peer
+  Finding. Claim-local failures may enter a Critique-parented RepairAgent model
+  Turn followed by deterministic re-verification and a fresh Verifier Turn;
+  evidence regressions roll back. Global method failures instead trigger an
+  authoritative Router replan and a new Solver branch that re-enters Solver
+  Peer Review. A distinct Verifier instance audits only the tentative final
+  Candidate, incomplete audits may re-enter the closure loop, and deterministic
+  arbitration commits a service-authored DecisionArtifact parented to the final
+  Candidate and available Audit. The Competition profile enables F6 inside the
+  existing 48-call adaptive bound, three-case concurrency, and 200 RPM gate.
 - Completed true multi-Agent remediation Phase F5. Added a per-problem
   CandidatePool with author/Turn/Artifact lineage, measurable MethodSignature
   fields (`representation`, `core_invariant`, and `proof_direction`), and a

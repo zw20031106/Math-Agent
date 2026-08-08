@@ -47,11 +47,17 @@ JUDGE_EVENT_STAGES = {
     "candidate_partial_recovery_started": "candidate_generation",
     "proof_token_canary_degraded": "candidate_generation",
     "verifier_completed": "verification",
+    "new_branch_started": "verification",
+    "new_branch_completed": "verification",
+    "final_audit_started": "verification",
+    "final_audit_completed": "verification",
+    "audit_reentry_decision": "verification",
     "candidate_summaries": "candidate_generation",
     "evidence_summary": "evidence",
     "proof_completion_summary": "verification",
     "decision_summary": "arbitration",
     "candidate_arbitrated": "arbitration",
+    "decision_committed": "arbitration",
     "candidate_salvaged": "arbitration",
     "repair_history": "repair",
     "final_answer_selected": "finalization",
@@ -74,8 +80,11 @@ _PROTECTED_EVENTS = frozenset(
         "tool_feedback_completed",
         "evidence_summary",
         "proof_completion_summary",
+        "new_branch_completed",
+        "final_audit_completed",
         "decision_summary",
         "candidate_arbitrated",
+        "decision_committed",
         "candidate_salvaged",
         "repair_history",
         "final_answer_selected",
@@ -743,9 +752,40 @@ def project_judge_trace(
                     "review_targets",
                     "reviewed_targets",
                     "unreviewed_targets",
+                    "critique_id",
+                    "critique_artifact_id",
+                    "recommended_action",
+                    "peer_review_assessment_count",
+                    "independent_model_call",
                 ),
             ),
         )
+
+    for event_name in (
+        "new_branch_started",
+        "new_branch_completed",
+        "final_audit_started",
+        "final_audit_completed",
+        "audit_reentry_decision",
+        "decision_committed",
+    ):
+        for event in by_name.get(event_name, []):
+            append(
+                event_name,
+                event,
+                {
+                    key: value
+                    for key, value in event.items()
+                    if key
+                    not in {
+                        "event",
+                        "schema_version",
+                        "seq",
+                        "elapsed_ms",
+                        "stage",
+                    }
+                },
+            )
 
     repair_source, repair_attempts = _repair_history(by_name, active_limits)
     if repair_attempts:
@@ -2357,6 +2397,85 @@ def _bound_event(
     event: dict[str, Any],
     limits: JudgeTraceLimits,
 ) -> dict[str, Any]:
+    if event.get("event") == "model_activity" and isinstance(
+        event.get("calls"),
+        list,
+    ):
+        if _serialized_chars(event) <= limits.judge_trace_event_max_chars:
+            return event
+        compact_calls = [
+            {
+                key: call.get(key)
+                for key in (
+                    "call_index",
+                    "logical_call_index",
+                    "stage",
+                    "turn_kind",
+                    "agent_id",
+                    "agent_mode",
+                    "role",
+                    "purpose",
+                    "candidate_ids",
+                    "status",
+                    "failure_code",
+                    "task_id",
+                    "turn_id",
+                    "plan_id",
+                    "output_artifact_id",
+                    "response_validation",
+                    "effective_max_output_tokens",
+                    "configured_stage_timeout_seconds",
+                    "finish_reason",
+                )
+                if key in call
+            }
+            for call in event["calls"]
+            if isinstance(call, dict)
+        ]
+        compacted_activity = {
+            **{
+                key: value
+                for key, value in event.items()
+                if key != "calls"
+            },
+            "call_count": len(compact_calls),
+            "calls": compact_calls,
+        }
+        if _serialized_chars(compacted_activity) <= limits.judge_trace_event_max_chars:
+            return compacted_activity
+        minimal_calls = [
+            {
+                key: call.get(key)
+                for key in (
+                    "call_index",
+                    "logical_call_index",
+                    "stage",
+                    "turn_kind",
+                    "agent_id",
+                    "agent_mode",
+                    "role",
+                    "purpose",
+                    "candidate_ids",
+                    "status",
+                    "failure_code",
+                    "turn_id",
+                    "output_artifact_id",
+                )
+                if key in call
+            }
+            for call in compact_calls
+        ]
+        minimal_activity = {
+            **{
+                key: value
+                for key, value in event.items()
+                if key != "calls"
+            },
+            "call_count": len(minimal_calls),
+            "calls": minimal_calls,
+        }
+        if _serialized_chars(minimal_activity) <= limits.judge_trace_event_max_chars:
+            return minimal_activity
     text_limit = max(256, limits.judge_trace_event_max_chars // 6)
     compacted = {
         key: (

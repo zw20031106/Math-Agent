@@ -59,6 +59,90 @@ class FakeClient:
                     ),
                     ensure_ascii=False,
                 )
+            if system_content.startswith("You are VerifierSkeptic"):
+                verifier_input = json.loads(user_content)
+                if "Public protocol mode is final_audit" in system_content:
+                    candidate = verifier_input["final_active_candidate"]
+                    return json.dumps(
+                        _agent_envelope(
+                            task_result_type="AuditArtifact",
+                            action="complete",
+                            result_payload={
+                                "candidate_id": candidate["candidate_id"],
+                                "candidate_version": candidate["version"],
+                                "status": "complete_audited",
+                                "open_finding_ids": [],
+                                "open_obligation_ids": [],
+                                "reviewed_artifact_ids": [],
+                                "requested_action": "retain",
+                                "public_rationale": (
+                                    "The normalized final Candidate and closure "
+                                    "Artifacts contain no open review item."
+                                ),
+                                "stop_reason": "audit_complete",
+                            },
+                            progress_summary="Final audit completed.",
+                            stop_reason="audit_complete",
+                        ),
+                        ensure_ascii=False,
+                    )
+                candidates = verifier_input["candidates"]
+                peer_findings = [
+                    finding
+                    for review in verifier_input["peer_reviews"]
+                    for finding in review["finding_items"]
+                ]
+                return json.dumps(
+                    _agent_envelope(
+                        task_result_type="CritiqueArtifact",
+                        action="challenge_candidate",
+                        result_payload={
+                            "findings": [
+                                {
+                                    "finding_id": f"verifier-{index}",
+                                    "candidate_id": candidate["candidate_id"],
+                                    "claim_id": candidate["claims"][0]["claim_id"],
+                                    "obligation_ids": [],
+                                    "peer_finding_ids": [
+                                        item.get("finding_ref", item["finding_id"])
+                                        for item in peer_findings
+                                        if item["candidate_id"]
+                                        == candidate["candidate_id"]
+                                    ],
+                                    "status": "pass",
+                                    "scope": "local",
+                                    "actionability": "retain",
+                                    "public_rationale": (
+                                        "The public Claim is consistent with the "
+                                        "Candidate answer and peer exchange."
+                                    ),
+                                    "missing_condition": "",
+                                    "counterexample_summary": "",
+                                }
+                                for index, candidate in enumerate(candidates, start=1)
+                            ],
+                            "peer_review_assessments": [
+                                {
+                                    "finding_id": item.get(
+                                        "finding_ref",
+                                        item["finding_id"],
+                                    ),
+                                    "status": "pass",
+                                    "public_rationale": (
+                                        "The Peer Finding cites a real public Claim."
+                                    ),
+                                }
+                                for item in peer_findings
+                            ],
+                            "uncovered_goal_ids": [],
+                            "recommended_action": "retain",
+                            "stop_reason": "cross_exam_complete",
+                        },
+                        progress_summary="Cross exam completed.",
+                        stop_reason="cross_exam_complete",
+                    ),
+                    ensure_ascii=False,
+                )
             role = (
                 "PrimarySolver"
                 if system_content.startswith("You are PrimarySolver")

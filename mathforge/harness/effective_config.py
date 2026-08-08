@@ -165,6 +165,12 @@ def build_effective_config_snapshot(
                     else []
                 ),
                 "author_rebuttal": config.enable_peer_cross_review,
+                "verifier_cross_exam": config.enable_verification_closure,
+                "peer_review_second_order_check": (
+                    config.enable_verification_closure
+                ),
+                "independent_final_audit": config.enable_verification_closure,
+                "global_error_new_branch": config.enable_verification_closure,
                 "evidence_tiers": [
                     "hard_evidence",
                     "independent_corroboration",

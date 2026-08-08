@@ -71,8 +71,8 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
         "primary_solver": "9",
         "alternative_solver": "7",
         "lemma_curator": "3",
-        "repair": "4",
-        "verifier_skeptic": "4",
+        "repair": "5",
+        "verifier_skeptic": "5",
         "finalizer": "3",
     }
     for role in roles:

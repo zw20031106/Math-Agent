@@ -542,6 +542,7 @@ class SolverExecutor:
         temperature: float,
         max_tokens: int,
         compact: bool = False,
+        input_artifact_ids: tuple[str, ...] = (),
     ) -> AutonomousSolverTurn:
         compilation = solver.compile_prompt(
             request,
@@ -578,6 +579,7 @@ class SolverExecutor:
             turn_kind=turn_kind,
             agent_id=f"{solver.role}:{request.candidate_id}",
             agent_action_protocol=True,
+            input_artifact_ids=input_artifact_ids,
         )
         parsed = self._parse_agent_turn(
             response,

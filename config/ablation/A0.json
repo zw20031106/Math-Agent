@@ -4,6 +4,7 @@
   "enable_skills": false,
   "enable_alternatives": false,
   "enable_peer_cross_review": false,
+  "enable_verification_closure": false,
   "enable_tools": false,
   "enable_evidence": false,
   "enable_proof_obligations": false,

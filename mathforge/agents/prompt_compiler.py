@@ -147,6 +147,39 @@ _REBUTTAL_PROTOCOL = (
     "outbound_intents []. Add only public content that responds to the Finding, "
     "not private reasoning or a repeated debate."
 )
+_CROSS_EXAM_PROTOCOL = (
+    _AGENT_TURN_ENVELOPE_PROTOCOL
+    + "Public protocol mode is cross_exam. Use task_result_type "
+    "CritiqueArtifact and action challenge_candidate. Put exactly findings, "
+    "peer_review_assessments, uncovered_goal_ids, recommended_action, and "
+    "stop_reason in result_payload. Every Finding contains exactly finding_id, "
+    "candidate_id, claim_id, obligation_ids, peer_finding_ids, status, scope, "
+    "actionability, public_rationale, missing_condition, and "
+    "counterexample_summary. status is pass, fail, or unknown; scope is local, "
+    "global, or review; actionability is retain, local_repair, new_branch, "
+    "replan, reject, or continue_review. A local failure must cite a supplied "
+    "Claim. A global method failure must never be presented as local_repair. "
+    "peer_review_assessments must assess every supplied Peer Finding using "
+    "exactly finding_id, status, and public_rationale; finding_id must equal "
+    "the supplied finding_ref (which is qualified when raw Finding ids collide). "
+    "Use peer_finding_ids to cite those same supplied finding_ref values. "
+    "Use public_state_delta {} and outbound_intents []. Do not repair, solve, "
+    "arbitrate, or emit private reasoning."
+)
+_FINAL_AUDIT_PROTOCOL = (
+    _AGENT_TURN_ENVELOPE_PROTOCOL
+    + "Public protocol mode is final_audit. Use task_result_type AuditArtifact "
+    "and action complete. Put exactly candidate_id, candidate_version, status, "
+    "open_finding_ids, open_obligation_ids, reviewed_artifact_ids, "
+    "requested_action, public_rationale, and stop_reason in result_payload. "
+    "status is complete_hard, complete_audited, incomplete, or failed. "
+    "requested_action is retain, local_repair, new_branch, replan, reject, or "
+    "continue_review. Cite only supplied IDs and only the supplied final active "
+    "Candidate version. A complete status has no open Finding or obligation. "
+    "Use public_state_delta {} and outbound_intents []. Audit only: do not "
+    "rewrite, polish, repair, or generate an answer and do not expose private "
+    "reasoning."
+)
 _REPAIR_PATCH_PROTOCOL = (
     "Return exactly one bare JSON object containing replacement_claims, "
     "final_answer, public_solution_steps, and unresolved_obligations. "
@@ -382,6 +415,26 @@ class PromptCompiler:
             user_content,
             protocol,
             stage_output_cap("peer_review"),
+        )
+
+    def compile_verifier_closure(
+        self,
+        *,
+        user_content: str,
+        mode: str,
+    ) -> PromptCompilation:
+        if mode == "cross_exam":
+            protocol = _CROSS_EXAM_PROTOCOL
+        elif mode == "final_audit":
+            protocol = _FINAL_AUDIT_PROTOCOL
+        else:
+            raise ValueError("Verifier closure mode is invalid")
+        return self._compile(
+            "verifier_skeptic",
+            mode,
+            user_content,
+            protocol,
+            stage_output_cap("verifier"),
         )
 
     def compile_role(

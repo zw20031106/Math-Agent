@@ -30,6 +30,8 @@ class ArtifactEnvelope:
     payload_sha256: str
     payload: dict[str, Any]
     schema_version: str = PROTOCOL_SCHEMA_VERSION
+    producer_kind: str = "agent"
+    producer_service_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return deepcopy(asdict(self))
@@ -61,6 +63,41 @@ class SessionArtifactStore:
             self._sequence += 1
             artifact_id = f"art-{self.session_id[:8]}-{self._sequence:04d}-{digest[:10]}"
             envelope = ArtifactEnvelope(artifact_id, self.session_id, artifact_type, producer_agent_id, task_id, turn_id, 1, tuple(parent_artifact_ids), digest, safe_payload)
+            self._records[artifact_id] = envelope
+            return ArtifactEnvelope(**envelope.to_dict())
+
+    def publish_deterministic_decision(
+        self,
+        *,
+        payload: dict[str, Any],
+        parent_artifact_ids: tuple[str, ...],
+    ) -> ArtifactEnvelope:
+        """Publish the Host arbitration result without impersonating an LLM Agent."""
+
+        with self._lock:
+            for parent_id in parent_artifact_ids:
+                if parent_id not in self._records:
+                    raise ValueError("parent artifact does not exist in session")
+            safe_payload = deepcopy(payload)
+            digest = stable_payload_hash(safe_payload)
+            self._sequence += 1
+            artifact_id = (
+                f"art-{self.session_id[:8]}-{self._sequence:04d}-{digest[:10]}"
+            )
+            envelope = ArtifactEnvelope(
+                artifact_id=artifact_id,
+                session_id=self.session_id,
+                artifact_type="DecisionArtifact",
+                producer_agent_id="",
+                task_id="",
+                turn_id="",
+                version=1,
+                parent_artifact_ids=tuple(parent_artifact_ids),
+                payload_sha256=digest,
+                payload=safe_payload,
+                producer_kind="deterministic_service",
+                producer_service_id="DeterministicArbitrator",
+            )
             self._records[artifact_id] = envelope
             return ArtifactEnvelope(**envelope.to_dict())
 

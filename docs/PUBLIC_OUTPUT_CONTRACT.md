@@ -88,6 +88,13 @@ Repair 输出不带定界符的标准 LaTeX 源，Host Formatter 负责唯一化
   Candidate 集合的实际影响。公开 Trace 不包含审阅者或作者的私有思维链。
   的公开通信与降级结果。`agent_protocol.messages` 展示线程化消息引用，但不公开
   Prompt、原始响应、完整失败 Candidate 或私有推理。
+- F6 的 `verifier_completed` 公开独立 Cross Exam 的 Critique、actionability 和
+  Peer Finding 二阶审查数量；`new_branch_started/completed` 记录 Critique→Router
+  Replan→新 Solver Task→再次 Peer Review 的因果链；`final_audit_completed` 只
+  描述暂定最终 Candidate 的独立审计，`audit_reentry_decision` 记录是否重新进入
+  闭环。`decision_committed` 引用确定性仲裁产生的 DecisionArtifact 以及可用的
+  AuditArtifact。Repair 记录固定引用触发它的 Critique；复审生成的新 Critique
+  不得覆盖该来源。所有事件仅包含公开状态、ID 和安全失败码。
 - `candidate_summaries` 必须包含选中 Candidate 的 `trace[0]` 引用，并为每个成功
   生成但未选中的 Candidate 保留有界 `public_final_answer` 与
   `public_solution_steps`，使候选对比可审计；生成失败的候选不伪造内容。
