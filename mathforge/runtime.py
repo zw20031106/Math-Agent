@@ -1128,10 +1128,7 @@ class MathForgeHarness:
             )
             if not fanout.candidates:
                 raise RuntimeError("all solver branches failed")
-            if (
-                self._config.enable_peer_cross_review
-                and autonomous_agents_enabled
-            ):
+            if self._config.enable_peer_cross_review:
                 fanout.candidates = self._run_solver_peer_review_phase(
                     session,
                     trace,
@@ -1901,6 +1898,7 @@ class MathForgeHarness:
                 )
             if (
                 self._config.enable_verification_closure
+                and self._config.enable_repair
                 and verifier_result is not None
                 and verifier_result.requires_new_branch
             ):
@@ -2349,7 +2347,7 @@ class MathForgeHarness:
                     for item in viable
                     if item.candidate_id in retained_ids
                 ]
-            if self._config.enable_verification_closure and viable:
+            if self._config.enable_final_audit and viable:
                 viable = self._run_final_audit_phase(
                     session,
                     blackboard,
@@ -2612,7 +2610,7 @@ class MathForgeHarness:
                 equivalence_disagreement_pairs=equivalence_disagreement_pairs,
                 used_llm_arbiter=used_llm_arbiter,
             )
-            if self._config.enable_verification_closure:
+            if self._config.enable_final_audit:
                 matching_audit = next(
                     (
                         item
@@ -3944,7 +3942,9 @@ class MathForgeHarness:
             )
 
         rebuttal_count = 0
-        for review_outcome in review_outcomes:
+        for review_outcome in (
+            review_outcomes if self._config.enable_rebuttal else ()
+        ):
             review = review_outcome.record
             target = candidate_by_id[review.candidate_id]
             target_entry = pool.entry(target.candidate_id)
@@ -4008,7 +4008,8 @@ class MathForgeHarness:
             "solver_peer_review_phase_completed",
             status=(
                 "completed"
-                if len(review_outcomes) == 2 and rebuttal_count == 2
+                if len(review_outcomes) == 2
+                and (not self._config.enable_rebuttal or rebuttal_count == 2)
                 else "partial"
             ),
             bidirectional_reviews=len(review_outcomes),

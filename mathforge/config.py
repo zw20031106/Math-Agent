@@ -107,12 +107,14 @@ class HarnessConfig:
     enable_proof_obligations: bool = True
     enable_peer_cross_review: bool = False
     enable_verification_closure: bool = False
+    enable_rebuttal: bool = True
     enable_verifier: bool = True
     enable_memory: bool = True
     enable_lemma_loop: bool = True
     enable_rag: bool = True
     enable_repair: bool = True
     enable_finalizer: bool = False
+    enable_final_audit: bool = True
     enable_shadow: bool = False
     enable_frozen_lemma_store: bool = False
     enable_long_horizon: bool = False
@@ -210,12 +212,14 @@ class HarnessConfig:
             "enable_proof_obligations",
             "enable_peer_cross_review",
             "enable_verification_closure",
+            "enable_rebuttal",
             "enable_verifier",
             "enable_memory",
             "enable_lemma_loop",
             "enable_rag",
             "enable_repair",
             "enable_finalizer",
+            "enable_final_audit",
             "enable_shadow",
             "enable_frozen_lemma_store",
             "enable_long_horizon",
@@ -408,25 +412,23 @@ class HarnessConfig:
             raise ValueError("enable_verifier requires at least two model calls")
         if self.enable_peer_cross_review and (
             not self.enable_alternatives
-            or not self.enable_long_horizon
             or self.model_call_policy != "adaptive_bounded"
             or self.max_model_calls < 7
         ):
             raise ValueError(
-                "enable_peer_cross_review requires alternatives, autonomous "
-                "long-horizon policy, and at least seven model calls"
+                "enable_peer_cross_review requires alternatives, adaptive "
+                "policy, and at least seven model calls"
             )
         if self.enable_verification_closure and (
             not self.enable_peer_cross_review
             or not self.enable_verifier
             or not self.enable_repair
-            or not self.enable_long_horizon
             or self.model_call_policy != "adaptive_bounded"
             or self.max_model_calls < 9
         ):
             raise ValueError(
                 "enable_verification_closure requires F5 peer review, verifier, "
-                "repair, autonomous long-horizon policy, and at least nine calls"
+                "adaptive policy, and at least nine calls"
             )
 
         dependencies = (

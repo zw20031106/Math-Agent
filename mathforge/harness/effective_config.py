@@ -164,13 +164,19 @@ def build_effective_config_snapshot(
                     if config.enable_peer_cross_review
                     else []
                 ),
-                "author_rebuttal": config.enable_peer_cross_review,
+                "author_rebuttal": (
+                    config.enable_peer_cross_review
+                    and config.enable_rebuttal
+                ),
                 "verifier_cross_exam": config.enable_verification_closure,
                 "peer_review_second_order_check": (
                     config.enable_verification_closure
                 ),
-                "independent_final_audit": config.enable_verification_closure,
-                "global_error_new_branch": config.enable_verification_closure,
+                "independent_final_audit": config.enable_final_audit,
+                "global_error_new_branch": (
+                    config.enable_verification_closure
+                    and config.enable_repair
+                ),
                 "evidence_tiers": [
                     "hard_evidence",
                     "independent_corroboration",
