@@ -7,7 +7,6 @@ from mathforge.agents.router_planner import RouterRuleEngine
 from mathforge.agents.solver import PrimarySolver, SolverRequest
 from mathforge.config import HarnessConfig
 from mathforge.harness.adaptive_fanout import AdaptiveFanoutPolicy
-from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.schemas import CandidateSolution, Claim, ProblemIR
 from mathforge.output.judge_trace import project_judge_trace
@@ -188,17 +187,6 @@ def test_primary_posterior_signal_admits_the_reserved_alternative():
         claims=[Claim("c1", "A supporting statement.")],
     )
     budget = CallBudget(3)
-    budget.set_allocation_plan(
-        CallAllocationPlan.build(
-            max_calls=3,
-            router_calls=0,
-            candidate_count=2,
-            verifier_required=False,
-            repair_requested=False,
-            lemma_requested=False,
-            finalizer_requested=False,
-        )
-    )
     budget.consume(stage="primary")
 
     decision = AdaptiveFanoutPolicy().decide(

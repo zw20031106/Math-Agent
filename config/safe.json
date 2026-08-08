@@ -11,10 +11,10 @@
   "primary_temperature": 0.0,
   "primary_max_tokens": 4096,
   "max_model_calls": 2,
-  "model_call_policy": "legacy_staged",
+  "model_call_policy": "adaptive_bounded",
   "max_logical_model_calls_per_problem": 2,
   "soft_call_checkpoints": [1],
-  "speculative_exploration_cutoff": 1,
+  "speculative_exploration_cutoff": 2,
   "closure_reserve_calls": 0,
   "stage_execution_policy": {
     "router": {"max_tokens": 4096, "timeout_seconds": 120.0, "minimum_start_window_seconds": 60.0},

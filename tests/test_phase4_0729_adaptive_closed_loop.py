@@ -4,7 +4,6 @@ import json
 
 from mathforge.agents.verifier import VerifierSkepticAgent
 from mathforge.harness.adaptive_fanout import AdaptiveFanoutPolicy
-from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
 from mathforge.harness.schemas import (
@@ -61,17 +60,6 @@ def _candidate(
 
 def _budget() -> CallBudget:
     budget = CallBudget(6)
-    budget.set_allocation_plan(
-        CallAllocationPlan.build(
-            max_calls=6,
-            router_calls=0,
-            candidate_count=3,
-            verifier_required=True,
-            repair_requested=False,
-            lemma_requested=False,
-            finalizer_requested=False,
-        )
-    )
     budget.consume(stage="primary")
     return budget
 

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from mathforge.agents.skill_selector import DynamicSkillSelector
 from mathforge.agents.registry import SkillRegistry
 from mathforge.config import (
@@ -19,11 +17,9 @@ from mathforge.harness.schemas import (
 )
 from mathforge.memory.lemma_memory import LemmaMemory
 from mathforge.memory.session_memory import SessionMemory
-from mathforge.output.judge_trace import project_judge_trace
 from mathforge.parsing.problem_parser import ProblemParser
 from mathforge.resources import resource_path
 from mathforge.retrieval.method_card_store import ReviewedMethodCardStore
-from mathforge.runtime import MathForgeHarness
 from mathforge.tool_prompt_examples import claim_prompt_examples
 from mathforge.tools.executor import ToolExecutor
 from mathforge.tools.registry import ToolRegistry
@@ -38,135 +34,6 @@ from mathforge.verification.evidence import (
 FEEDBACK_PROBLEM = (
     "For x in R, prove that the correct expansion of (x+1)^2 is x^2+2*x+1."
 )
-
-
-def _config(*, enable_tools: bool = True) -> HarnessConfig:
-    return HarnessConfig(
-        profile="phase5-test",
-        status="test",
-        max_model_calls=4,
-        enable_router=False,
-        enable_skills=True,
-        enable_alternatives=False,
-        enable_tools=enable_tools,
-        enable_evidence=False,
-        enable_proof_obligations=False,
-        enable_verifier=False,
-        enable_memory=False,
-        enable_lemma_loop=False,
-        enable_rag=False,
-        enable_repair=False,
-        enable_finalizer=False,
-        enable_shadow=False,
-        enable_frozen_lemma_store=False,
-        enable_long_horizon=True,
-    )
-
-
-def _progress(*, corrected: bool = False) -> str:
-    claim = {
-        "claim_id": "r2-fixed" if corrected else "r1-bad",
-        "statement": (
-            "(x+1)**2 equals x**2+2*x+1 for real x."
-            if corrected
-            else "(x+1)**2 equals x**2+2*x+2 for real x."
-        ),
-        "depends_on": [],
-        "subgoal_ids": ["g1"],
-        "importance": "critical",
-        "check_type": "symbolic_equivalence",
-    }
-    return json.dumps(
-        {
-            "public_summary": (
-                "The failed equality was replaced by a checked expansion."
-                if corrected
-                else "A proposed expansion is ready for a local equality check."
-            ),
-            "strategy": (
-                "expand-and-collect"
-                if corrected
-                else "test-proposed-expansion"
-            ),
-            "subgoals": [
-                {
-                    "subgoal_id": "g1",
-                    "statement": "Establish the exact polynomial expansion.",
-                    "depends_on": [],
-                    "exit_condition": "The equality has exact local evidence.",
-                    "status": "closed" if corrected else "active",
-                }
-            ],
-            "claims": [claim],
-            "open_obligations": (
-                []
-                if corrected
-                else [
-                    {
-                        "obligation_id": "o1",
-                        "statement": "Check the proposed polynomial equality.",
-                        "depends_on": ["r1-bad"],
-                    }
-                ]
-            ),
-            "closed_obligation_ids": ["o1"] if corrected else [],
-            "contradictions": [],
-            "next_step": (
-                "Synthesize the corrected proof."
-                if corrected
-                else "Run the Host-owned symbolic equality check."
-            ),
-            "stop_reason": "",
-        }
-    )
-
-
-def _candidate(*, corrected: bool) -> str:
-    answer = "x^2+2*x+1" if corrected else "x^2+2*x+2"
-    return json.dumps(
-        {
-            "method": "direct-deduction",
-            "final_answer": answer,
-            "public_solution_steps": [
-                "Expand the square and collect like terms.",
-                f"The result is {answer}.",
-            ],
-            "claims": [
-                {
-                    "claim_id": "c1",
-                    "statement": f"(x+1)**2 equals {answer} for real x.",
-                    "depends_on": [],
-                    "check_type": "symbolic_equivalence",
-                    "importance": "critical",
-                }
-            ],
-            "solution_text": f"Direct expansion gives {answer}.",
-            "assumptions": ["x is real"],
-            "theorems": [],
-            "unresolved_obligations": [],
-        }
-    )
-
-
-class FeedbackAwareClient:
-    def __init__(self) -> None:
-        self.calls: list[list[dict[str, str]]] = []
-
-    def chat(self, *, messages, temperature, max_tokens) -> str:
-        del temperature, max_tokens
-        self.calls.append(messages)
-        system = messages[0]["content"]
-        user = messages[-1]["content"]
-        if "Public protocol mode is explore" in system:
-            return _progress()
-        if "Public protocol mode is continue" in system:
-            corrected = (
-                '"status":"fail"' in user
-                and '"impact":"switch_strategy"' in user
-                and "r1-bad" in user
-            )
-            return _progress(corrected=corrected)
-        return _candidate(corrected="r2-fixed" in user)
 
 
 def test_prompt_examples_use_production_check_specs_and_exceed_90_percent():
@@ -215,35 +82,6 @@ def test_host_owned_check_spec_and_unconstructible_request_remain_unknown():
     assert records[0].status == "unknown"
     assert records[0].strength == "soft"
     assert not is_fatal_hard_failure(records[0])
-
-
-def test_tool_result_changes_continue_strategy_and_corrects_the_answer():
-    enabled_client = FeedbackAwareClient()
-    enabled = MathForgeHarness(enabled_client, _config()).solve(
-        FEEDBACK_PROBLEM,
-        {},
-    )
-    disabled_client = FeedbackAwareClient()
-    disabled = MathForgeHarness(
-        disabled_client,
-        _config(enable_tools=False),
-    ).solve(FEEDBACK_PROBLEM, {})
-
-    feedback = next(
-        event
-        for event in enabled["trace"]
-        if event["event"] == "tool_feedback_completed"
-    )
-    continue_prompt = enabled_client.calls[1][-1]["content"]
-
-    assert feedback["constructibility_rate"] == 1.0
-    assert feedback["strategy_changed"]
-    assert feedback["next_protocol"] == "continue"
-    assert feedback["results"][0]["status"] == "fail"
-    assert '"impact":"switch_strategy"' in continue_prompt
-    assert "r1-bad" in continue_prompt
-    assert "x^2+2*x+1" in enabled["final_response"]
-    assert "x^2+2*x+2" in disabled["final_response"]
 
 
 def test_dynamic_skill_fragments_trace_rank_reason_and_omission():
@@ -367,33 +205,3 @@ def test_reviewed_method_cards_are_hash_bound_read_only_and_disabled_before_ab()
     balanced = HarnessConfig.from_json(resource_path("config", "balanced.json"))
     assert not balanced.enable_rag
     assert not balanced.enable_frozen_lemma_store
-
-
-def test_judge_trace_projects_safe_tool_feedback_and_solve_state_isolated():
-    client = FeedbackAwareClient()
-    harness = MathForgeHarness(client, _config())
-    first = harness.solve(FEEDBACK_PROBLEM, {})
-    call_boundary = len(client.calls)
-    second = harness.solve("Compute 2+2.", {})
-    second_calls = client.calls[call_boundary:]
-    projected = project_judge_trace(
-        first["trace"],
-        final_response=first["final_response"],
-    )
-    serialized = json.dumps(projected, ensure_ascii=False).casefold()
-
-    assert any(
-        event["event"] == "tool_feedback_completed"
-        for event in projected
-    )
-    assert "scratchpad" not in serialized
-    assert "chain_of_thought" not in serialized
-    assert not any(
-        event["event"] == "tool_feedback_completed"
-        for event in second["trace"]
-    )
-    assert all(
-        "r1-bad" not in message["content"]
-        for call in second_calls
-        for message in call
-    )

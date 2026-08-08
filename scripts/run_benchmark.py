@@ -137,7 +137,7 @@ def load_benchmark_config(path: Path) -> HarnessConfig:
         call_limit = int(payload["max_model_calls"])
         merged.update(
             {
-                "model_call_policy": "legacy_staged",
+                "model_call_policy": "adaptive_bounded",
                 "max_logical_model_calls_per_problem": call_limit,
                 "soft_call_checkpoints": [call_limit],
                 "speculative_exploration_cutoff": call_limit,

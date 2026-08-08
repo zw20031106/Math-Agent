@@ -137,6 +137,19 @@ def test_incomplete_proof_is_retained_as_best_available_candidate():
     assert gate["fully_verified"] == []
     assert gate["degraded_accepted"] == ["primary-1"]
     assert gate["rejected"] == []
+    proof_status = next(
+        event
+        for event in result["trace"]
+        if event["event"] == "proof_status_finalized"
+    )
+    assert proof_status["statuses"][0]["status"] == "incomplete"
+    formal = next(
+        event
+        for event in result["trace"]
+        if event["event"] == "formal_entry_compatibility"
+    )
+    assert formal["immutable_files"] == ["main.py", "llm_client.py"]
+    assert formal["harness_status_limitation"]
 
 
 def test_structured_proof_with_mapped_skeptic_findings_passes_gate():
@@ -374,7 +387,7 @@ def test_optional_repair_cannot_consume_required_verifier_call():
     allocation = next(
         event
         for event in result["trace"]
-        if event["event"] == "call_allocation_rebalanced"
+        if event["event"] == "resource_plan_updated"
     )
     assert allocation["verifier"] == 1
     assert allocation["repair_reserve"] == 0

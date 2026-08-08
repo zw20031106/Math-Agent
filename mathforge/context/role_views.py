@@ -28,6 +28,7 @@ class RoleContextFactory:
         final_answer: str = "",
         raw_store: RawContextStore | None = None,
         memory_categories: set[str] | frozenset[str] | None = None,
+        public_metadata: dict | None = None,
     ) -> RoleContextView:
         assembler = ContextAssembler(raw_store or RawContextStore(max_chars))
         snapshot = assembler.assemble(
@@ -41,6 +42,7 @@ class RoleContextFactory:
             role,
             categories=memory_categories,
         )
+        snapshot.metadata["public_metadata"] = dict(public_metadata or {})
         compressed = self._compressor.compress(
             snapshot,
             role=role,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mathforge.harness.allocation import FanoutDecision
+from mathforge.harness.budget_types import FanoutDecision
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.schemas import CandidateSolution, RoutePlan
 

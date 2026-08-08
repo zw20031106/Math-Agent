@@ -4,7 +4,6 @@ import pytest
 from concurrent.futures import ThreadPoolExecutor
 
 from mathforge.agent_runtime.session_call_budget import SessionCallBudget
-from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.errors import BudgetExceeded
 
 
@@ -34,18 +33,7 @@ def test_adaptive_budget_uses_global_checkpoints_without_stage_quotas():
     assert snapshot.next_checkpoint == 28
     assert snapshot.stage_remaining["alternative"] == 32
 
-    with pytest.raises(RuntimeError, match="do not accept stage allocations"):
-        budget.set_allocation_plan(
-            CallAllocationPlan.build(
-                max_calls=48,
-                router_calls=1,
-                candidate_count=2,
-                verifier_required=True,
-                repair_requested=True,
-                lemma_requested=True,
-                finalizer_requested=False,
-            )
-        )
+    assert not hasattr(budget, "set_allocation_plan")
 
 
 def test_closure_reserve_rejects_speculation_but_allows_eight_closure_calls():

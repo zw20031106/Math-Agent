@@ -81,8 +81,6 @@ def build_closed_loop_health(
         )
     if proof_status == "incomplete":
         degradation_reasons.append("proof_incomplete")
-    elif proof_status == "model_reviewed":
-        degradation_reasons.append("proof_model_review_only")
     if hard_evidence in {"failed", "unknown"}:
         degradation_reasons.append(f"hard_evidence_{hard_evidence}")
 
@@ -249,6 +247,28 @@ def _proof_status(
 ) -> tuple[str, int]:
     if not selected_id:
         return "not_available", 0
+    finalized = _last(by_name, "proof_status_finalized")
+    if finalized:
+        statuses = finalized.get("statuses", [])
+        if isinstance(statuses, list):
+            selected = next(
+                (
+                    item
+                    for item in statuses
+                    if isinstance(item, dict)
+                    and str(item.get("candidate_id", "")) == selected_id
+                ),
+                None,
+            )
+            if selected is not None:
+                status = str(selected.get("status", "incomplete"))
+                if status in {
+                    "complete_hard",
+                    "complete_audited",
+                    "incomplete",
+                    "failed",
+                }:
+                    return status, 0
     gate = _last(by_name, "proof_completion_gate")
     if not gate:
         graph_event = _last(by_name, "proof_graph_completed")
@@ -263,7 +283,7 @@ def _proof_status(
         unresolved = _nonnegative_int(
             summary.get("unresolved_required_obligations", 0)
         )
-        return ("complete" if unresolved == 0 else "incomplete"), 0
+        return ("complete_hard" if unresolved == 0 else "incomplete"), 0
     decisions = gate.get("decisions", [])
     if not isinstance(decisions, list):
         return "not_available", 0
@@ -297,12 +317,12 @@ def _proof_status(
         unresolved = _nonnegative_int(
             summary.get("unresolved_required_obligations", 0)
         )
-        return ("complete" if unresolved == 0 else "incomplete"), 0
+        return ("complete_hard" if unresolved == 0 else "incomplete"), 0
     return (
         status
         if status in {
-            "complete",
-            "model_reviewed",
+            "complete_hard",
+            "complete_audited",
             "incomplete",
             "failed",
         }

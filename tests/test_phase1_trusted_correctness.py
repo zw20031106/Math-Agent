@@ -490,7 +490,7 @@ class _PostVerifierRepairClient:
         return response
 
 
-def test_one_post_verifier_repair_is_reverified_and_strictly_improves_proof():
+def test_un_audited_post_verifier_repair_is_reverified_then_rolled_back():
     client = _PostVerifierRepairClient()
     config = HarnessConfig(
         max_model_calls=4,
@@ -525,8 +525,8 @@ def test_one_post_verifier_repair_is_reverified_and_strictly_improves_proof():
         for event in result["trace"]
         if event["event"] == "phase_transition"
     ]
-    assert post_repair["rolled_back"] is False
-    assert post_repair["reason"] == "accepted_post_verifier"
+    assert post_repair["rolled_back"] is True
+    assert post_repair["reason"] == "post_repair_proof_incomplete"
     assert client.roles.count("RepairAgent") == 1
     assert client.roles.count("VerifierSkeptic") == 2
     assert "reverified" in transitions

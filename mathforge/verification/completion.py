@@ -33,6 +33,8 @@ class ProofCompletionGate:
         candidate: CandidateSolution,
         evidence: list[EvidenceRecord],
         obligations: list[ProofObligation],
+        *,
+        response_mode: str = "answer_only",
     ) -> CompletionDecision:
         own_evidence = [
             record
@@ -127,18 +129,33 @@ class ProofCompletionGate:
             for obligation in obligations
             if obligation.required
         ]
-        if not required:
-            status = "complete"
-            evidence_tier = "not_required"
-        elif not unresolved:
-            status = "complete"
-            evidence_tier = "hard_evidence"
-        elif set(unresolved) == set(model_reviewed):
-            status = "model_reviewed"
-            evidence_tier = "model_review"
-        else:
+        proof_shape_complete = (
+            response_mode != "proof_full"
+            or len(
+                [
+                    item
+                    for item in candidate.public_solution_steps
+                    if str(item).strip()
+                ]
+            )
+            >= 2
+        )
+        if not proof_shape_complete:
             status = "incomplete"
             evidence_tier = "incomplete"
+        elif not required:
+            status = "complete_hard"
+            evidence_tier = "not_required"
+        elif not unresolved:
+            status = "complete_hard"
+            evidence_tier = "hard_evidence"
+        else:
+            status = "incomplete"
+            evidence_tier = (
+                "model_review"
+                if set(unresolved) == set(model_reviewed)
+                else "incomplete"
+            )
         return CompletionDecision(
             candidate.candidate_id,
             status,

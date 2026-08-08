@@ -393,7 +393,7 @@ def test_autonomous_solver_runs_beyond_six_turns_and_has_no_planned_rounds():
     completed = _event(result, "reasoning_loop_completed")
     records = _event(result, "budget_summary")["model_call_records"]
 
-    assert planned["fixed_planned_rounds"] is False
+    assert "fixed_planned_rounds" not in planned
     assert "planned_rounds" not in completed
     assert completed["progress_turns"] >= 12
     assert completed["candidate_attempts"] == 2

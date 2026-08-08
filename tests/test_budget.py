@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import BudgetExceeded
 
@@ -62,9 +61,10 @@ def test_session_resource_budgets_are_shared_and_bounded():
         budget.record_evidence(1)
 
 
-def test_call_allocation_protects_required_verifier_from_optional_stages():
-    plan = CallAllocationPlan.build(
-        max_calls=3,
+def test_resource_plan_reports_capacity_without_enforcing_stage_quotas():
+    budget = CallBudget(3)
+    plan = budget.resource_governor.activation_plan(
+        used_calls=0,
         router_calls=0,
         candidate_count=3,
         verifier_required=True,
@@ -78,19 +78,16 @@ def test_call_allocation_protects_required_verifier_from_optional_stages():
     assert plan.repair_reserve == 0
     assert {"repair", "lemma"} <= set(plan.unreachable_by_budget)
 
-    budget = CallBudget(3)
-    budget.set_allocation_plan(plan)
     budget.consume(stage="primary")
     budget.consume(stage="alternative", optional=True)
-    with pytest.raises(BudgetExceeded, match="repair"):
-        budget.consume(stage="repair", optional=True)
-    budget.consume(stage="verifier")
+    budget.consume(stage="repair", optional=True)
     assert budget.used_calls == 3
 
 
-def test_call_allocation_reserves_post_verifier_repair_as_an_atomic_cycle():
-    plan = CallAllocationPlan.build(
-        max_calls=4,
+def test_resource_plan_describes_post_verifier_repair_capacity():
+    budget = CallBudget(4)
+    plan = budget.resource_governor.activation_plan(
+        used_calls=0,
         router_calls=0,
         candidate_count=1,
         verifier_required=True,
@@ -104,8 +101,8 @@ def test_call_allocation_reserves_post_verifier_repair_as_an_atomic_cycle():
     assert plan.repair_reserve == 1
     assert plan.unreachable_by_budget == ()
 
-    insufficient = CallAllocationPlan.build(
-        max_calls=3,
+    insufficient = CallBudget(3).resource_governor.activation_plan(
+        used_calls=0,
         router_calls=0,
         candidate_count=1,
         verifier_required=True,
@@ -121,21 +118,11 @@ def test_call_allocation_reserves_post_verifier_repair_as_an_atomic_cycle():
     )
 
 
-def test_call_allocation_uses_one_spare_call_for_primary_contract_retry():
-    plan = CallAllocationPlan.build(
-        max_calls=6,
-        router_calls=0,
-        candidate_count=1,
-        verifier_required=False,
-        repair_requested=False,
-        lemma_requested=False,
-        finalizer_requested=False,
-    )
-
-    assert plan.primary == 2
+def test_shared_budget_allows_primary_retry_until_global_cap():
     budget = CallBudget(6)
-    budget.set_allocation_plan(plan)
     budget.consume(stage="primary")
     budget.consume(stage="primary", optional=True)
-    with pytest.raises(BudgetExceeded, match="primary"):
+    for _ in range(4):
+        budget.consume(stage="primary", optional=True)
+    with pytest.raises(BudgetExceeded, match="call budget exhausted"):
         budget.consume(stage="primary", optional=True)

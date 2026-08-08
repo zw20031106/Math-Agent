@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
 import json
 import re
@@ -8,8 +8,7 @@ from typing import Any, ClassVar
 
 from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.harness.context_budget import InternS2TokenCounter
-from mathforge.harness.model_policy import stage_sequence_reserve_seconds
-from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
+from mathforge.harness.schemas import CandidateSolution, ProblemIR
 
 
 REASONING_STATE_SCHEMA_VERSION = "1.1"
@@ -1240,66 +1239,6 @@ class ProgressDeltaParser:
         )
         delta.validate()
         return delta
-
-
-@dataclass(frozen=True)
-class LongHorizonPlan:
-    enabled: bool
-    planned_rounds: int
-    reason_code: str
-    sequence_reserve_seconds: float
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-class LongHorizonPolicy:
-    """Admit public continuation only when calls and p95 time leave recovery."""
-
-    def decide(
-        self,
-        route: RoutePlan,
-        *,
-        enabled: bool,
-        remaining_calls: int,
-        remaining_seconds: float,
-        verifier_required: bool,
-        alternatives_enabled: bool,
-        provider_healthy: bool,
-        maximum_queue_seconds: float,
-    ) -> LongHorizonPlan:
-        if not enabled:
-            return LongHorizonPlan(False, 1, "config_disabled", 0.0)
-        if route.risk_level != "high" or route.max_reasoning_rounds < 2:
-            return LongHorizonPlan(False, 1, "single_round_route", 0.0)
-        if not provider_healthy:
-            return LongHorizonPlan(False, 1, "provider_degraded", 0.0)
-
-        protected_calls = (
-            int(verifier_required)
-            + (
-                max(0, route.candidate_count - 1)
-                if alternatives_enabled
-                else 0
-            )
-            + 1
-        )
-        capacity = max(1, remaining_calls - protected_calls)
-        planned = min(3, route.max_reasoning_rounds, capacity)
-        while planned >= 2:
-            reserve = stage_sequence_reserve_seconds(
-                ["primary"] * planned,
-                maximum_queue_seconds,
-            )
-            if remaining_seconds >= reserve:
-                return LongHorizonPlan(
-                    True,
-                    planned,
-                    "high_difficulty_budget_feasible",
-                    round(reserve, 6),
-                )
-            planned -= 1
-        return LongHorizonPlan(False, 1, "insufficient_call_or_time_budget", 0.0)
 
 
 def _progress_claim(payload: dict[str, Any]) -> PublicClaim:

@@ -57,12 +57,12 @@ class HarnessConfig:
     max_inflight_calls_per_agent: int = 1
     primary_temperature: float = 0.2
     primary_max_tokens: int = 0
-    max_model_calls: int = 6
-    model_call_policy: str = "legacy_staged"
-    max_logical_model_calls_per_problem: int = 6
-    soft_call_checkpoints: tuple[int, ...] = (1,)
-    speculative_exploration_cutoff: int = 1
-    closure_reserve_calls: int = 0
+    max_model_calls: int = 48
+    model_call_policy: str = "adaptive_bounded"
+    max_logical_model_calls_per_problem: int = 48
+    soft_call_checkpoints: tuple[int, ...] = (16, 28, 40)
+    speculative_exploration_cutoff: int = 40
+    closure_reserve_calls: int = 8
     stage_execution_policy: dict[str, dict[str, int | float]] = field(
         default_factory=_default_stage_execution_policy
     )
@@ -118,6 +118,44 @@ class HarnessConfig:
     enable_long_horizon: bool = False
 
     def __post_init__(self) -> None:
+        incoming_logical_limit = self.max_logical_model_calls_per_problem
+        if self.max_model_calls != incoming_logical_limit:
+            object.__setattr__(
+                self,
+                "max_logical_model_calls_per_problem",
+                self.max_model_calls,
+            )
+            if (
+                self.closure_reserve_calls == 0
+                and self.speculative_exploration_cutoff
+                == incoming_logical_limit
+            ):
+                object.__setattr__(
+                    self,
+                    "speculative_exploration_cutoff",
+                    self.max_model_calls,
+                )
+                if tuple(self.soft_call_checkpoints) == (
+                    incoming_logical_limit,
+                ):
+                    object.__setattr__(
+                        self,
+                        "soft_call_checkpoints",
+                        (self.max_model_calls,),
+                    )
+        if (
+            self.max_model_calls != 48
+            and tuple(self.soft_call_checkpoints) == (16, 28, 40)
+            and self.speculative_exploration_cutoff == 40
+            and self.closure_reserve_calls == 8
+        ):
+            object.__setattr__(self, "soft_call_checkpoints", (self.max_model_calls,))
+            object.__setattr__(
+                self,
+                "speculative_exploration_cutoff",
+                self.max_model_calls,
+            )
+            object.__setattr__(self, "closure_reserve_calls", 0)
         object.__setattr__(
             self,
             "soft_call_checkpoints",
@@ -283,38 +321,37 @@ class HarnessConfig:
             raise ValueError(
                 "transport_attempt_reservation must not exceed the RPM limit"
             )
-        if self.model_call_policy not in {"legacy_staged", "adaptive_bounded"}:
+        if self.model_call_policy != "adaptive_bounded":
             raise ValueError("model_call_policy is invalid")
         if self.finish_reason_length_policy != "partial_needs_compaction":
             raise ValueError("finish_reason_length_policy is invalid")
         if self.timeout_retry_policy != "wait_tail_or_replan":
             raise ValueError("timeout_retry_policy is invalid")
         self._validate_stage_execution_policy()
-        if self.model_call_policy == "adaptive_bounded":
-            if self.max_model_calls != self.max_logical_model_calls_per_problem:
-                raise ValueError(
-                    "max_model_calls must equal max_logical_model_calls_per_problem"
-                )
-            if (
-                self.speculative_exploration_cutoff
-                != self.max_logical_model_calls_per_problem
-                - self.closure_reserve_calls
-            ):
-                raise ValueError(
-                    "speculative cutoff must preserve closure_reserve_calls"
-                )
-            if (
-                tuple(sorted(set(self.soft_call_checkpoints)))
-                != self.soft_call_checkpoints
-                or any(
-                    type(item) is not int
-                    or not 0 < item <= self.speculative_exploration_cutoff
-                    for item in self.soft_call_checkpoints
-                )
-            ):
-                raise ValueError(
-                    "soft_call_checkpoints must be increasing exploration indices"
-                )
+        if self.max_model_calls != self.max_logical_model_calls_per_problem:
+            raise ValueError(
+                "max_model_calls must equal max_logical_model_calls_per_problem"
+            )
+        if (
+            self.speculative_exploration_cutoff
+            != self.max_logical_model_calls_per_problem
+            - self.closure_reserve_calls
+        ):
+            raise ValueError(
+                "speculative cutoff must preserve closure_reserve_calls"
+            )
+        if (
+            tuple(sorted(set(self.soft_call_checkpoints)))
+            != self.soft_call_checkpoints
+            or any(
+                type(item) is not int
+                or not 0 < item <= self.speculative_exploration_cutoff
+                for item in self.soft_call_checkpoints
+            )
+        ):
+            raise ValueError(
+                "soft_call_checkpoints must be increasing exploration indices"
+            )
         if self.judge_trace_event_max_chars >= self.judge_trace_max_chars:
             raise ValueError(
                 "judge_trace_event_max_chars must be below judge_trace_max_chars"

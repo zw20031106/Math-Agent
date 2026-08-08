@@ -111,21 +111,41 @@ class ResourceGovernor:
     ) -> AdaptiveResourcePlan:
         remaining = max(0, self.hard_limit - used_calls)
         requested_alternatives = max(0, int(candidate_count) - 1)
-        mandatory = 1 + int(verifier_required)
+        consumed_after_router = max(0, int(used_calls) - max(0, int(router_calls)))
+        primary_remaining = max(0, int(primary_calls) - consumed_after_router)
+        consumed_alternatives = max(
+            0,
+            consumed_after_router - int(primary_calls),
+        )
+        requested_alternatives = max(
+            0,
+            requested_alternatives - consumed_alternatives,
+        )
+        mandatory = primary_remaining + int(verifier_required)
         unreachable: list[str] = []
         alternatives = min(requested_alternatives, max(0, remaining - mandatory))
         if alternatives < requested_alternatives:
             unreachable.append("alternatives")
         available = max(0, remaining - mandatory - alternatives)
 
-        repair = int(repair_requested and available >= 1)
-        available -= repair
-        if repair_requested and not repair:
-            unreachable.append("repair")
-        extra_verifier = int(reverification_requested and repair and available >= 1)
-        available -= extra_verifier
-        if reverification_requested and not extra_verifier:
-            unreachable.append("reverification")
+        repair = 0
+        extra_verifier = 0
+        if repair_requested and reverification_requested:
+            if available >= 2:
+                repair = 1
+                extra_verifier = 1
+                available -= 2
+            else:
+                unreachable.extend(("repair", "reverification"))
+        else:
+            repair = int(repair_requested and available >= 1)
+            available -= repair
+            if repair_requested and not repair:
+                unreachable.append("repair")
+            extra_verifier = int(reverification_requested and available >= 1)
+            available -= extra_verifier
+            if reverification_requested and not extra_verifier:
+                unreachable.append("reverification")
         lemma = int(lemma_requested and available >= 1)
         available -= lemma
         if lemma_requested and not lemma:
@@ -137,7 +157,7 @@ class ResourceGovernor:
         return AdaptiveResourcePlan(
             max_calls=self.hard_limit,
             router=max(0, int(router_calls)),
-            primary=max(1, int(primary_calls)),
+            primary=primary_remaining,
             alternatives=alternatives,
             verifier=int(verifier_required) + extra_verifier,
             repair_reserve=repair,

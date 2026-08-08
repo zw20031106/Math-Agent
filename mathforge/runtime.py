@@ -9,7 +9,6 @@ from mathforge.agents.registry import PromptContractLoader, SkillRegistry
 from mathforge.agents.skill_selector import DynamicSkillSelector
 from mathforge.agents.router_planner import RouterPlanner, method_families_for
 from mathforge.config import HarnessConfig, load_competition_config
-from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.adaptive_fanout import AdaptiveFanoutPolicy
 from mathforge.agent_runtime.session_call_budget import SessionCallBudget
 from mathforge.agent_runtime.definitions import AgentRegistry
@@ -37,8 +36,6 @@ from mathforge.harness.model_policy import (
     stage_sequence_reserve_seconds,
 )
 from mathforge.harness.reasoning_state import (
-    LongHorizonPlan,
-    LongHorizonPolicy,
     REASONING_STATE_MAX_TOKENS,
     ReasoningState,
     ReasoningStateCompressor,
@@ -133,6 +130,11 @@ from mathforge.verification.cross_review import (
 from mathforge.verification.candidate_pool import CandidatePool
 from mathforge.tools.shadow_solver import ShadowOutcome
 from mathforge.verification.answer_normalization import canonical_answer
+from mathforge.runtime_flows import (
+    AgentEventProjector,
+    FinalProofStatusService,
+    PublicContractGuard,
+)
 
 
 @dataclass
@@ -181,26 +183,15 @@ _PUBLIC_METADATA_KEYS = (
 )
 
 
-def _build_call_allocation(
+def _build_resource_plan(
     budget: CallBudget,
     **kwargs: Any,
 ):
-    max_calls = int(kwargs.pop("max_calls"))
-    governor = budget.resource_governor
-    if governor is not None:
-        return governor.activation_plan(
-            used_calls=budget.used_calls,
-            **kwargs,
-        )
-    return CallAllocationPlan.build(max_calls=max_calls, **kwargs)
-
-
-def _apply_stage_allocation(
-    budget: CallBudget,
-    allocation: Any,
-) -> None:
-    if budget.resource_governor is None:
-        budget.set_allocation_plan(allocation)
+    kwargs.pop("max_calls", None)
+    return budget.resource_governor.activation_plan(
+        used_calls=budget.used_calls,
+        **kwargs,
+    )
 
 
 def _public_metadata(metadata: Any) -> dict[str, Any]:
@@ -313,7 +304,8 @@ class MathForgeHarness:
             else None
         )
         self._adaptive_fanout = AdaptiveFanoutPolicy()
-        self._long_horizon_policy = LongHorizonPolicy()
+        self._final_proof_status = FinalProofStatusService()
+        self._agent_event_projector = AgentEventProjector()
         self._reasoning_state_compressor = ReasoningStateCompressor(
             self._context_budget.token_counter
         )
@@ -448,6 +440,7 @@ class MathForgeHarness:
                     self._config.speculative_exploration_cutoff
                 ),
                 closure_reserve_calls=self._config.closure_reserve_calls,
+                enforce_stage_start_window=True,
             ),
             raw_context_max_chars=self._config.raw_context_max_chars,
         )
@@ -501,12 +494,6 @@ class MathForgeHarness:
         problem_memo = ProblemMemo()
         shadow_outcome: ShadowOutcome | None = None
         frozen_lemma_hits = ()
-        reasoning_plan = LongHorizonPlan(
-            False,
-            1,
-            "not_planned",
-            0.0,
-        )
         reasoning_degraded_reason = ""
 
         def remember_safe_candidate(
@@ -546,36 +533,6 @@ class MathForgeHarness:
                     "l1:frozen_lemma_retrieval",
                     lambda: frozen_store.retrieve(session.problem_ir),
                 )
-            if self._config.enable_memory:
-                blackboard.publish(
-                    "System",
-                    "raw",
-                    {"metadata": safe_metadata},
-                )
-                if frozen_lemma_hits:
-                    blackboard.publish(
-                        "System",
-                        "lemma",
-                        {
-                            "source": "frozen_lemma_store",
-                            "store_hash": self._frozen_lemma_store.store_hash,
-                            "lemmas": [
-                                {
-                                    "lemma_id": hit.lemma.lemma_id,
-                                    "statement": hit.lemma.statement,
-                                    "domain": hit.lemma.domain,
-                                    "assumptions": list(hit.lemma.assumptions),
-                                    "preconditions": list(hit.lemma.preconditions),
-                                    "conclusion": hit.lemma.conclusion,
-                                    "proof_outline_public": list(
-                                        hit.lemma.proof_outline_public
-                                    ),
-                                    "content_hash": hit.lemma.content_hash,
-                                }
-                                for hit in frozen_lemma_hits
-                            ],
-                        },
-                    )
             trace.add(
                 "frozen_lemma_cache",
                 requested=self._config.enable_frozen_lemma_store,
@@ -746,31 +703,9 @@ class MathForgeHarness:
             pre_allocation_budget = session.budget.snapshot()
             autonomous_agents_enabled = bool(
                 self._config.enable_long_horizon
-                and self._config.model_call_policy == "adaptive_bounded"
                 and self._provider_allows_optional_model_work()
             )
-            reasoning_plan = (
-                LongHorizonPlan(
-                    False,
-                    1,
-                    "agent_action_governed",
-                    0.0,
-                )
-                if autonomous_agents_enabled
-                else self._long_horizon_policy.decide(
-                    session.route_plan,
-                    enabled=self._config.enable_long_horizon,
-                    remaining_calls=pre_allocation_budget.remaining_calls,
-                    remaining_seconds=pre_allocation_budget.remaining_seconds,
-                    verifier_required=verifier_required,
-                    alternatives_enabled=self._config.enable_alternatives,
-                    provider_healthy=self._provider_allows_optional_model_work(),
-                    maximum_queue_seconds=(
-                        self._config.model_queue_budget_seconds
-                    ),
-                )
-            )
-            allocation = _build_call_allocation(
+            allocation = _build_resource_plan(
                 session.budget,
                 max_calls=self._config.max_model_calls,
                 router_calls=session.budget.used_calls,
@@ -786,13 +721,8 @@ class MathForgeHarness:
                     self._config.enable_finalizer
                     and session.route_plan.use_llm_finalizer
                 ),
-                primary_calls=(
-                    1
-                    if autonomous_agents_enabled
-                    else reasoning_plan.planned_rounds
-                ),
+                primary_calls=1,
             )
-            _apply_stage_allocation(session.budget, allocation)
             unreachable = list(allocation.unreachable_by_budget)
             if router_unreachable:
                 unreachable.insert(0, "router")
@@ -804,12 +734,6 @@ class MathForgeHarness:
                     and allocation.finalizer_reserve > 0
                 ),
             )
-            if self._config.enable_memory:
-                blackboard.publish(
-                    "System",
-                    "working",
-                    {"route_plan": session.route_plan.to_dict()},
-                )
             skill_compositions = (
                 {
                     role: self._dynamic_skills.compose_for_role(
@@ -951,31 +875,24 @@ class MathForgeHarness:
                     "open_obligations",
                 ],
             )
-            if autonomous_agents_enabled:
-                trace.add(
-                    "autonomous_solver_planned",
-                    enabled=True,
-                    fixed_planned_rounds=False,
-                    governance=(
-                        "agent_action+public_progress+resource_governor+deadline"
-                    ),
-                    remaining_calls=pre_allocation_budget.remaining_calls,
-                    remaining_seconds=pre_allocation_budget.remaining_seconds,
-                )
-            else:
-                trace.add(
-                    "long_horizon_planned",
-                    **reasoning_plan.to_dict(),
-                    remaining_calls=pre_allocation_budget.remaining_calls,
-                    remaining_seconds=pre_allocation_budget.remaining_seconds,
-                )
+            trace.add(
+                "autonomous_solver_planned",
+                enabled=autonomous_agents_enabled,
+                governance=(
+                    "agent_action+public_progress+resource_governor+deadline"
+                    if autonomous_agents_enabled
+                    else "single_candidate_turn+resource_governor+deadline"
+                ),
+                remaining_calls=pre_allocation_budget.remaining_calls,
+                remaining_seconds=pre_allocation_budget.remaining_seconds,
+            )
             self._trace_dynamic_skill_selection(
                 trace,
                 skill_compositions,
                 selection_context="initial",
             )
             trace.add(
-                "call_allocation_planned",
+                "resource_plan_created",
                 **{
                     **allocation.to_dict(),
                     "unreachable_by_budget": unreachable,
@@ -1021,21 +938,6 @@ class MathForgeHarness:
                         role_skill_contexts=role_skill_contexts,
                         solver_contexts=solver_contexts,
                     )
-                )
-            elif reasoning_plan.enabled:
-                (
-                    primary_seed,
-                    session.reasoning_state,
-                    reasoning_degraded_reason,
-                ) = self._run_long_horizon_primary(
-                    session,
-                    trace,
-                    reasoning_plan,
-                    skill_context=role_skill_contexts.get(
-                        "PrimarySolver",
-                        "",
-                    ),
-                    context_view=solver_contexts["PrimarySolver"],
                 )
             if not autonomous_agents_enabled:
                 fanout = self._candidate_orchestrator.fanout(
@@ -1122,29 +1024,14 @@ class MathForgeHarness:
                         ),
                     )
                     reasoning_stop_reason = "candidate_synthesized"
-            if self._config.enable_memory:
-                blackboard.publish(
-                    "System",
-                    "working",
-                    {
-                        "reasoning_state": (
-                            session.reasoning_state.to_dict()
-                        ),
-                        "projection": "public_read_only",
-                    },
-                )
             trace.add(
                 "reasoning_loop_completed",
                 state_id=session.reasoning_state.state_id,
                 enabled=(
-                    autonomous_agents_enabled or reasoning_plan.enabled
+                    autonomous_agents_enabled
                 ),
                 completed_rounds=len(session.reasoning_state.rounds),
-                **(
-                    {"fixed_planned_rounds": False, **autonomous_summary}
-                    if autonomous_agents_enabled
-                    else {"planned_rounds": reasoning_plan.planned_rounds}
-                ),
+                **(autonomous_summary if autonomous_agents_enabled else {}),
                 stop_reason=reasoning_stop_reason,
                 degraded_reason=reasoning_degraded_reason,
                 candidate_id=(
@@ -1380,16 +1267,6 @@ class MathForgeHarness:
                 admitted_candidates.append(item)
             if self._config.enable_tools:
                 trace.add("tool_checks", checks=tool_results)
-                if self._config.enable_memory:
-                    blackboard.publish(
-                        "System",
-                        "evidence",
-                        {
-                            "evidence_ids": [
-                                record.evidence_id for record in session.evidence
-                            ]
-                        },
-                    )
             for candidate in fanout.candidates:
                 evidence_checks_enabled = (
                     self._config.enable_tools
@@ -1501,12 +1378,12 @@ class MathForgeHarness:
             )
             if not optional_model_work_allowed:
                 trace.add(
-                    "call_allocation_rebalanced",
+                    "resource_plan_updated",
                     reason="provider_degraded",
                     provider_health=self._provider_health_state(),
                     disabled=["repair", "lemma", "verifier", "finalizer"],
                 )
-            allocation = _build_call_allocation(
+            allocation = _build_resource_plan(
                 session.budget,
                 max_calls=self._config.max_model_calls,
                 router_calls=allocation.router,
@@ -1531,7 +1408,6 @@ class MathForgeHarness:
                     and optional_model_work_allowed
                 ),
             )
-            _apply_stage_allocation(session.budget, allocation)
             session.route_plan = replace(
                 session.route_plan,
                 use_lemma_loop=(
@@ -1552,7 +1428,7 @@ class MathForgeHarness:
                 else False
             )
             trace.add(
-                "call_allocation_rebalanced",
+                "resource_plan_updated",
                 evidence_repair_triggers=repair_triggers,
                 lemma_eligibility={
                     "eligible": lemma_eligible,
@@ -1979,7 +1855,7 @@ class MathForgeHarness:
                 and session.budget.deadline.exploration_allowed()
             )
             if verifier_required:
-                allocation = _build_call_allocation(
+                allocation = _build_resource_plan(
                     session.budget,
                     max_calls=self._config.max_model_calls,
                     router_calls=allocation.router,
@@ -1990,9 +1866,8 @@ class MathForgeHarness:
                     finalizer_requested=allocation.finalizer_reserve > 0,
                     reverification_requested=post_verifier_repair_requested,
                 )
-                _apply_stage_allocation(session.budget, allocation)
                 trace.add(
-                    "call_allocation_rebalanced",
+                    "resource_plan_updated",
                     evidence_repair_triggers={},
                     post_verifier_repair_requested=(
                         post_verifier_repair_requested
@@ -2143,6 +2018,7 @@ class MathForgeHarness:
                             item.candidate_id,
                             [],
                         ),
+                        response_mode=session.problem_ir.response_mode,
                     )
                     before_score = self._repair_completion_score(
                         item,
@@ -2203,6 +2079,7 @@ class MathForgeHarness:
                                 proposed.candidate_id,
                                 [],
                             ),
+                            response_mode=session.problem_ir.response_mode,
                         )
                         after_score = self._repair_completion_score(
                             proposed,
@@ -2215,10 +2092,7 @@ class MathForgeHarness:
                             for record in session.evidence
                             if record.candidate_id == proposed.candidate_id
                         )
-                        if after_decision.status not in {
-                            "complete",
-                            "model_reviewed",
-                        }:
+                        if after_decision.status != "complete_hard":
                             return False, "post_repair_proof_incomplete"
                         if after_local_hard_passes < before_local_hard_passes:
                             return False, "evidence_quality_decreased"
@@ -2388,26 +2262,27 @@ class MathForgeHarness:
                         for candidate in viable
                     ]
                     break
-            completion_status_by_id = {
-                item.candidate_id: "not_required"
+            completion_decisions = [
+                self._proof_stage.evaluate(
+                    item,
+                    session.evidence,
+                    session.proof_obligations.get(item.candidate_id, []),
+                    response_mode=session.problem_ir.response_mode,
+                )
                 for item in viable
+            ]
+            completion_status_by_id = {
+                decision.candidate_id: decision.status
+                for decision in completion_decisions
             }
             if (
                 self._config.enable_proof_obligations
                 and required_obligations
             ):
-                completion_decisions = [
-                    self._proof_stage.evaluate(
-                        item,
-                        session.evidence,
-                        session.proof_obligations.get(item.candidate_id, []),
-                    )
-                    for item in viable
-                ]
                 completed_ids = {
                     decision.candidate_id
                     for decision in completion_decisions
-                    if decision.status == "complete"
+                    if decision.status == "complete_hard"
                 }
                 hard_failed_ids = {
                     decision.candidate_id
@@ -2426,10 +2301,6 @@ class MathForgeHarness:
                         decision.status != "failed"
                         and decision.candidate_id not in unreviewed_expanded_ids
                     )
-                }
-                completion_status_by_id = {
-                    decision.candidate_id: decision.status
-                    for decision in completion_decisions
                 }
                 trace.add(
                     "proof_completion_gate",
@@ -2487,6 +2358,47 @@ class MathForgeHarness:
                     ledger,
                     role_skill_contexts.get("VerifierSkeptic", ""),
                 )
+            decision_by_id = {
+                item.candidate_id: item for item in completion_decisions
+            }
+            final_proof_statuses = []
+            for item in viable:
+                decision = decision_by_id.get(item.candidate_id)
+                if decision is None:
+                    decision = self._proof_stage.evaluate(
+                        item,
+                        session.evidence,
+                        session.proof_obligations.get(item.candidate_id, []),
+                        response_mode=session.problem_ir.response_mode,
+                    )
+                repaired = any(
+                    lineage.get("proposed_candidate_id") == item.candidate_id
+                    and not bool(lineage.get("rolled_back"))
+                    for lineage in session.repair_lineage
+                )
+                final_status = self._final_proof_status.finalize(
+                    item,
+                    decision,
+                    obligations=session.proof_obligations.get(
+                        item.candidate_id,
+                        [],
+                    ),
+                    audits=session.audits,
+                    repaired=repaired,
+                    response_mode=session.problem_ir.response_mode,
+                )
+                completion_status_by_id[item.candidate_id] = final_status.status
+                final_proof_statuses.append(final_status.to_dict())
+            trace.add(
+                "proof_status_finalized",
+                statuses=final_proof_statuses,
+                allowed_statuses=[
+                    "complete_hard",
+                    "complete_audited",
+                    "incomplete",
+                    "failed",
+                ],
+            )
             self._transition(
                 session,
                 trace,
@@ -2567,26 +2479,24 @@ class MathForgeHarness:
                     1.0
                     if completion_status_by_id.get(
                         candidate.candidate_id,
-                        "not_required",
+                        "incomplete",
                     )
-                    in {"complete", "not_required"}
+                    in {"complete_hard", "complete_audited"}
                     else 0.0
                 )
                 single_status = completion_status_by_id.get(
                     candidate.candidate_id,
-                    "not_required",
+                    "incomplete",
                 )
                 single_tier = {
-                    "complete": "hard_evidence",
-                    "model_reviewed": "model_review",
-                    "not_required": "not_required",
+                    "complete_hard": "hard_evidence",
+                    "complete_audited": "independent_corroboration",
                 }.get(single_status, "incomplete")
                 single_tier_rank = {
                     "hard_evidence": 0,
                     "independent_corroboration": 1,
                     "model_review": 2,
-                    "not_required": 3,
-                    "incomplete": 4,
+                    "incomplete": 3,
                 }[single_tier]
                 single_review_support = sum(
                     1
@@ -2684,7 +2594,7 @@ class MathForgeHarness:
                 tie_break_reason=tie_break_reason,
                 selected_verification_status=completion_status_by_id.get(
                     candidate.candidate_id,
-                    "not_required",
+                    "incomplete",
                 ),
                 selected_source=candidate.source,
                 selection_quality=(
@@ -2899,7 +2809,7 @@ class MathForgeHarness:
                 ),
                 verification_status=completion_status_by_id.get(
                     candidate.candidate_id,
-                    "not_required",
+                    "incomplete",
                 ),
                 selected_source=candidate.source,
                 selection_quality=(
@@ -3181,6 +3091,30 @@ class MathForgeHarness:
             None,
         )
         terminalizer.safe(
+            "agent_lifecycle_projection",
+            lambda: [
+                trace.add(event_name, **details)
+                for event_name, details in self._agent_event_projector.project(
+                    protocol_snapshot,
+                    repair_lineage=session.repair_lineage,
+                )
+            ],
+            None,
+        )
+        terminalizer.safe(
+            "formal_entry_compatibility_trace",
+            lambda: trace.add(
+                "formal_entry_compatibility",
+                public_contract="nonempty_final_response_and_list_trace",
+                immutable_files=["main.py", "llm_client.py"],
+                status_field_owner="user_agent_public_projection",
+                harness_status_limitation=(
+                    "runtime outcome is projected by the frozen formal entry"
+                ),
+            ),
+            None,
+        )
+        terminalizer.safe(
             "session_freeze",
             session.freeze,
             None,
@@ -3391,6 +3325,10 @@ class MathForgeHarness:
             outcome=outcome,
             final_phase=session.phase.value,
             error_code=error_code,
+        )
+        result = PublicContractGuard.normalize(
+            result,
+            MINIMAL_FALLBACK_RESPONSE,
         )
         result["_public_output_limits"] = {
             "final_response_max_chars": self._config.final_response_max_chars,
@@ -4350,220 +4288,6 @@ class MathForgeHarness:
             "sole authority for admission and limits."
         )
 
-    def _run_long_horizon_primary(
-        self,
-        session,
-        trace: TraceBuilder,
-        plan: LongHorizonPlan,
-        *,
-        skill_context: str,
-        context_view,
-    ):
-        state = session.reasoning_state
-        solver = PrimarySolver(self._contracts)
-        active_skill_context = skill_context
-        skill_failure_codes: tuple[str, ...] = ()
-        method_families = list(session.route_plan.method_families)
-        method_family = (
-            method_families[0]
-            if method_families
-            else "direct-deduction"
-        )
-        forbidden = tuple(
-            method_families[1 : session.route_plan.candidate_count]
-        )
-        degraded_reason = ""
-
-        for progress_offset in range(plan.planned_rounds - 1):
-            mode = "explore" if progress_offset == 0 else "continue"
-            if progress_offset > 0:
-                remaining_sequence = ["primary"] * (
-                    plan.planned_rounds - progress_offset
-                )
-                if not stage_sequence_feasible(
-                    remaining_sequence,
-                    remaining_seconds=(
-                        session.budget.snapshot().remaining_seconds
-                    ),
-                    maximum_queue_seconds=(
-                        self._config.model_queue_budget_seconds
-                    ),
-                ):
-                    degraded_reason = "continuation_time_reserve_unavailable"
-                    break
-            try:
-                compressed = self._compress_reasoning_state(state, trace)
-            except ContextBudgetExceeded:
-                degraded_reason = "reasoning_state_budget_infeasible"
-                if progress_offset == 0:
-                    return None, state, degraded_reason
-                break
-            request = SolverRequest(
-                "primary-1",
-                session.problem_ir,
-                session.route_plan,
-                active_skill_context,
-                method_family,
-                forbidden,
-                context_view,
-                compressed.prompt_json,
-            )
-            try:
-                delta = self._solver_executor.execute_progress(
-                    solver,
-                    request,
-                    session.budget,
-                    mode=mode,
-                    temperature=self._config.primary_temperature,
-                    max_tokens=self._config.primary_max_tokens,
-                    optional=mode == "continue",
-                )
-                state, summary = state.apply(delta)
-            except Exception as error:
-                degraded_reason = self._reasoning_failure_code(error)
-                trace.add(
-                    "round_summary",
-                    state_id=state.state_id,
-                    state_version=state.version,
-                    round_index=state.version,
-                    mode=mode,
-                    added_subgoal_ids=[],
-                    updated_subgoal_ids=[],
-                    closed_subgoal_ids=[],
-                    added_claim_ids=[],
-                    claim_dependency_refs={},
-                    evidence_ids=list(state.evidence_refs),
-                    opened_obligation_ids=[],
-                    closed_obligation_ids=[],
-                    information_gain=0,
-                    next_step="fallback_to_synthesize",
-                    stop_reason="progress_round_failed",
-                    degraded_reason=degraded_reason,
-                    state_tokens=compressed.state_tokens,
-                    state_counting_mode=compressed.counting_mode,
-                    state_compressed=compressed.compressed,
-                    omitted_rounds=compressed.omitted_rounds,
-                )
-                if progress_offset == 0:
-                    return None, state, degraded_reason
-                break
-            added_claim_ids = set(summary["added_claim_ids"])
-            feedback_batch = None
-            if self._config.enable_tools and added_claim_ids:
-                feedback_batch = self._tool_feedback.run(
-                    tuple(
-                        claim
-                        for claim in delta.claims
-                        if claim.claim_id in added_claim_ids
-                    ),
-                    domains=session.problem_ir.domains,
-                    assumptions=session.problem_ir.assumptions,
-                    selected_tools=session.route_plan.selected_tools,
-                    budget=session.budget,
-                )
-                if feedback_batch.work_items:
-                    state, feedback_summary = state.apply_tool_results(
-                        feedback_batch.results
-                    )
-                    summary["evidence_ids"] = feedback_summary[
-                        "evidence_ids"
-                    ]
-                    skill_failure_codes = feedback_batch.failure_codes
-                    trace.add(
-                        "tool_feedback_completed",
-                        state_id=state.state_id,
-                        state_version=state.version,
-                        round_index=delta.round_index,
-                        next_protocol=(
-                            "continue"
-                            if progress_offset
-                            < plan.planned_rounds - 2
-                            else "synthesize"
-                        ),
-                        **feedback_batch.to_trace_dict(),
-                    )
-                    if skill_failure_codes:
-                        dynamic_primary = (
-                            self._dynamic_skills.compose_for_role(
-                                session.problem_ir,
-                                role="PrimarySolver",
-                                route_skill_names=(
-                                    session.route_plan.selected_skills
-                                ),
-                                max_chars=self._config.skill_char_budget,
-                                state=state,
-                                failure_codes=skill_failure_codes,
-                                selection_context=(
-                                    f"tool_feedback_round_{delta.round_index}"
-                                ),
-                            )
-                        )
-                        active_skill_context = dynamic_primary.text
-                        self._trace_dynamic_skill_selection(
-                            trace,
-                            {"PrimarySolver": dynamic_primary},
-                            selection_context=(
-                                f"tool_feedback_round_{delta.round_index}"
-                            ),
-                        )
-            try:
-                committed_state = self._compress_reasoning_state(
-                    state,
-                    trace,
-                )
-            except ContextBudgetExceeded:
-                committed_state = compressed
-                degraded_reason = "reasoning_state_budget_infeasible"
-            trace.add(
-                "round_summary",
-                **{
-                    **summary,
-                    "stop_reason": (
-                        summary["stop_reason"]
-                        if summary["information_gain"] > 0
-                        else "no_information_gain"
-                    ),
-                },
-                state_tokens=committed_state.state_tokens,
-                state_counting_mode=committed_state.counting_mode,
-                state_compressed=committed_state.compressed,
-                omitted_rounds=committed_state.omitted_rounds,
-            )
-            session.reasoning_state = state
-            if summary["information_gain"] <= 0 or degraded_reason:
-                break
-
-        try:
-            compressed = self._compress_reasoning_state(state, trace)
-        except ContextBudgetExceeded:
-            return None, state, (
-                degraded_reason or "synthesis_state_budget_infeasible"
-            )
-        request = SolverRequest(
-            "primary-1",
-            session.problem_ir,
-            session.route_plan,
-            active_skill_context,
-            method_family,
-            forbidden,
-            context_view,
-            compressed.prompt_json,
-        )
-        try:
-            candidate = self._solver_executor.execute(
-                solver,
-                request,
-                session.budget,
-                temperature=self._config.primary_temperature,
-                max_tokens=self._config.primary_max_tokens,
-                optional=False,
-            )
-        except Exception as error:
-            return None, state, (
-                degraded_reason or self._reasoning_failure_code(error)
-            )
-        return candidate, state, degraded_reason
-
     def _compress_reasoning_state(
         self,
         state: ReasoningState,
@@ -4799,6 +4523,7 @@ class MathForgeHarness:
                 final_answer=final_answer,
                 raw_store=session.raw_context_store,
                 memory_categories=memory_categories,
+                public_metadata=session.metadata,
             )
         except ContextBudgetExceeded:
             trace.add(

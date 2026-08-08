@@ -11,7 +11,6 @@ from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.config import HarnessConfig
 from mathforge.evaluation.scoring import score_response
 from mathforge.harness.adaptive_fanout import AdaptiveFanoutPolicy
-from mathforge.harness.allocation import CallAllocationPlan
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import (
     BudgetExceeded,
@@ -143,10 +142,10 @@ def test_phase0_schema_injection_has_a_distinct_candidate_failure_code():
     assert captured.value.code == "candidate_schema_invalid"
 
 
-def test_phase1_replan_never_retracts_consumed_stage_calls():
+def test_phase1_resource_replan_never_retracts_consumed_global_calls():
     budget = CallBudget(max_calls=4)
-    initial = CallAllocationPlan.build(
-        max_calls=4,
+    initial = budget.resource_governor.activation_plan(
+        used_calls=0,
         router_calls=0,
         candidate_count=1,
         verifier_required=False,
@@ -154,12 +153,12 @@ def test_phase1_replan_never_retracts_consumed_stage_calls():
         lemma_requested=False,
         finalizer_requested=False,
     )
-    budget.set_allocation_plan(initial)
+    assert initial.primary == 1
     budget.consume(stage="primary")
     budget.consume(stage="primary", optional=True)
 
-    replacement = CallAllocationPlan.build(
-        max_calls=4,
+    replacement = budget.resource_governor.activation_plan(
+        used_calls=budget.used_calls,
         router_calls=0,
         candidate_count=1,
         verifier_required=True,
@@ -168,10 +167,8 @@ def test_phase1_replan_never_retracts_consumed_stage_calls():
         finalizer_requested=False,
         reverification_requested=True,
     )
-    budget.set_allocation_plan(replacement)
-
     snapshot = budget.snapshot()
-    assert budget.to_dict()["call_allocation"]["primary"] == 2
+    assert replacement.max_calls == 4
     assert snapshot.remaining_calls == 2
     budget.consume(stage="verifier")
     budget.consume(stage="verifier")
@@ -185,17 +182,6 @@ def test_phase1_low_risk_route_keeps_one_lazy_reliability_standby():
     route.candidate_count = 2
     route.risk_level = "low"
     budget = CallBudget(max_calls=3)
-    budget.set_allocation_plan(
-        CallAllocationPlan.build(
-            max_calls=3,
-            router_calls=0,
-            candidate_count=2,
-            verifier_required=False,
-            repair_requested=False,
-            lemma_requested=False,
-            finalizer_requested=False,
-        )
-    )
 
     decision = AdaptiveFanoutPolicy().decide(
         route,
@@ -241,7 +227,7 @@ def test_phase1_degraded_provider_changes_optional_stage_selection():
     policy_events = [
         event
         for event in result["trace"]
-        if event.get("event") == "call_allocation_rebalanced"
+        if event.get("event") == "resource_plan_updated"
         and event.get("reason") == "provider_degraded"
     ]
     assert policy_events

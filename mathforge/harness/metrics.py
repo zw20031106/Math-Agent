@@ -204,9 +204,10 @@ class RunMetrics:
             raise ValueError("model timeout count cannot exceed model calls")
         if self.model_queue_timeout_count > self.model_calls:
             raise ValueError("model queue timeout count cannot exceed model calls")
-        if self.model_admission_rejection_count > self.model_calls:
-            raise ValueError("model admission rejection count cannot exceed model calls")
-        if self.model_call_failure_count > self.model_calls:
+        if (
+            self.model_call_failure_count
+            > self.model_calls + self.model_admission_rejection_count
+        ):
             raise ValueError("model failure count cannot exceed model calls")
         if self.model_response_rejection_count > self.model_calls:
             raise ValueError("model response rejection count cannot exceed model calls")

@@ -71,10 +71,10 @@
       "kind": "file",
       "path": "mathforge/harness/reasoning_state.py",
       "expected_count": 1,
-      "version": "reasoning-state-1.1",
-      "engineering_reviewer": "codex-phase5-feedback-audit",
-      "review_date": "2026-07-30",
-      "sha256": "750e304e66168be34ae7eefb97e2132f9b382c82f20be21e6adc31f300b135b1"
+      "version": "reasoning-state-1.2-f7-autonomous-only",
+      "engineering_reviewer": "codex-phase-f7-runtime-proof-audit",
+      "review_date": "2026-08-08",
+      "sha256": "88e509f3e2defe9c0fa80aec5b709d4ac80b6e86bf68f264add76aab498fe4ce"
     },
     {
       "id": "proof-obligations",
@@ -155,10 +155,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 19,
-      "version": "verification-closure-phase-f6-cross-repair-audit",
-      "engineering_reviewer": "codex-phase-f6-verification-audit",
+      "version": "verification-closure-phase-f7-proof-status",
+      "engineering_reviewer": "codex-phase-f7-runtime-proof-audit",
         "review_date": "2026-08-08",
-      "sha256": "f81bfc85bf7dcdbf9f651269fec1002b8ac508a12bb9798c5deb654be7977497"
+      "sha256": "8cc764a728d44a3aaa6f139a1211b36ef0d46337bb31e0630e0f2159d9c84f80"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -185,10 +185,33 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 19,
-      "version": "phase-f6-agent-verification-protocol-1",
-      "engineering_reviewer": "codex-phase-f6-verification-audit",
+      "version": "phase-f7-agent-event-projection-1",
+      "engineering_reviewer": "codex-phase-f7-runtime-proof-audit",
       "review_date": "2026-08-08",
-      "sha256": "50f7885ae86ada341f0bf36f851fb256269b74934c557b8937583bae11d50963"
+      "sha256": "3df69c88689a65e93c7832325bd764ae9297caa4845d66014bcd46bf6c0655f4"
+    },
+    {
+      "id": "phase-f7-runtime-proof-trace-cleanup",
+      "kind": "file_set",
+      "paths": [
+        "mathforge/runtime.py",
+        "mathforge/runtime_flows/__init__.py",
+        "mathforge/runtime_flows/session_flow.py",
+        "mathforge/runtime_flows/agent_flow.py",
+        "mathforge/runtime_flows/final_flow.py",
+        "mathforge/harness/budget.py",
+        "mathforge/harness/budget_types.py",
+        "mathforge/agent_runtime/resource_governor.py",
+        "mathforge/verification/completion.py",
+        "mathforge/harness/events.py",
+        "mathforge/output/judge_trace.py",
+        "mathforge/output/loop_health.py"
+      ],
+      "expected_count": 12,
+      "version": "phase-f7-runtime-proof-trace-cleanup-1",
+      "engineering_reviewer": "codex-phase-f7-runtime-proof-audit",
+      "review_date": "2026-08-08",
+      "sha256": "086070e44f0989fa95c98c6b0e88896c454946719e050fa8da23a03b3102a73b"
     },
     {
       "id": "reviewed-method-cards",
@@ -246,10 +269,10 @@
         "scripts/propose_competition_config.py"
       ],
       "expected_count": 4,
-      "version": "phase-f6-verification-closure-enabled-trace-4.0",
-      "engineering_reviewer": "codex-phase-f6-verification-audit",
+      "version": "phase-f7-adaptive-only-runtime-cleanup",
+      "engineering_reviewer": "codex-phase-f7-runtime-proof-audit",
       "review_date": "2026-08-08",
-      "sha256": "a8a1be6ab34541d5afa1c3546e82266b13f323fc9bf9ddfeda300a773fcd6e7a"
+      "sha256": "ebd1071c6916153989a795037b6eba196ebc92f769b926104940c74e12a57f65"
     },
     {
       "id": "router-calibration",

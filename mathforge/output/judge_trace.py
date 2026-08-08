@@ -25,7 +25,6 @@ JUDGE_EVENT_STAGES = {
     "problem_obligations_planned": "verification",
     "route_planned": "routing",
     "reasoning_state_initialized": "reasoning",
-    "long_horizon_planned": "reasoning",
     "autonomous_solver_planned": "reasoning",
     "autonomous_agent_action": "reasoning",
     "autonomous_stall_detected": "reasoning",
@@ -35,6 +34,14 @@ JUDGE_EVENT_STAGES = {
     "skills_selected": "skill_selection",
     "model_activity": "model_activity",
     "agent_protocol": "orchestration",
+    "agent_created": "agent_lifecycle",
+    "task_assigned": "agent_lifecycle",
+    "model_turn_started": "agent_lifecycle",
+    "model_turn_completed": "agent_lifecycle",
+    "artifact_published": "communication",
+    "message_sent": "communication",
+    "message_delivered": "communication",
+    "agent_stopped": "agent_lifecycle",
     "candidate_pool_initialized": "peer_review",
     "peer_review_completed": "peer_review",
     "rebuttal_completed": "peer_review",
@@ -55,11 +62,14 @@ JUDGE_EVENT_STAGES = {
     "candidate_summaries": "candidate_generation",
     "evidence_summary": "evidence",
     "proof_completion_summary": "verification",
+    "proof_status_finalized": "verification",
     "decision_summary": "arbitration",
     "candidate_arbitrated": "arbitration",
     "decision_committed": "arbitration",
     "candidate_salvaged": "arbitration",
     "repair_history": "repair",
+    "repair_committed": "repair",
+    "repair_rolled_back": "repair",
     "final_answer_selected": "finalization",
     "fallback_used": "fallback",
     "deadline_finalize": "deadline",
@@ -69,6 +79,7 @@ JUDGE_EVENT_STAGES = {
     "budget_summary": "finalization",
     "trace_compaction": "finalization",
     "run_completed": "completion",
+    "formal_entry_compatibility": "completion",
 }
 _PROTECTED_EVENTS = frozenset(
     {
@@ -375,22 +386,6 @@ def project_judge_trace(
             ),
         ),
     )
-    long_horizon = _last(by_name, "long_horizon_planned")
-    append(
-        "long_horizon_planned",
-        long_horizon,
-        _select(
-            long_horizon,
-            (
-                "enabled",
-                "planned_rounds",
-                "reason_code",
-                "sequence_reserve_seconds",
-                "remaining_calls",
-                "remaining_seconds",
-            ),
-        ),
-    )
     autonomous_planned = _last(by_name, "autonomous_solver_planned")
     append(
         "autonomous_solver_planned",
@@ -399,7 +394,6 @@ def project_judge_trace(
             autonomous_planned,
             (
                 "enabled",
-                "fixed_planned_rounds",
                 "governance",
                 "remaining_calls",
                 "remaining_seconds",
@@ -485,8 +479,6 @@ def project_judge_trace(
                 "state_id",
                 "enabled",
                 "completed_rounds",
-                "planned_rounds",
-                "fixed_planned_rounds",
                 "action_turns",
                 "progress_turns",
                 "candidate_attempts",
@@ -607,6 +599,35 @@ def project_judge_trace(
             ],
         },
     )
+    for lifecycle_name in (
+        "agent_created",
+        "task_assigned",
+        "model_turn_started",
+        "model_turn_completed",
+        "artifact_published",
+        "message_sent",
+        "message_delivered",
+        "repair_committed",
+        "repair_rolled_back",
+        "agent_stopped",
+    ):
+        lifecycle = _last(by_name, lifecycle_name)
+        append(
+            lifecycle_name,
+            lifecycle,
+            {
+                key: value
+                for key, value in (lifecycle or {}).items()
+                if key
+                not in {
+                    "event",
+                    "schema_version",
+                    "seq",
+                    "elapsed_ms",
+                    "stage",
+                }
+            },
+        )
 
     candidate_pool = _last(by_name, "candidate_pool_initialized")
     append(
@@ -802,12 +823,39 @@ def project_judge_trace(
         graph_event,
         selected_candidate_id=selected_id,
     )
+    final_proof = _last(by_name, "proof_status_finalized")
+    final_statuses = (
+        final_proof.get("statuses", [])
+        if isinstance(final_proof, dict)
+        else []
+    )
+    selected_final_status = next(
+        (
+            item
+            for item in final_statuses
+            if isinstance(item, dict)
+            and str(item.get("candidate_id", "")) == selected_id
+        ),
+        None,
+    )
+    if selected_final_status is not None:
+        proof_details["status"] = str(
+            selected_final_status.get("status", "incomplete")
+        )
+        proof_details["final_reason_code"] = str(
+            selected_final_status.get("reason_code", "")
+        )
     if proof_gate is not None or graph_event is not None:
         append(
             "proof_completion_summary",
             proof_gate or graph_event,
             proof_details,
         )
+    append(
+        "proof_status_finalized",
+        final_proof,
+        _select(final_proof, ("statuses", "allowed_statuses")),
+    )
 
     arbitration = _last(by_name, "candidate_arbitrated")
     if arbitration is not None:
@@ -924,6 +972,20 @@ def project_judge_trace(
                 ),
             )
 
+    formal_compatibility = _last(by_name, "formal_entry_compatibility")
+    append(
+        "formal_entry_compatibility",
+        formal_compatibility,
+        _select(
+            formal_compatibility,
+            (
+                "public_contract",
+                "immutable_files",
+                "status_field_owner",
+                "harness_status_limitation",
+            ),
+        ),
+    )
     completed = _last(by_name, "run_completed")
     health = _last(by_name, "closed_loop_health")
     if health is None:
@@ -1427,7 +1489,7 @@ def _proof_summary(
         "status": str(
             selected_decision.get(
                 "status",
-                "complete"
+                "complete_hard"
                 if _nonnegative_int(
                     graph_summary.get("unresolved_required_obligations", 0)
                 )
@@ -1481,9 +1543,9 @@ def _candidate_proof_status(state: dict[str, Any]) -> str:
     if not required:
         return "not_available"
     if all(item.get("status") == "reviewed" for item in required):
-        return "model_reviewed"
+        return "incomplete"
     return (
-        "complete"
+        "complete_hard"
         if all(item.get("status") == "satisfied" for item in required)
         else "incomplete"
     )
@@ -1664,8 +1726,8 @@ def _validate_closed_loop_health(
         expected_proof = (
             status
             if status in {
-                "complete",
-                "model_reviewed",
+                "complete_hard",
+                "complete_audited",
                 "incomplete",
                 "failed",
             }

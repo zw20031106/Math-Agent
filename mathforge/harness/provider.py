@@ -639,7 +639,7 @@ class OfficialClientProvider:
                 minimum_start_window_seconds=(
                     minimum_start_window
                     if budget is None
-                    or budget.model_call_policy == "adaptive_bounded"
+                    or budget.enforce_stage_start_window
                     else 0.0
                 ),
                 background_tail_callback=(

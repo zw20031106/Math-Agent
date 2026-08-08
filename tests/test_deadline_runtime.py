@@ -257,8 +257,9 @@ def test_soft_cutoff_disables_optional_runtime_stages_before_they_start():
         "lemma",
         "finalizer",
     ]
-    assert client.calls == 1
-    assert client.roles[0].startswith("You are PrimarySolver")
+    assert client.calls == 0
+    assert result["run_metrics"]["model_admission_rejection_count"] >= 1
+    assert client.roles == []
     assert all(event["event"] != "retrieval_completed" for event in result["trace"])
     assert all(event["event"] != "finalization_completed" for event in result["trace"])
 

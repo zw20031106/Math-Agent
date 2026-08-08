@@ -146,8 +146,15 @@ class ProofStage:
         candidate: CandidateSolution,
         evidence: list[EvidenceRecord],
         obligations: list[ProofObligation],
+        *,
+        response_mode: str = "answer_only",
     ) -> CompletionDecision:
-        return self._completion_gate.evaluate(candidate, evidence, obligations)
+        return self._completion_gate.evaluate(
+            candidate,
+            evidence,
+            obligations,
+            response_mode=response_mode,
+        )
 
 
 class ContextRouteStage:
@@ -224,6 +231,7 @@ class ContextRouteStage:
         final_answer: str = "",
         raw_store: RawContextStore | None = None,
         memory_categories: set[str] | frozenset[str] | None = None,
+        public_metadata: dict | None = None,
     ) -> RoleContextView:
         return self._contexts.build(
             problem=problem,
@@ -237,4 +245,5 @@ class ContextRouteStage:
             final_answer=final_answer,
             raw_store=raw_store,
             memory_categories=memory_categories,
+            public_metadata=public_metadata,
         )

@@ -7,7 +7,7 @@ import pytest
 from mathforge.agents.repair import RepairAgent
 from mathforge.agents.router_planner import RouterRuleEngine
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
-from mathforge.harness.allocation import CallAllocationPlan, FanoutDecision
+from mathforge.harness.budget_types import FanoutDecision
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import ModelTransportError
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
@@ -63,23 +63,13 @@ def _solver_request() -> SolverRequest:
 
 def test_budget_snapshot_and_fanout_decision_are_serializable_foundations():
     budget = CallBudget(6)
-    plan = CallAllocationPlan.build(
-        max_calls=6,
-        router_calls=0,
-        candidate_count=2,
-        verifier_required=True,
-        repair_requested=False,
-        lemma_requested=False,
-        finalizer_requested=False,
-    )
-    budget.set_allocation_plan(plan)
     budget.consume(stage="primary")
     snapshot = budget.snapshot()
     decision = FanoutDecision(2, 2, ("budget_available",), snapshot)
 
     assert snapshot.used_calls == 1
     assert snapshot.remaining_calls == 5
-    assert snapshot.stage_remaining["primary"] == plan.primary - 1
+    assert snapshot.stage_remaining["primary"] == 5
     assert decision.to_dict()["budget"]["remaining_calls"] == 5
 
 

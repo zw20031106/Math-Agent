@@ -135,7 +135,7 @@ def test_runtime_accepts_fully_reverified_repair_and_rebuilds_solution_text():
     rebalanced = next(
         event
         for event in result["trace"]
-        if event["event"] == "call_allocation_rebalanced"
+        if event["event"] == "resource_plan_updated"
     )
     assert rebalanced["evidence_repair_triggers"] == {
         "primary-1": ["failed"]

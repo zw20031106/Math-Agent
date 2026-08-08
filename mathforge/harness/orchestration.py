@@ -20,7 +20,7 @@ from mathforge.harness.errors import (
     ModelResponseError,
     ModelTransportError,
 )
-from mathforge.harness.allocation import FanoutDecision
+from mathforge.harness.budget_types import FanoutDecision
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, RoutePlan
 from mathforge.harness.fingerprints import semantic_fingerprint
 from mathforge.verification.methods import candidate_method_signature

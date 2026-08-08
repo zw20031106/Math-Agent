@@ -5,7 +5,7 @@ from threading import Lock
 
 from mathforge.agent_runtime.call_ledger import CallLedger
 from mathforge.agent_runtime.resource_governor import ResourceGovernor
-from mathforge.harness.allocation import CallAllocationPlan, CallBudgetSnapshot
+from mathforge.harness.budget_types import CallBudgetSnapshot
 from mathforge.harness.deadline import DeadlineController
 from mathforge.harness.errors import BudgetExceeded
 
@@ -31,10 +31,11 @@ class CallBudget:
     token_limit_mode: str = "dynamic_context"
     model_context_window_tokens: int = 262144
     context_safety_margin_tokens: int = 8192
-    model_call_policy: str = "legacy_staged"
-    soft_call_checkpoints: tuple[int, ...] = (1,)
-    speculative_exploration_cutoff: int = 1
+    model_call_policy: str = "adaptive_bounded"
+    soft_call_checkpoints: tuple[int, ...] = ()
+    speculative_exploration_cutoff: int = 0
     closure_reserve_calls: int = 0
+    enforce_stage_start_window: bool = False
 
     def __post_init__(self) -> None:
         if self.max_calls < 1 or self.max_tokens < 0:
@@ -63,14 +64,17 @@ class CallBudget:
         if self.model_queue_budget_seconds <= 0:
             raise ValueError("model queue budget must be positive")
         self.soft_call_checkpoints = tuple(self.soft_call_checkpoints)
-        if self.model_call_policy not in {"legacy_staged", "adaptive_bounded"}:
+        if self.speculative_exploration_cutoff == 0:
+            self.speculative_exploration_cutoff = (
+                self.max_calls - self.closure_reserve_calls
+            )
+        if self.model_call_policy != "adaptive_bounded":
             raise ValueError("model call policy is invalid")
         self._lock = Lock()
         self._frozen = False
         self._scheduler_case_id = ""
         self._agent_runtime = None
         self._stage_calls: dict[str, int] = {}
-        self._allocation_plan: CallAllocationPlan | None = None
         self.used_claims = 0
         self.used_tool_calls = 0
         self.used_isolated_tool_calls = 0
@@ -108,17 +112,13 @@ class CallBudget:
         self.provider_fast_failures = 0
         self._call_ledger = CallLedger()
         self.model_call_records = self._call_ledger.records
-        self._resource_governor = (
-            ResourceGovernor(
-                hard_limit=self.max_calls,
-                soft_checkpoints=self.soft_call_checkpoints,
-                speculative_exploration_cutoff=(
-                    self.speculative_exploration_cutoff
-                ),
-                closure_reserve_calls=self.closure_reserve_calls,
-            )
-            if self.model_call_policy == "adaptive_bounded"
-            else None
+        self._resource_governor = ResourceGovernor(
+            hard_limit=self.max_calls,
+            soft_checkpoints=self.soft_call_checkpoints,
+            speculative_exploration_cutoff=(
+                self.speculative_exploration_cutoff
+            ),
+            closure_reserve_calls=self.closure_reserve_calls,
         )
         self.final_response_tokens = 0
         self.final_response_counting_mode = ""
@@ -163,17 +163,6 @@ class CallBudget:
         with self._lock:
             self._agent_runtime = None
 
-    def set_allocation_plan(self, plan: CallAllocationPlan) -> None:
-        with self._lock:
-            self._ensure_mutable_locked()
-            if self._resource_governor is not None:
-                raise RuntimeError(
-                    "adaptive_bounded budgets do not accept stage allocations"
-                )
-            if plan.max_calls != self.max_calls:
-                raise ValueError("call allocation plan does not match budget")
-            self._allocation_plan = plan.with_stage_floors(self._stage_calls)
-
     def consume(
         self,
         *,
@@ -183,21 +172,14 @@ class CallBudget:
     ) -> None:
         with self._lock:
             self._ensure_mutable_locked()
-            if self._resource_governor is not None:
-                category = action_category or ResourceGovernor.default_action_category(
-                    stage,
-                    optional=optional,
-                )
-                self._resource_governor.admit(
-                    used_calls=self.used_calls,
-                    action_category=category,
-                )
-            elif self.used_calls >= self.max_calls:
-                raise BudgetExceeded("model call budget exhausted")
-            if self._allocation_plan is not None and self._resource_governor is None:
-                used_for_stage = self._stage_calls.get(stage, 0)
-                if used_for_stage >= self._allocation_plan.limit_for(stage):
-                    raise BudgetExceeded(f"{stage} call allocation exhausted")
+            category = action_category or ResourceGovernor.default_action_category(
+                stage,
+                optional=optional,
+            )
+            self._resource_governor.admit(
+                used_calls=self.used_calls,
+                action_category=category,
+            )
             if not self.deadline.can_start_model_call(optional=optional):
                 raise BudgetExceeded("model call deadline reached")
             self.used_calls += 1
@@ -541,8 +523,7 @@ class CallBudget:
 
     def can_start_exploration(self) -> bool:
         return self.deadline.exploration_allowed() and (
-            self._resource_governor is None
-            or self.used_calls
+            self.used_calls
             < self._resource_governor.speculative_exploration_cutoff
         )
 
@@ -608,42 +589,19 @@ class CallBudget:
 
     def snapshot(self) -> CallBudgetSnapshot:
         with self._lock:
-            limits = (
-                {
-                    stage: self._allocation_plan.limit_for(stage)
-                    for stage in (
-                        "router",
-                        "primary",
-                        "alternative",
-                        "verifier",
-                        "repair",
-                        "lemma",
-                        "finalizer",
-                    )
-                }
-                if self._allocation_plan is not None
-                else {}
-            )
             remaining_calls = max(0, self.max_calls - self.used_calls)
-            stage_remaining = (
-                {
-                    stage: remaining_calls
-                    for stage in (
-                        "router",
-                        "primary",
-                        "alternative",
-                        "verifier",
-                        "repair",
-                        "lemma",
-                        "finalizer",
-                    )
-                }
-                if self._resource_governor is not None
-                else {
-                    stage: max(0, limit - self._stage_calls.get(stage, 0))
-                    for stage, limit in limits.items()
-                }
-            )
+            stage_remaining = {
+                stage: remaining_calls
+                for stage in (
+                    "router",
+                    "primary",
+                    "alternative",
+                    "verifier",
+                    "repair",
+                    "lemma",
+                    "finalizer",
+                )
+            }
             return CallBudgetSnapshot(
                 max_calls=self.max_calls,
                 used_calls=self.used_calls,
@@ -655,10 +613,8 @@ class CallBudget:
                 exploration_open=self.can_start_exploration(),
                 stage_remaining=stage_remaining,
                 budget_phase=self.budget_phase,
-                next_checkpoint=(
-                    self._resource_governor.next_checkpoint(self.used_calls)
-                    if self._resource_governor is not None
-                    else None
+                next_checkpoint=self._resource_governor.next_checkpoint(
+                    self.used_calls
                 ),
             )
 
@@ -676,6 +632,7 @@ class CallBudget:
                     self.speculative_exploration_cutoff
                 ),
                 "closure_reserve_calls": self.closure_reserve_calls,
+                "enforce_stage_start_window": self.enforce_stage_start_window,
                 "calls_remaining": max(0, self.max_calls - self.used_calls),
                 "max_tokens": self.max_tokens,
                 "used_tokens": self.used_tokens,
@@ -751,11 +708,7 @@ class CallBudget:
                 "max_prompt_chars_total": self.max_prompt_chars_total,
                 "used_prompt_chars": self.used_prompt_chars,
                 "prompt_chars": self.used_prompt_chars,
-                "call_allocation": (
-                    self._allocation_plan.to_dict()
-                    if self._allocation_plan is not None
-                    else None
-                ),
+                "stage_quotas_enforced": False,
                 "elapsed_seconds": round(self._elapsed(), 6),
                 "remaining_seconds": round(self.deadline.remaining_seconds(), 6),
                 "finalize_reserve_seconds": self.deadline.finalize_reserve_seconds,
@@ -767,12 +720,10 @@ class CallBudget:
 
     @property
     def budget_phase(self) -> str:
-        if self._resource_governor is None:
-            return "legacy_staged"
         return self._resource_governor.phase(self.used_calls)
 
     @property
-    def resource_governor(self) -> ResourceGovernor | None:
+    def resource_governor(self) -> ResourceGovernor:
         return self._resource_governor
 
     def _ensure_mutable_locked(self) -> None:

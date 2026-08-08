@@ -53,7 +53,7 @@ _REQUIRED_PRIMARY_EVENTS = frozenset(
         "problem_parsed",
         "route_planned",
         "skills_selected",
-        "call_allocation_planned",
+        "resource_plan_created",
         "hard_evidence_gate",
         "candidate_arbitrated",
         "final_answer_selected",

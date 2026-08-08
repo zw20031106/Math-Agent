@@ -1318,7 +1318,7 @@ def _validate_l2_pipeline(candidate: Any) -> None:
     trace.add("problem_parsed")
     trace.add("route_planned")
     trace.add("skills_selected", skills=[])
-    trace.add("call_allocation_planned")
+    trace.add("resource_plan_created", stage_quotas_enforced=False)
     trace.add(
         "candidate_generation_started",
         candidate_id=candidate_id,
@@ -1341,7 +1341,7 @@ def _validate_l2_pipeline(candidate: Any) -> None:
         decisions=[
             {
                 "candidate_id": candidate_id,
-                "status": "complete",
+                "status": "complete_hard",
                 "unresolved_obligation_ids": [],
                 "failed_obligation_ids": [],
                 "failed_claim_ids": [],

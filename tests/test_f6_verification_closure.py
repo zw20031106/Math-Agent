@@ -85,6 +85,22 @@ def test_cross_exam_and_final_audit_are_distinct_model_agents_with_artifacts():
     assert decisions[0]["producer_kind"] == "deterministic_service"
     assert decisions[0]["producer_service_id"] == "DeterministicArbitrator"
     assert audits[0]["artifact_id"] in decisions[0]["parent_artifact_ids"]
+    event_names = {item["event"] for item in result["trace"]}
+    assert {
+        "agent_created",
+        "task_assigned",
+        "model_turn_started",
+        "model_turn_completed",
+        "artifact_published",
+        "message_sent",
+        "message_delivered",
+        "peer_review_completed",
+        "rebuttal_completed",
+        "verifier_completed",
+        "final_audit_completed",
+        "decision_committed",
+        "agent_stopped",
+    } <= event_names
 
 
 def test_final_audit_only_reviews_the_candidate_selected_for_commit():

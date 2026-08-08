@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Completed true multi-Agent remediation Phase F7. Proof completion now has
+  exactly four public states (`complete_hard`, `complete_audited`,
+  `incomplete`, and `failed`); a repaired Candidate cannot complete without a
+  version-matched Final Audit, and `proof_full` cannot complete without public
+  proof steps. Extracted deterministic session-contract, Agent-event, and final
+  proof services from the runtime facade. Removed the legacy
+  `CallAllocationPlan`, stage quotas, fixed planned-round policy, and runtime
+  Blackboard write paths; all roles now share the adaptive 48-call problem
+  bound with an eight-call closure reserve. Judge Trace now projects Agent,
+  Task, Turn, Artifact, Message, repair, audit, decision, and shutdown events
+  without raw responses or private reasoning, and explicitly records the
+  immutable formal-entry status limitation. Added F7 proof, lifecycle,
+  resource-cleanup, privacy, and public-contract regression coverage.
 - Completed true multi-Agent remediation Phase F6. VerifierSkeptic now runs
   independent `cross_exam` Turns over CandidatePool, Solver Peer Reviews,
   Rebuttals, Evidence, and Proof Obligations, publishes strict Claim-linked
