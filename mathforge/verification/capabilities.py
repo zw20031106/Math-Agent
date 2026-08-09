@@ -33,6 +33,9 @@ class VerificationCapability(str, Enum):
     PROBABILITY_NORMALIZATION = "probability.normalization"
     FINITE_CASE_EXACT = "finite_case.exact"
     PROOF_OBLIGATION_REVIEW = "proof.obligation_review"
+    # Reserved for an explicit deterministic proof checker.  No current LLM
+    # path may emit this capability, which keeps ``formally_verified`` honest.
+    FORMAL_PROOF = "formal.proof"
 
 
 class ClaimVerificationState(str, Enum):

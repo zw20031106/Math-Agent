@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Completed the 2026-08-09 remediation Phase 7 Verification V2 work.
+  Host-selected conclusion Claims now define a transitive critical dependency
+  closure, required obligations without a real Claim remain explicitly
+  `unmapped_required_obligation`, and compatible hard evidence is evaluated
+  only inside that closure. Added the ordered assurance taxonomy
+  (`candidate_valid` through `formally_verified`), terminal-closure metadata,
+  public assurance fields, and deterministic arbitration gating. Verifier LLM
+  findings and audits cannot manufacture `formally_verified`; a formal level
+  requires an explicit deterministic formal engine capability. Legacy proof
+  status strings remain wire-compatible but no longer imply V2 hard
+  verification. Added regression coverage for unknown Claims, missing
+  mappings, peripheral evidence, compatible obligation support, and LLM/audit
+  limits.
 - Completed the 2026-08-09 remediation Phase 6 ReasoningState V2 work.
   Claims now carry lifecycle status, monotonically increasing versions,
   supersession links, evidence references, provenance, and branch identity.

@@ -140,6 +140,11 @@ def build_claim_evidence_graph(
                 )
             )
             for claim_id in sorted(set(obligation.source_claim_ids)):
+                if str(claim_id).startswith("unmapped:"):
+                    # Diagnostic tokens are deliberately not Claim IDs.  The
+                    # obligation remains visibly unmapped without creating a
+                    # dangling public graph edge.
+                    continue
                 edges.append(
                     _edge(
                         _claim_node_id(candidate_id, claim_id),

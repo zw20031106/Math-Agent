@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProofObligation
 from mathforge.verification.capabilities import (
@@ -8,6 +8,7 @@ from mathforge.verification.capabilities import (
     capability_satisfies_obligation,
 )
 from mathforge.verification.evidence import is_fatal_hard_failure
+from mathforge.verification.verification_v2 import assess_verification
 
 
 @dataclass(frozen=True)
@@ -20,9 +21,26 @@ class CompletionDecision:
     hard_satisfied_obligation_ids: list[str]
     model_reviewed_obligation_ids: list[str]
     evidence_tier: str
+    assurance_level: str = "candidate_valid"
+    conclusion_claim_id: str = ""
+    critical_claim_ids: list[str] = field(default_factory=list)
+    unmapped_required_obligation_ids: list[str] = field(default_factory=list)
+    supporting_evidence_ids: list[str] = field(default_factory=list)
+    terminal_closure: bool = False
+    assurance_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @property
+    def hard_verified(self) -> bool:
+        """Whether the stronger V2 terminal closure is actually complete."""
+
+        return self.terminal_closure and self.assurance_level in {
+            "tool_supported",
+            "audited",
+            "formally_verified",
+        }
 
 
 class ProofCompletionGate:
@@ -63,8 +81,9 @@ class ProofCompletionGate:
                     if obligation.required and obligation.status != "satisfied"
                 }
             )
-            return CompletionDecision(
-                candidate.candidate_id,
+            closure = assess_verification(candidate, own_evidence, obligations)
+            return _decision(
+                candidate,
                 "failed",
                 list(candidate.unresolved_obligations),
                 failed_obligations,
@@ -72,6 +91,7 @@ class ProofCompletionGate:
                 [],
                 [],
                 "incomplete",
+                closure,
             )
 
         unresolved: list[str] = []
@@ -80,7 +100,24 @@ class ProofCompletionGate:
         for obligation in obligations:
             if not obligation.required:
                 continue
-            source_claim_ids = set(obligation.source_claim_ids)
+            source_claim_ids = {
+                claim.claim_id
+                for claim in candidate.claims
+                if claim.claim_id in set(obligation.source_claim_ids)
+            }
+            if not source_claim_ids:
+                # This is intentionally distinct from a merely unverified
+                # Claim.  Completion must not hide a missing obligation edge.
+                # Preserve the old status for a hand-built pre-satisfied
+                # fixture, while engine-generated obligations retain the V2
+                # unmapped status.
+                if obligation.status == "satisfied":
+                    obligation.status = "unresolved"
+                elif obligation.status != "unmapped_required_obligation":
+                    obligation.status = "unmapped_required_obligation"
+                obligation.satisfaction_evidence_ids = []
+                unresolved.append(obligation.obligation_id)
+                continue
             hard_evidence = [
                 record
                 for record in own_evidence
@@ -92,6 +129,7 @@ class ProofCompletionGate:
                     obligation.kind,
                 )
                 and record.strength == "hard"
+                and not record.evidence_type.startswith("llm:")
             ]
             soft_model_evidence = [
                 record
@@ -156,8 +194,9 @@ class ProofCompletionGate:
                 if set(unresolved) == set(model_reviewed)
                 else "incomplete"
             )
-        return CompletionDecision(
-            candidate.candidate_id,
+        closure = assess_verification(candidate, own_evidence, obligations)
+        return _decision(
+            candidate,
             status,
             sorted(unresolved),
             [],
@@ -165,4 +204,37 @@ class ProofCompletionGate:
             sorted(hard_satisfied),
             sorted(model_reviewed),
             evidence_tier,
+            closure,
         )
+
+
+def _decision(
+    candidate: CandidateSolution,
+    status: str,
+    unresolved: list[str],
+    failed_obligations: list[str],
+    failed_claims: list[str],
+    hard_satisfied: list[str],
+    model_reviewed: list[str],
+    evidence_tier: str,
+    closure,
+) -> CompletionDecision:
+    return CompletionDecision(
+        candidate_id=candidate.candidate_id,
+        status=status,
+        unresolved_obligation_ids=unresolved,
+        failed_obligation_ids=failed_obligations,
+        failed_claim_ids=failed_claims,
+        hard_satisfied_obligation_ids=hard_satisfied,
+        model_reviewed_obligation_ids=model_reviewed,
+        evidence_tier=evidence_tier,
+        assurance_level=closure.assurance_level,
+        conclusion_claim_id=closure.conclusion_claim_id,
+        critical_claim_ids=list(closure.critical_claim_ids),
+        unmapped_required_obligation_ids=list(
+            closure.unmapped_required_obligation_ids
+        ),
+        supporting_evidence_ids=list(closure.supporting_evidence_ids),
+        terminal_closure=closure.terminal_closure,
+        assurance_reasons=list(closure.reasons),
+    )

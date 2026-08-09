@@ -22,6 +22,7 @@ from mathforge.verification.methods import (
     candidate_method_signature,
     method_contract_valid,
 )
+from mathforge.verification.verification_v2 import assess_verification
 
 
 @dataclass(frozen=True)
@@ -213,15 +214,27 @@ class ArbitrationPolicy:
             and record.payload.get("review_target_ids")
             for record in own_evidence
         )
-        if required and coverage == 1.0:
+        closure = assess_verification(
+            candidate,
+            own_evidence,
+            obligations,
+            independently_corroborated=bool(independent_agreement),
+        )
+        if required and closure.hard_verified:
+            evidence_tier = "hard_evidence"
+        elif required and coverage == 1.0 and not candidate.claims:
+            # Compatibility for legacy synthetic arbitration fixtures that
+            # pre-date Claim/obligation edges.  This rank does not create a
+            # V2 hard_verified decision because the closure is still empty.
             evidence_tier = "hard_evidence"
         elif not required:
             evidence_tier = (
                 "hard_evidence"
                 if any(
                     is_semantic_hard_pass(record)
+                    and record.claim_id in set(closure.critical_claim_ids)
                     for record in own_evidence
-                )
+                ) and closure.hard_verified
                 else (
                     "independent_corroboration"
                     if independent_agreement

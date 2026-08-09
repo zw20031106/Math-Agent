@@ -18,6 +18,8 @@ class FinalProofStatus:
     reason_code: str
     audit_id: str = ""
     degraded: bool = False
+    assurance_level: str = "candidate_valid"
+    terminal_closure: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -42,11 +44,27 @@ class FinalProofStatusService:
         response_mode: str = "answer_only",
     ) -> FinalProofStatus:
         candidate_id = str(candidate.candidate_id)
-        if decision.status == "failed":
-            return FinalProofStatus(candidate_id, "failed", "hard_evidence_failed")
-        if not self._proof_shape_complete(candidate, response_mode):
+
+        def status(
+            value: str,
+            reason: str,
+            audit_id: str = "",
+            degraded: bool = False,
+        ) -> FinalProofStatus:
             return FinalProofStatus(
                 candidate_id,
+                value,
+                reason,
+                audit_id,
+                degraded,
+                decision.assurance_level,
+                decision.terminal_closure,
+            )
+
+        if decision.status == "failed":
+            return status("failed", "hard_evidence_failed")
+        if not self._proof_shape_complete(candidate, response_mode):
+            return status(
                 "incomplete",
                 "proof_full_steps_missing",
                 degraded=True,
@@ -68,8 +86,7 @@ class FinalProofStatusService:
         )
         if matching_audit is not None:
             if matching_audit.status == "failed":
-                return FinalProofStatus(
-                    candidate_id,
+                return status(
                     "failed",
                     "final_audit_failed",
                     str(matching_audit.audit_id),
@@ -80,8 +97,7 @@ class FinalProofStatusService:
                 and not matching_audit.open_finding_ids
                 and not matching_audit.open_obligation_ids
             ):
-                return FinalProofStatus(
-                    candidate_id,
+                return status(
                     "complete_audited",
                     "version_matched_audit_complete",
                     str(matching_audit.audit_id),
@@ -92,14 +108,12 @@ class FinalProofStatusService:
                 and not matching_audit.open_finding_ids
                 and not matching_audit.open_obligation_ids
             ):
-                return FinalProofStatus(
-                    candidate_id,
+                return status(
                     "complete_hard",
                     "hard_evidence_and_audit_complete",
                     str(matching_audit.audit_id),
                 )
-            return FinalProofStatus(
-                candidate_id,
+            return status(
                 "incomplete",
                 "final_audit_not_complete",
                 str(matching_audit.audit_id),
@@ -107,20 +121,17 @@ class FinalProofStatusService:
             )
 
         if repaired:
-            return FinalProofStatus(
-                candidate_id,
+            return status(
                 "incomplete",
                 "repaired_candidate_requires_final_audit",
                 degraded=True,
             )
         if decision.status == "complete_hard":
-            return FinalProofStatus(
-                candidate_id,
+            return status(
                 "complete_hard",
                 "all_required_obligations_have_hard_evidence",
             )
-        return FinalProofStatus(
-            candidate_id,
+        return status(
             "incomplete",
             "audit_unavailable_or_obligations_unresolved",
             degraded=True,

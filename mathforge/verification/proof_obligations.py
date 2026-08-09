@@ -185,31 +185,6 @@ class ProofObligationEngine:
     ) -> None:
         for claim in candidate.claims:
             claim.claim_kind = derive_claim_kind(claim.check_type)
-        claim_by_id = {
-            claim.claim_id: claim
-            for claim in candidate.claims
-        }
-        conclusion_ids = [
-            claim_id
-            for step in candidate.method_steps
-            if step.kind == "conclusion"
-            for claim_id in step.claim_ids
-            if claim_id in claim_by_id
-        ]
-        critical_ids = [
-            claim.claim_id
-            for claim in candidate.claims
-            if claim.importance == "critical"
-        ]
-        fallback_ids = list(
-            dict.fromkeys(
-                [
-                    *conclusion_ids,
-                    *critical_ids,
-                    *(claim.claim_id for claim in candidate.claims),
-                ]
-            )
-        )
         for obligation in obligations:
             matches = [
                 claim
@@ -228,13 +203,22 @@ class ProofObligationEngine:
                     for claim in candidate.claims
                     if claim.claim_id in referenced and claim not in matches
                 )
-            if not matches and fallback_ids:
-                matches = [claim_by_id[fallback_ids[0]]]
-            obligation.source_claim_ids = [
-                claim.claim_id for claim in matches
-            ]
+            obligation.source_claim_ids = [claim.claim_id for claim in matches]
             obligation.satisfaction_evidence_ids = []
-            if any(claim.status == "rejected" for claim in matches):
+            if not matches and obligation.required:
+                # A required obligation without a real Claim is an explicit
+                # mapping failure.  Never manufacture support by attaching it
+                # to a conclusion/critical/peripheral Claim.  A non-empty
+                # diagnostic token is retained for old trace consumers; it is
+                # deliberately not a Claim ID and is still treated as
+                # unmapped by Verification V2.
+                obligation.source_claim_ids = [
+                    f"unmapped:{obligation.obligation_id}"
+                ]
+                obligation.status = "unmapped_required_obligation"
+            elif not matches:
+                obligation.status = "unresolved"
+            elif any(claim.status == "rejected" for claim in matches):
                 obligation.status = "failed"
             else:
                 obligation.status = "unresolved"

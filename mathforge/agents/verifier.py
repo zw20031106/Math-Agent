@@ -200,6 +200,19 @@ class VerifierSkepticAgent:
             candidates,
             obligations,
         )
+        if not reviewable_ids:
+            # A Candidate with claims but no real obligation edge still needs
+            # an observable Verifier phase: transport/protocol health must be
+            # distinguishable from a structural unmapped-obligation result.
+            # The model cannot turn this into evidence because the parser
+            # rejects non-Claim diagnostic references.
+            reviewable_ids = tuple(
+                obligation.obligation_id
+                for candidate in candidates
+                if candidate.claims
+                for obligation in obligations.get(candidate.candidate_id, [])
+                if obligation.required
+            )
         all_required_ids = {
             obligation.obligation_id
             for candidate in candidates

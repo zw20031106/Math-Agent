@@ -71,10 +71,10 @@
         "mathforge/runtime.py"
       ],
       "expected_count": 8,
-        "version": "effective-agent-governance-1-phase5-phase6-state-identity",
-        "engineering_reviewer": "codex-0809-phase6-reasoning-state-audit",
+        "version": "effective-agent-governance-1-phase5-phase7-verification",
+        "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-        "sha256": "0bdefae7d449ecb325492a44aed7a2cefa057ce3087f1bff552bd66a492a3138"
+        "sha256": "59d7666f8612a691b90725351bf6446dffe383ba3eca4d381e6eb79c23aef0fd"
     },
     {
       "id": "prompt-contracts",
@@ -110,10 +110,10 @@
         "mathforge/parsing/solution_parser.py"
       ],
       "expected_count": 7,
-      "version": "model-candidate-boundary-3.1-0809-answer-recovery",
-      "engineering_reviewer": "codex-0809-phase2-availability-audit",
+      "version": "model-candidate-boundary-3.1-0809-phase7-verifier",
+      "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "98e7accbdcf8d25cd58e2d697155e4602e4d4c20c2f8659e596264dd92d7ba92"
+      "sha256": "ab4c5844c48289b597ee8ea95e8e859e8d148b9dd82a54fa95bdd5eea4347f8d"
     },
     {
       "id": "reasoning-state",
@@ -130,10 +130,24 @@
       "kind": "file",
       "path": "mathforge/verification/proof_obligations.py",
       "expected_count": 1,
-      "version": "proof-obligations-phase6-preplanned",
-      "engineering_reviewer": "codex-phase6-verification-audit",
-      "review_date": "2026-07-30",
-      "sha256": "4823c812d42abe6ec8cf5bf5cab8fffa5da9c93af385eafb62269f8b1853cd2f"
+      "version": "proof-obligations-phase7-closure",
+      "engineering_reviewer": "codex-0809-phase7-verification-audit",
+      "review_date": "2026-08-09",
+      "sha256": "f1e573d1a2252d992d529a3767f5ad2101a68c1239e0d7410d8505508e2aa403"
+    },
+    {
+      "id": "phase7-verification-v2",
+      "kind": "file_set",
+      "paths": [
+        "mathforge/verification/verification_v2.py",
+        "mathforge/harness/proof_graph.py",
+        "mathforge/verification/__init__.py"
+      ],
+      "expected_count": 3,
+      "version": "verification-v2-1-phase7",
+      "engineering_reviewer": "codex-0809-phase7-verification-audit",
+      "review_date": "2026-08-09",
+      "sha256": "2dc40c0234dec1afb915657f800293926b281391933db92eeda725683775d543"
     },
     {
       "id": "tool-capabilities",
@@ -150,10 +164,10 @@
         "mathforge/harness/tool_feedback.py"
       ],
       "expected_count": 9,
-      "version": "tool-contract-phase6-review-evidence",
-      "engineering_reviewer": "codex-phase6-verification-audit",
-      "review_date": "2026-07-30",
-      "sha256": "c2e8cdb0db0c7f43340fde428e373105aa0a61dd97d3aaf9a370484de4b449fb"
+      "version": "tool-contract-phase7-assurance",
+      "engineering_reviewer": "codex-0809-phase7-verification-audit",
+      "review_date": "2026-08-09",
+      "sha256": "fd7240f1f205de8797637958ea043fae53f5e30f765b7c859ff8e1da6cefdab2"
     },
     {
       "id": "dynamic-skill-selection",
@@ -204,10 +218,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 19,
-      "version": "verification-closure-15-phase3",
-      "engineering_reviewer": "codex-0809-phase3-provider-audit",
+      "version": "verification-closure-16-phase7",
+      "engineering_reviewer": "codex-0809-phase7-verification-audit",
         "review_date": "2026-08-09",
-      "sha256": "a3b81e361c2c2924522efe0b3b0ecd8edeac973068c9dada3a09e8b201a3c718"
+      "sha256": "a5751ab07bd5b643829a277dc74039bd79371bda6c4d6b19a45a1959fbd9e4dd"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -234,10 +248,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 19,
-      "version": "phase-f6-agent-protocol-6-phase3",
-      "engineering_reviewer": "codex-0809-phase3-provider-audit",
+      "version": "phase-f6-agent-protocol-7-phase7",
+      "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "9ecc74dd2b3999f888eee356b2128d5d6f7a4c295b6400af8282189a05cda07f"
+      "sha256": "2802bd69722bfa6064ff74b7a62e6df6bf8adcb28e5fcc2cb190ed831cccc304"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -257,10 +271,10 @@
         "mathforge/output/loop_health.py"
       ],
       "expected_count": 12,
-      "version": "phase-f7-runtime-5-phase3",
-      "engineering_reviewer": "codex-0809-phase3-provider-audit",
+      "version": "phase-f7-runtime-6-phase7",
+      "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "79fc02df0511b641e1827b3de3133bd9a6f15586a8e79fb0394dc5ef621050cb"
+      "sha256": "8cf8abf6a9d67bd37ed3b616b3a1f80a2a502680c47c18ed209a023547a99a28"
     },
     {
       "id": "reviewed-method-cards",
@@ -328,10 +342,10 @@
         "scripts/run_case_outputs.py"
       ],
       "expected_count": 13,
-      "version": "provider-controls-1-phase3",
-      "engineering_reviewer": "codex-0809-phase3-provider-audit",
+      "version": "provider-controls-2-phase7-runtime",
+      "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "dfdfde0b2d08e6e55211016ae11927b2d2c2836c5249794fba27a470c2b8fa9f"
+      "sha256": "6771a7cda7255195ecf647ddeadbe794f79ab0d0e077378f2643d25462b1822b"
     },
     {
       "id": "phase7-live-calibration",

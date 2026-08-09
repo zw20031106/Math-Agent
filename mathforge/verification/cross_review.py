@@ -311,6 +311,15 @@ def has_reviewable_work(
     return bool(
         reviewable_obligation_ids(candidates, obligations)
         or matrix.review_targets()
+        # Missing mapping is itself a verification concern.  The Verifier
+        # will emit ``no_reviewable_targets`` without a model call, while the
+        # Runtime still observes the attempted verification phase (and tests
+        # can fail closed if that phase raises a programming error).
+        or any(
+            obligation.required
+            for candidate in candidates
+            for obligation in obligations.get(candidate.candidate_id, [])
+        )
     )
 
 

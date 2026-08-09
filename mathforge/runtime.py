@@ -2517,24 +2517,18 @@ class MathForgeHarness:
             remember_safe_candidate(viable, "pre_arbitration")
             if len(viable) == 1:
                 candidate = viable[0]
+                single_decision = decision_by_id.get(candidate.candidate_id)
+                single_terminal = bool(
+                    single_decision is not None
+                    and single_decision.hard_verified
+                )
                 ranking = [candidate.candidate_id]
                 single_coverage = (
                     1.0
-                    if completion_status_by_id.get(
-                        candidate.candidate_id,
-                        "incomplete",
-                    )
-                    in {"complete_hard", "complete_audited"}
+                    if single_terminal
                     else 0.0
                 )
-                single_status = completion_status_by_id.get(
-                    candidate.candidate_id,
-                    "incomplete",
-                )
-                single_tier = {
-                    "complete_hard": "hard_evidence",
-                    "complete_audited": "independent_corroboration",
-                }.get(single_status, "incomplete")
+                single_tier = "hard_evidence" if single_terminal else "incomplete"
                 single_tier_rank = {
                     "hard_evidence": 0,
                     "independent_corroboration": 1,
@@ -2564,6 +2558,12 @@ class MathForgeHarness:
                         "answer_consistency": 1,
                         "independent_agreement": 0,
                         "evidence_tier": single_tier,
+                        "assurance_level": (
+                            single_decision.assurance_level
+                            if single_decision is not None
+                            else "candidate_valid"
+                        ),
+                        "terminal_closure": single_terminal,
                         "review_support": single_review_support,
                         "soft_score": 0,
                         "deterministic_tie_break": single_digest,
