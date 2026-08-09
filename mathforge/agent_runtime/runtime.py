@@ -12,6 +12,7 @@ from mathforge.agent_runtime.mailbox import SessionMailbox
 from mathforge.agent_runtime.protocol import AgentTurnPayload, AgentTurnPayloadParser, PROTOCOL_SCHEMA_VERSION, TurnContext, TurnLineage
 from mathforge.agent_runtime.router_protocol import AuthoritativePlan
 from mathforge.agent_runtime.state import AgentInstance, AgentStateRegistry, AgentTaskRegistry, TERMINAL_AGENT_STATES
+from mathforge.harness.cancellation import CancellationToken
 
 
 _ROLE_BY_STAGE = {
@@ -56,8 +57,15 @@ class SessionAgentRuntime:
         self._sequence = 0
         self._authoritative_plan: AuthoritativePlan | None = None
         self._agent_action_turns = False
+        self._cancellation_token: CancellationToken | None = None
         self._released = False
         self._lock = RLock()
+
+    def bind_cancellation_token(self, token: CancellationToken) -> None:
+        with self._lock:
+            if self._cancellation_token not in {None, token}:
+                raise RuntimeError("cancellation token is already bound")
+            self._cancellation_token = token
 
     def bind_authoritative_plan(self, plan: AuthoritativePlan) -> None:
         with self._lock:
@@ -81,6 +89,7 @@ class SessionAgentRuntime:
         plan: AuthoritativePlan,
     ) -> dict[str, str]:
         with self._lock:
+            self._ensure_active()
             self.bind_authoritative_plan(plan)
             router_context = next(
                 (
@@ -172,6 +181,7 @@ class SessionAgentRuntime:
         *,
         mode: str | None = None,
     ) -> AgentInstance:
+        self._ensure_active()
         key = (role, descriptor)
         agent_id = self._agent_keys.get(key)
         if agent_id:
@@ -203,6 +213,7 @@ class SessionAgentRuntime:
         with self._lock:
             if self._released:
                 raise RuntimeError("Agent runtime has been released")
+            self._ensure_active()
             hinted_role = str(agent_hint).split(":", 1)[0]
             role = hinted_role if hinted_role in self.definitions.roles() else _ROLE_BY_STAGE.get(stage, "PrimarySolver")
             descriptor = (
@@ -424,6 +435,7 @@ class SessionAgentRuntime:
         recovery_metadata: dict[str, str] | None = None,
     ) -> dict[str, str]:
         with self._lock:
+            self._ensure_active()
             context = self._turn_contexts[turn_id]
             recovery = dict(recovery_metadata or {})
             digest = recovery.get("response_sha256") or sha256(
@@ -697,6 +709,7 @@ class SessionAgentRuntime:
         public_summary: str,
     ) -> str:
         with self._lock:
+            self._ensure_active()
             context = self._turn_contexts[turn_id]
             lineage = self._turns[turn_id]
             if not lineage.artifact_id:
@@ -800,14 +813,30 @@ class SessionAgentRuntime:
             for thread in mailbox_snapshot["threads"]:
                 if thread["status"] == "open":
                     self.mailbox.close(thread["thread_id"])
-            for task in self.tasks.snapshot():
+            terminal_status = self._interrupted_terminal_status()
+            tasks = self.tasks.snapshot()
+            for task in tasks:
                 if task["status"] in {"ready", "running"}:
-                    self.tasks.transition(task["task_id"], "completed")
+                    self.tasks.transition(task["task_id"], terminal_status)
+            tasks = self.tasks.snapshot()
             for row in self.agents.snapshot():
                 if row["state"]["status"] not in TERMINAL_AGENT_STATES:
-                    if row["state"]["status"] == "running":
-                        self.agents.transition(row["agent_id"], "ready")
-                    self.agents.transition(row["agent_id"], "completed")
+                    assigned = [
+                        task
+                        for task in tasks
+                        if task["assigned_agent_id"] == row["agent_id"]
+                    ]
+                    target = (
+                        "completed"
+                        if assigned
+                        and all(task["status"] == "completed" for task in assigned)
+                        else terminal_status
+                    )
+                    self.agents.transition(
+                        row["agent_id"],
+                        target,
+                        failure_code=("" if target == "completed" else target),
+                    )
             artifacts = self.artifacts.snapshot()
             mailbox_snapshot = self.mailbox.snapshot()
             turns = [item.to_dict() for item in self._turns.values()]
@@ -855,8 +884,28 @@ class SessionAgentRuntime:
             self._review_thread_by_artifact.clear()
             self._authoritative_plan = None
             self._agent_action_turns = False
+            self._cancellation_token = None
             self._released = True
 
     @property
     def released(self) -> bool:
         return self._released
+
+    def _ensure_active(self) -> None:
+        if (
+            self._cancellation_token is not None
+            and self._cancellation_token.is_cancelled
+        ):
+            raise RuntimeError("Agent runtime cancellation requested")
+
+    def _interrupted_terminal_status(self) -> str:
+        reason = (
+            self._cancellation_token.reason
+            if self._cancellation_token is not None
+            else ""
+        ).casefold()
+        if "deadline" in reason or "wall_clock" in reason:
+            return "deadline_expired"
+        if "abort" in reason:
+            return "aborted"
+        return "cancelled"

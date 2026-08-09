@@ -11,7 +11,10 @@ from mathforge.harness.context_budget import ModelContextBudget
 from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.errors import ModelCallRejected
 from mathforge.harness.errors import ModelTransportError
+from mathforge.harness.cancellation import CancellationToken
 from mathforge.harness.model_policy import (
+    PROVIDER_CALL_TIMEOUT_SECONDS,
+    effective_call_timeout,
     effective_output_tokens,
     feasible_queue_budget,
     stage_call_timeout,
@@ -26,12 +29,25 @@ from mathforge.harness.model_admission import (
 from mathforge.harness.transport import (
     ObservedModelResponse,
     classify_transport_failure,
-    transport_attempts,
+    transport_attempt_observation,
 )
 
 if TYPE_CHECKING:
     from mathforge.harness.budget import CallBudget
     from mathforge.harness.deadline import DeadlineController
+
+
+_TRANSPORT_HEALTH_FAILURE_CODES = frozenset(
+    {
+        "auth_or_permission_failure",
+        "rate_limited",
+        "provider_5xx",
+        "network_connect_failure",
+        "network_read_timeout",
+        "empty_response",
+        "unknown_provider_failure",
+    }
+)
 
 
 def _record_protocol_dispatch(budget, call_index, runtime, turn) -> None:
@@ -132,6 +148,9 @@ class ModelCallGate:
         self._consecutive_failures = 0
         self._next_call_index = 0
         self._late_registry: list[dict[str, Any]] = []
+        self._discarded_cancelled_results = 0
+        self._protocol_success_count = 0
+        self._protocol_failure_count = 0
 
     def call(
         self,
@@ -148,8 +167,10 @@ class ModelCallGate:
         minimum_start_window_seconds: float = 0.0,
         timing_callback=None,
         dispatch_callback=None,
+        cancellation_token: CancellationToken | None = None,
         **kwargs,
     ):
+        self._raise_if_cancelled(cancellation_token)
         if deadline is None:
             self._reject_open_circuit(timing_callback)
             try:
@@ -162,14 +183,26 @@ class ModelCallGate:
             except AdmissionWaitExceeded as error:
                 raise ModelCallRejected(error.code) from error
             dispatched = False
+            released = False
             try:
+                self._raise_if_cancelled(cancellation_token)
                 if dispatch_callback is not None:
                     dispatch_callback()
                 self._admission.commit(lease)
                 dispatched = True
-                return function(**kwargs)
+                outcome = function(**kwargs)
+                attempts, observed = transport_attempt_observation(outcome)
+                if observed:
+                    self._admission.release(
+                        lease,
+                        dispatched=True,
+                        observed_attempts=attempts,
+                    )
+                    released = True
+                return outcome
             finally:
-                self._admission.release(lease, dispatched=dispatched)
+                if not released:
+                    self._admission.release(lease, dispatched=dispatched)
 
         self._reject_open_circuit(timing_callback)
         started = perf_counter()
@@ -208,6 +241,7 @@ class ModelCallGate:
             raise ModelCallRejected(error.code) from error
         queue_elapsed = perf_counter() - started
         try:
+            self._raise_if_cancelled(cancellation_token)
             self._reject_open_circuit(timing_callback, queue_elapsed)
         except ModelCallRejected:
             self._admission.release(lease, dispatched=False)
@@ -267,6 +301,11 @@ class ModelCallGate:
         state = {"completed": False, "timed_out": False}
         execution_started = perf_counter()
         call_index = self._allocate_call_index()
+        try:
+            self._raise_if_cancelled(cancellation_token)
+        except ModelCallRejected:
+            self._admission.release(lease, dispatched=False)
+            raise
         if dispatch_callback is not None:
             try:
                 dispatch_callback()
@@ -277,14 +316,29 @@ class ModelCallGate:
 
         def invoke() -> None:
             try:
-                outcome["value"] = function(**kwargs)
+                value = function(**kwargs)
+                if cancellation_token is None or not cancellation_token.is_cancelled:
+                    outcome["value"] = value
             except BaseException as exc:
-                outcome["error"] = exc
+                if cancellation_token is None or not cancellation_token.is_cancelled:
+                    outcome["error"] = exc
             finally:
                 with state_lock:
                     state["completed"] = True
                     is_background_tail = state["timed_out"]
-                self._admission.release(lease, dispatched=True)
+                    cancelled = (
+                        cancellation_token is not None
+                        and cancellation_token.is_cancelled
+                    )
+                observed_value = outcome.get("error", outcome.get("value"))
+                attempts, observed = transport_attempt_observation(
+                    observed_value
+                )
+                self._admission.release(
+                    lease,
+                    dispatched=True,
+                    observed_attempts=attempts if observed else None,
+                )
                 done.set()
                 if is_background_tail:
                     self._complete_tail(
@@ -299,13 +353,36 @@ class ModelCallGate:
                             background_tail_callback("completed")
                         except Exception:
                             pass
+                elif cancelled:
+                    with self._health_lock:
+                        self._discarded_cancelled_results += 1
 
         Thread(
             target=invoke,
             name="mathforge-model-call",
             daemon=True,
         ).start()
-        if not done.wait(execution_timeout):
+        wait_started = perf_counter()
+        while True:
+            remaining_wait = execution_timeout - (perf_counter() - wait_started)
+            if remaining_wait <= 0 or done.wait(min(0.05, remaining_wait)):
+                break
+            if (
+                cancellation_token is not None
+                and cancellation_token.is_cancelled
+            ):
+                execution_elapsed = perf_counter() - execution_started
+                self._emit_timing(
+                    timing_callback,
+                    queue_elapsed_seconds=queue_elapsed,
+                    agent_wait_seconds=lease.agent_wait_seconds,
+                    scheduler_wait_seconds=lease.scheduler_wait_seconds,
+                    rate_wait_seconds=lease.rate_wait_seconds,
+                    execution_elapsed_seconds=execution_elapsed,
+                    total_elapsed_seconds=perf_counter() - started,
+                )
+                raise ModelCallRejected("case_cancelled", dispatched=True)
+        if not done.is_set():
             with state_lock:
                 already_completed = state["completed"]
                 if not already_completed:
@@ -328,6 +405,8 @@ class ModelCallGate:
                     "model_response_deadline_exceeded",
                     dispatched=True,
                 )
+        if cancellation_token is not None and cancellation_token.is_cancelled:
+            raise ModelCallRejected("case_cancelled", dispatched=True)
         execution_elapsed = perf_counter() - execution_started
         self._emit_timing(
             timing_callback,
@@ -344,7 +423,7 @@ class ModelCallGate:
 
     def health_snapshot(self) -> dict[str, Any]:
         with self._health_lock:
-            return {
+            transport_health = {
                 "state": self._health_state,
                 "active_tails": self._active_tails,
                 "peak_tails": self._peak_tails,
@@ -358,6 +437,20 @@ class ModelCallGate:
                 ),
                 "health_window_size": len(self._health_window),
                 "late_registry": deepcopy(self._late_registry),
+            }
+            return {
+                **transport_health,
+                "transport_health": deepcopy(transport_health),
+                "protocol_health": {
+                    "state": (
+                        "degraded" if self._protocol_failure_count else "healthy"
+                    ),
+                    "success_count": self._protocol_success_count,
+                    "failure_count": self._protocol_failure_count,
+                },
+                "discarded_cancelled_results": (
+                    self._discarded_cancelled_results
+                ),
                 **self._admission.snapshot(),
             }
 
@@ -375,7 +468,8 @@ class ModelCallGate:
         its response shape has been checked.
         """
 
-        del failure_code
+        if not success and failure_code not in _TRANSPORT_HEALTH_FAILURE_CODES:
+            return
         with self._health_lock:
             outcome = bool(success)
             self._health_window.append(outcome)
@@ -386,6 +480,24 @@ class ModelCallGate:
                 self._ordinary_failure_count += 1
                 self._consecutive_failures += 1
             self._recompute_health_locked()
+
+    def record_protocol_result(self, *, success: bool) -> None:
+        with self._health_lock:
+            if success:
+                self._protocol_success_count += 1
+            else:
+                self._protocol_failure_count += 1
+
+    @property
+    def transport_attempt_reservation(self) -> int:
+        return self._admission.transport_attempt_reservation
+
+    @staticmethod
+    def _raise_if_cancelled(
+        cancellation_token: CancellationToken | None,
+    ) -> None:
+        if cancellation_token is not None:
+            cancellation_token.raise_if_cancelled()
 
     def _reject_open_circuit(
         self,
@@ -558,6 +670,21 @@ class OfficialClientProvider:
             self._stage_execution_policy,
         )
         active_deadline = budget.deadline if budget is not None else deadline
+        remaining_for_call = (
+            active_deadline.remaining_for_model_call()
+            if active_deadline is not None
+            else configured_stage_timeout
+        )
+        effective_stage_timeout = effective_call_timeout(
+            active_turn_kind,
+            remaining_for_call,
+            self._stage_execution_policy,
+            client_timeout_seconds=PROVIDER_CALL_TIMEOUT_SECONDS,
+        )
+        effective_minimum_start_window = min(
+            minimum_start_window,
+            PROVIDER_CALL_TIMEOUT_SECONDS,
+        )
         queue_budget = (
             feasible_queue_budget(
                 active_turn_kind,
@@ -597,15 +724,16 @@ class OfficialClientProvider:
             ),
             "configured_stage_timeout_seconds": configured_stage_timeout,
             "stage_timeout_seconds": configured_stage_timeout,
+            "client_timeout_seconds": PROVIDER_CALL_TIMEOUT_SECONDS,
             "minimum_start_window_seconds": minimum_start_window,
-            "effective_stage_timeout_seconds": (
-                min(
-                    configured_stage_timeout,
-                    active_deadline.remaining_for_model_call(),
-                )
-                if active_deadline is not None
-                else configured_stage_timeout
+            "effective_minimum_start_window_seconds": (
+                effective_minimum_start_window
             ),
+            "effective_stage_timeout_seconds": effective_stage_timeout,
+            "transport_attempt_reservation": (
+                self._gate.transport_attempt_reservation
+            ),
+            "transport_attempt_observability": "pending",
             "stage_p95_seconds": stage_p95_seconds(active_turn_kind),
             "effective_queue_budget_seconds": queue_budget,
             "agent_id": protocol_turn.agent_id if protocol_turn else (agent_id or ""),
@@ -635,12 +763,15 @@ class OfficialClientProvider:
                 case_id=(budget.scheduler_case_id if budget is not None else ""),
                 agent_id=(protocol_turn.agent_id if protocol_turn else (agent_id or active_turn_kind)),
                 queue_budget_seconds=queue_budget,
-                stage_timeout_seconds=configured_stage_timeout,
+                stage_timeout_seconds=effective_stage_timeout,
                 minimum_start_window_seconds=(
-                    minimum_start_window
+                    effective_minimum_start_window
                     if budget is None
                     or budget.enforce_stage_start_window
                     else 0.0
+                ),
+                cancellation_token=(
+                    budget.cancellation_token if budget is not None else None
                 ),
                 background_tail_callback=(
                     (
@@ -696,12 +827,22 @@ class OfficialClientProvider:
         except Exception as error:
             failure_code = classify_transport_failure(error)
             _fail_protocol_turn(protocol_runtime, protocol_turn, failure_code)
-            attempts = transport_attempts(error)
+            attempts, attempts_observed = transport_attempt_observation(error)
             self._gate.record_provider_result(
                 success=False,
                 failure_code=failure_code,
             )
             if budget is not None and call_index is not None:
+                budget.record_model_call_lineage(
+                    call_index,
+                    {
+                        "transport_attempt_observability": (
+                            "observed"
+                            if attempts_observed
+                            else "reserved_upper_bound"
+                        )
+                    },
+                )
                 budget.record_model_call_failed(
                     call_index,
                     perf_counter() - started,
@@ -717,20 +858,32 @@ class OfficialClientProvider:
                 budget.record_provider_health(self._gate.health_snapshot())
         if not isinstance(response, str):
             _fail_protocol_turn(protocol_runtime, protocol_turn, "response_shape_invalid")
-            self._gate.record_provider_result(
-                success=False,
-                failure_code="response_shape_invalid",
-            )
+            self._gate.record_protocol_result(success=False)
             if budget is not None:
                 budget.record_provider_health(self._gate.health_snapshot())
             if budget is not None and call_index is not None:
+                budget.record_model_protocol_telemetry(
+                    call_index,
+                    "rejected",
+                    "response_shape_invalid",
+                    "hard_evidence_disabled",
+                )
                 budget.record_model_call_failed(
                     call_index,
                     perf_counter() - started,
                     failure_code="response_shape_invalid",
                 )
             raise ModelTransportError("response_shape_invalid")
-        attempts = transport_attempts(response)
+        attempts, attempts_observed = transport_attempt_observation(response)
+        if budget is not None and call_index is not None:
+            budget.record_model_call_lineage(
+                call_index,
+                {
+                    "transport_attempt_observability": (
+                        "observed" if attempts_observed else "reserved_upper_bound"
+                    )
+                },
+            )
         if not response.strip():
             _fail_protocol_turn(protocol_runtime, protocol_turn, "empty_response")
             self._gate.record_provider_result(

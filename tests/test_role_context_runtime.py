@@ -204,6 +204,7 @@ def test_runtime_finalizer_receives_a_budgeted_authorized_view():
         enable_rag=False,
         enable_repair=False,
         enable_finalizer=True,
+        enable_final_audit=False,
     )
     MathForgeHarness(client, config).solve("Explain why x equals x", {})
     finalizer_messages = next(

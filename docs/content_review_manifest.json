@@ -155,10 +155,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 19,
-      "version": "verification-closure-14-phase2",
-      "engineering_reviewer": "codex-0809-phase2-availability-audit",
+      "version": "verification-closure-15-phase3",
+      "engineering_reviewer": "codex-0809-phase3-provider-audit",
         "review_date": "2026-08-09",
-      "sha256": "caf43fd52c05bab16cc9de7e201054196ae1e7632c00b876336240bb47207030"
+      "sha256": "c990469ed907b8e866ddae301599dd85da334dee807e3f4a6f559c61660a138c"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -185,10 +185,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 19,
-      "version": "phase-f6-agent-protocol-phase2-0809-answer-recovery",
-      "engineering_reviewer": "codex-0809-phase2-availability-audit",
+      "version": "phase-f6-agent-protocol-6-phase3",
+      "engineering_reviewer": "codex-0809-phase3-provider-audit",
       "review_date": "2026-08-09",
-      "sha256": "43ff13affd502d677e78775251fef40edffbbc4c51ad0ef74a94342e9b7b7de0"
+      "sha256": "dc60cd9dfd7a1a0b58b188dd0f71177be28dfbf64af2a64e8c9f137dc8fe9a9d"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -208,10 +208,10 @@
         "mathforge/output/loop_health.py"
       ],
       "expected_count": 12,
-      "version": "phase-f7-runtime-4-phase2",
-      "engineering_reviewer": "codex-0809-phase2-availability-audit",
+      "version": "phase-f7-runtime-5-phase3",
+      "engineering_reviewer": "codex-0809-phase3-provider-audit",
       "review_date": "2026-08-09",
-      "sha256": "eda0f0fdc70bfb72a0402df4566a23940a4eb00fecec7c2d0cb847dc7f40af44"
+      "sha256": "f58a42e3367a3a5b75e79e86f5b56ddb2e8d08337f2b0ffc6f01a381835f505e"
     },
     {
       "id": "reviewed-method-cards",
@@ -261,6 +261,30 @@
       "sha256": "2639fef276409862107393cbfa07136b6fb239e531803bd74d0b764dc8bf42a8"
     },
     {
+      "id": "phase3-provider-cancellation-controls",
+      "kind": "file_set",
+      "paths": [
+        "mathforge/harness/cancellation.py",
+        "mathforge/harness/model_admission.py",
+        "mathforge/harness/model_policy.py",
+        "mathforge/harness/provider.py",
+        "mathforge/harness/rate_limit.py",
+        "mathforge/harness/transport.py",
+        "mathforge/harness/budget.py",
+        "mathforge/agent_runtime/resource_governor.py",
+        "mathforge/agent_runtime/runtime.py",
+        "mathforge/agent_runtime/state.py",
+        "mathforge/output/judge_trace.py",
+        "mathforge/runtime.py",
+        "scripts/run_case_outputs.py"
+      ],
+      "expected_count": 13,
+      "version": "provider-controls-1-phase3",
+      "engineering_reviewer": "codex-0809-phase3-provider-audit",
+      "review_date": "2026-08-09",
+      "sha256": "f05e88d557eb5712d056f08e976da30ce71466dbea5aa2afb213e45c3f21fd8b"
+    },
+    {
       "id": "phase7-live-calibration",
       "kind": "file_set",
       "paths": [
@@ -270,10 +294,10 @@
         "scripts/propose_competition_config.py"
       ],
       "expected_count": 4,
-      "version": "phase7-live-calibration-phase1-0809-simple-preflight",
-      "engineering_reviewer": "codex-0809-phase1-protocol-audit",
+      "version": "phase7-live-calibration-3-phase3",
+      "engineering_reviewer": "codex-0809-phase3-provider-audit",
       "review_date": "2026-08-09",
-      "sha256": "0a66fcfae9402d0091e05c6d2008bb0df79bd4434f229efc8e0c971c2307fc34"
+      "sha256": "5b5e9aa4282c9c259e5a7bd5a7fd911a8ea2b940754d5d8cef66875648e2953c"
     },
     {
       "id": "router-calibration",

@@ -97,9 +97,20 @@ class ModelAdmissionController:
     def commit(self, lease: AdmissionLease) -> None:
         self._rate_limiter.commit(lease.rate_reservation)
 
-    def release(self, lease: AdmissionLease, *, dispatched: bool) -> None:
+    def release(
+        self,
+        lease: AdmissionLease,
+        *,
+        dispatched: bool,
+        observed_attempts: int | None = None,
+    ) -> None:
         if not dispatched:
             self._rate_limiter.refund(lease.rate_reservation)
+        elif observed_attempts is not None:
+            self._rate_limiter.reconcile(
+                lease.rate_reservation,
+                min(lease.rate_reservation.weight, max(1, observed_attempts)),
+            )
         self._scheduler.release()
         self._release_agent_key(lease.agent_key)
 
@@ -112,6 +123,10 @@ class ModelAdmissionController:
             "active_agent_calls": active_agent_calls,
             "transport_attempt_reservation": self._transport_attempt_reservation,
         }
+
+    @property
+    def transport_attempt_reservation(self) -> int:
+        return self._transport_attempt_reservation
 
     def _acquire_agent_key(
         self,

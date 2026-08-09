@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mathforge.harness.errors import BudgetExceeded
+from mathforge.harness.cancellation import CancellationToken
 
 
 _CLOSURE_ACTIONS = frozenset(
@@ -56,6 +57,7 @@ class ResourceGovernor:
         soft_checkpoints: tuple[int, ...],
         speculative_exploration_cutoff: int,
         closure_reserve_calls: int,
+        cancellation_token: CancellationToken | None = None,
     ) -> None:
         if hard_limit < 1:
             raise ValueError("hard call limit must be positive")
@@ -69,8 +71,14 @@ class ResourceGovernor:
         self.soft_checkpoints = soft_checkpoints
         self.speculative_exploration_cutoff = int(speculative_exploration_cutoff)
         self.closure_reserve_calls = int(closure_reserve_calls)
+        self._cancellation_token = cancellation_token
 
     def admit(self, *, used_calls: int, action_category: str) -> None:
+        if (
+            self._cancellation_token is not None
+            and self._cancellation_token.is_cancelled
+        ):
+            raise BudgetExceeded("case cancellation requested")
         if used_calls >= self.hard_limit:
             raise BudgetExceeded("model call budget exhausted")
         if (

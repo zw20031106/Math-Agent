@@ -102,6 +102,29 @@ class WeightedRollingRateLimiter:
                     return True
             return False
 
+    def reconcile(self, reservation: RateReservation, actual_weight: int) -> bool:
+        """Replace a committed worst-case reservation with observed attempts."""
+
+        if type(actual_weight) is not int or not 1 <= actual_weight <= reservation.weight:
+            raise ValueError("actual weight must fit within the reservation")
+        with self._condition:
+            if reservation.token not in self._committed:
+                return False
+            for index, item in enumerate(self._events):
+                if item.token != reservation.token:
+                    continue
+                if item.weight == actual_weight:
+                    return True
+                self._events[index] = RateReservation(
+                    token=item.token,
+                    weight=actual_weight,
+                    admitted_at=item.admitted_at,
+                )
+                self._admitted_weight -= item.weight - actual_weight
+                self._condition.notify_all()
+                return True
+            return False
+
     def snapshot(self) -> dict[str, int | float]:
         with self._condition:
             self._expire_locked(self._clock())

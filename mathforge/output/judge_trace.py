@@ -108,6 +108,25 @@ _PROTECTED_EVENTS = frozenset(
         "run_completed",
     }
 )
+_ESSENTIAL_PROTECTED_EVENTS = frozenset(
+    {
+        "solution_process",
+        "workflow_overview",
+        "session_started",
+        "evidence_summary",
+        "proof_completion_summary",
+        "decision_summary",
+        "candidate_arbitrated",
+        "final_answer_selected",
+        "fallback_used",
+        "deadline_finalize",
+        "per_case_wall_clock_timeout",
+        "case_execution_failed",
+        "closed_loop_health",
+        "budget_summary",
+        "run_completed",
+    }
+)
 _FORBIDDEN_KEYS = re.compile(
     r"^(?:"
     r"raw_(?:response|completion|prompt)|candidate_text|solution_text|"
@@ -2133,6 +2152,15 @@ def _model_activity(
                 "minimum_start_window_seconds": _nonnegative_float(
                     record.get("minimum_start_window_seconds", 0.0)
                 ),
+                "effective_minimum_start_window_seconds": _nonnegative_float(
+                    record.get(
+                        "effective_minimum_start_window_seconds",
+                        0.0,
+                    )
+                ),
+                "client_timeout_seconds": _nonnegative_float(
+                    record.get("client_timeout_seconds", 0.0)
+                ),
                 "effective_stage_timeout_seconds": _nonnegative_float(
                     record.get("effective_stage_timeout_seconds", 0.0)
                 ),
@@ -2152,6 +2180,12 @@ def _model_activity(
                         "total_elapsed_seconds",
                         record.get("elapsed_seconds", 0.0),
                     )
+                ),
+                "transport_attempt_reservation": _nonnegative_int(
+                    record.get("transport_attempt_reservation", 0)
+                ),
+                "transport_attempt_observability": str(
+                    record.get("transport_attempt_observability", "pending")
                 ),
             }
         )
@@ -2191,7 +2225,13 @@ def _model_activity(
         "stage_p95_seconds",
         "effective_queue_budget_seconds",
         "stage_timeout_seconds",
+        "configured_stage_timeout_seconds",
+        "client_timeout_seconds",
         "effective_stage_timeout_seconds",
+        "minimum_start_window_seconds",
+        "effective_minimum_start_window_seconds",
+        "transport_attempt_reservation",
+        "transport_attempt_observability",
         "finish_reason",
         "tail_state",
         "stop_reason",
@@ -2503,6 +2543,8 @@ def _bound_event(
                     "response_validation",
                     "effective_max_output_tokens",
                     "configured_stage_timeout_seconds",
+                    "client_timeout_seconds",
+                    "effective_stage_timeout_seconds",
                     "finish_reason",
                 )
                 if key in call
@@ -2606,12 +2648,21 @@ def _bound_trace(
                 return True
         return False
 
+    def remove_nonessential_protected() -> bool:
+        for index, event in enumerate(resident):
+            if event.get("event") not in _ESSENTIAL_PROTECTED_EVENTS:
+                omitted.append(resident.pop(index))
+                return True
+        return False
+
     while len(resident) + (1 if omitted else 0) > limits.judge_trace_max_events:
         if not remove_optional():
-            break
+            if not remove_nonessential_protected():
+                break
     while _serialized_chars(resident) > limits.judge_trace_max_chars:
         if not remove_optional():
-            break
+            if not remove_nonessential_protected():
+                break
     if omitted:
         source_elapsed = max(
             (_nonnegative_int(event.get("elapsed_ms", 0)) for event in resident),

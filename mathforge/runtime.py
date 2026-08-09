@@ -15,6 +15,7 @@ from mathforge.agent_runtime.definitions import AgentRegistry
 from mathforge.agent_runtime.runtime import SessionAgentRuntime
 from mathforge.agent_runtime.autonomy import AgentProgressTracker
 from mathforge.harness.budget import CallBudget
+from mathforge.harness.cancellation import CancellationToken
 from mathforge.harness.debug import DebugSink, sanitized_failure_record
 from mathforge.harness.errors import (
     BudgetExceeded,
@@ -393,9 +394,16 @@ class MathForgeHarness:
             "provenance_hash": self._run_provenance.fingerprint,
         }
 
-    def solve(self, problem: str, metadata: dict) -> dict:
+    def solve(
+        self,
+        problem: str,
+        metadata: dict,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
         safe_metadata = _public_metadata(metadata)
+        active_cancellation = cancellation_token or CancellationToken()
         session = create_session(
             normalized_problem,
             safe_metadata,
@@ -442,6 +450,7 @@ class MathForgeHarness:
                 ),
                 closure_reserve_calls=self._config.closure_reserve_calls,
                 enforce_stage_start_window=True,
+                cancellation_token=active_cancellation,
             ),
             raw_context_max_chars=self._config.raw_context_max_chars,
         )
@@ -3370,6 +3379,7 @@ class MathForgeHarness:
                 self._config.candidate_summary_max_count
             ),
         }
+        active_cancellation.cancel("session_completed")
         terminalizer.safe(
             "agent_runtime_release",
             session.agent_runtime.release,

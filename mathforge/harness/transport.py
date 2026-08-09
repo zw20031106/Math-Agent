@@ -25,6 +25,7 @@ RETRYABLE_TRANSPORT_FAILURE_CODES = frozenset(
 )
 
 _HTTP_5XX = re.compile(r"\b5\d\d\b")
+_ATTEMPTS_IN_MESSAGE = re.compile(r"\bafter\s+(\d+)\s+attempts?\b", re.I)
 
 
 class ObservedModelResponse(str):
@@ -100,8 +101,26 @@ def classify_transport_failure(error: BaseException) -> str:
 
 
 def transport_attempts(value: Any) -> int:
-    attempts = getattr(value, "transport_attempts", getattr(value, "attempts", 1))
+    attempts, _ = transport_attempt_observation(value)
+    return attempts
+
+
+def transport_attempt_observation(value: Any) -> tuple[int, bool]:
+    marker = object()
+    attempts = getattr(
+        value,
+        "transport_attempts",
+        getattr(value, "attempts", marker),
+    )
+    observed = attempts is not marker
+    if not observed:
+        match = _ATTEMPTS_IN_MESSAGE.search(str(value))
+        if match:
+            attempts = match.group(1)
+            observed = True
+        else:
+            attempts = 1
     try:
-        return max(1, int(attempts))
+        return max(1, int(attempts)), observed
     except (TypeError, ValueError):
-        return 1
+        return 1, False

@@ -220,7 +220,10 @@ def test_phase1_ordinary_provider_failures_update_health_without_secrets():
 def test_phase1_degraded_provider_changes_optional_stage_selection():
     harness = MathForgeHarness(_ValidClient(), _minimal_config(max_model_calls=3))
     for _ in range(3):
-        harness._model_gate.record_provider_result(success=False)
+        harness._model_gate.record_provider_result(
+            success=False,
+            failure_code="provider_5xx",
+        )
 
     result = harness.solve("Compute the derivative of x^2.", {"idx": "health"})
 

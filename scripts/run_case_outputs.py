@@ -52,6 +52,7 @@ from mathforge.harness.provider import (  # noqa: E402
     OfficialClientProvider,
 )
 from mathforge.harness.trace import TraceBuilder  # noqa: E402
+from mathforge.harness.cancellation import CancellationToken  # noqa: E402
 from mathforge.harness.trace_journal import TraceJournalFactory  # noqa: E402
 from mathforge.harness.transport import (  # noqa: E402
     ObservedModelResponse,
@@ -246,6 +247,7 @@ class PerCaseWallClockRunner:
         *,
         wall_clock_seconds: float = PER_CASE_WALL_CLOCK_SECONDS,
         serialization_reserve_seconds: float = RESULT_SERIALIZATION_RESERVE_SECONDS,
+        cancellation_token_factory: Callable[[], CancellationToken] | None = None,
     ) -> None:
         if wall_clock_seconds <= 0:
             raise ValueError("wall_clock_seconds must be positive")
@@ -259,6 +261,7 @@ class PerCaseWallClockRunner:
         self.harness_return_seconds = (
             self.wall_clock_seconds - self.serialization_reserve_seconds
         )
+        self._cancellation_token_factory = cancellation_token_factory
 
     def solve(self, problem: str, metadata: dict[str, Any]) -> dict[str, Any]:
         completed = Event()
@@ -266,10 +269,22 @@ class PerCaseWallClockRunner:
         outcome_lock = Lock()
         state = {"closed": False}
         started = perf_counter()
+        cancellation_token = (
+            self._cancellation_token_factory()
+            if self._cancellation_token_factory is not None
+            else None
+        )
 
         def invoke() -> None:
             try:
-                result = self._solve(problem, dict(metadata))
+                if cancellation_token is None:
+                    result = self._solve(problem, dict(metadata))
+                else:
+                    result = self._solve(
+                        problem,
+                        dict(metadata),
+                        cancellation_token=cancellation_token,
+                    )
             except BaseException as error:
                 result = self._failure_result(
                     problem,
@@ -288,6 +303,8 @@ class PerCaseWallClockRunner:
             daemon=True,
         ).start()
         if not completed.wait(self.harness_return_seconds):
+            if cancellation_token is not None:
+                cancellation_token.cancel("per_case_wall_clock_exceeded")
             with outcome_lock:
                 state["closed"] = True
             return self._timeout_result(
@@ -955,6 +972,7 @@ def main(argv: list[str] | None = None) -> int:
                 config.outer_platform_limit_seconds
                 - config.hard_deadline_seconds
             ),
+            cancellation_token_factory=CancellationToken,
         )
 
         def persist(record: BenchmarkRecord) -> None:

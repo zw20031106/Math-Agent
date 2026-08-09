@@ -6,6 +6,7 @@ from threading import Lock
 from mathforge.agent_runtime.call_ledger import CallLedger
 from mathforge.agent_runtime.resource_governor import ResourceGovernor
 from mathforge.harness.budget_types import CallBudgetSnapshot
+from mathforge.harness.cancellation import CancellationToken
 from mathforge.harness.deadline import DeadlineController
 from mathforge.harness.errors import BudgetExceeded
 
@@ -36,6 +37,7 @@ class CallBudget:
     speculative_exploration_cutoff: int = 0
     closure_reserve_calls: int = 0
     enforce_stage_start_window: bool = False
+    cancellation_token: CancellationToken | None = None
 
     def __post_init__(self) -> None:
         if self.max_calls < 1 or self.max_tokens < 0:
@@ -71,6 +73,8 @@ class CallBudget:
         if self.model_call_policy != "adaptive_bounded":
             raise ValueError("model call policy is invalid")
         self._lock = Lock()
+        if self.cancellation_token is None:
+            self.cancellation_token = CancellationToken()
         self._frozen = False
         self._scheduler_case_id = ""
         self._agent_runtime = None
@@ -110,6 +114,12 @@ class CallBudget:
         self.provider_rate_admitted_weight = 0
         self.provider_circuit_trips = 0
         self.provider_fast_failures = 0
+        self.protocol_health_state = "healthy"
+        self.protocol_success_count = 0
+        self.protocol_recovery_count = 0
+        self.protocol_failure_count = 0
+        self.cognitive_health_state = "healthy"
+        self.cognitive_rejection_count = 0
         self._call_ledger = CallLedger()
         self.model_call_records = self._call_ledger.records
         self._resource_governor = ResourceGovernor(
@@ -119,6 +129,7 @@ class CallBudget:
                 self.speculative_exploration_cutoff
             ),
             closure_reserve_calls=self.closure_reserve_calls,
+            cancellation_token=self.cancellation_token,
         )
         self.final_response_tokens = 0
         self.final_response_counting_mode = ""
@@ -153,6 +164,7 @@ class CallBudget:
             if runtime.session_id != self._scheduler_case_id:
                 raise ValueError("Agent runtime must match the scheduler session")
             self._agent_runtime = runtime
+            runtime.bind_cancellation_token(self.cancellation_token)
 
     @property
     def agent_runtime(self):
@@ -172,6 +184,7 @@ class CallBudget:
     ) -> None:
         with self._lock:
             self._ensure_mutable_locked()
+            self._ensure_active_locked()
             category = action_category or ResourceGovernor.default_action_category(
                 stage,
                 optional=optional,
@@ -181,6 +194,8 @@ class CallBudget:
                 action_category=category,
             )
             if not self.deadline.can_start_model_call(optional=optional):
+                if self.deadline.hard_expired():
+                    self.cancellation_token.cancel("case_deadline_expired")
                 raise BudgetExceeded("model call deadline reached")
             self.used_calls += 1
             self._stage_calls[stage] = self._stage_calls.get(stage, 0) + 1
@@ -240,6 +255,16 @@ class CallBudget:
                     int(allocation.get("stage_output_cap_tokens", requested)),
                 ),
                 "transport_attempts": 0,
+                "transport_attempt_reservation": max(
+                    1,
+                    int(allocation.get("transport_attempt_reservation", 1)),
+                ),
+                "transport_attempt_observability": str(
+                    allocation.get(
+                        "transport_attempt_observability",
+                        "pending",
+                    )
+                ),
                 "failure_code": "",
                 "response_validation": "not_applicable",
                 "protocol_parse_tier": "not_attempted",
@@ -385,6 +410,8 @@ class CallBudget:
             self.model_call_records[index]["response_validation"] = str(code)
             if rejected:
                 self.model_response_rejection_count += 1
+                self.cognitive_rejection_count += 1
+                self.cognitive_health_state = "degraded"
 
     def record_model_protocol_telemetry(
         self,
@@ -409,6 +436,19 @@ class CallBudget:
             if candidate_parse_tier:
                 update["candidate_parse_tier"] = str(candidate_parse_tier)
             self._call_ledger.update(index, update)
+            normalized = str(parse_tier).casefold()
+            degradation = str(assurance_degradation).casefold()
+            if normalized in {"strict", "host_wrapped"} and degradation in {
+                "",
+                "none",
+            }:
+                self.protocol_success_count += 1
+            elif normalized in {"rejected", "failed", "not_attempted"}:
+                self.protocol_failure_count += 1
+                self.protocol_health_state = "degraded"
+            else:
+                self.protocol_recovery_count += 1
+                self.protocol_health_state = "degraded"
 
     def record_background_tail(self, event: str, index: int | None = None) -> None:
         with self._lock:
@@ -495,22 +535,25 @@ class CallBudget:
     def record_provider_health(self, snapshot: dict) -> None:
         with self._lock:
             self._ensure_mutable_locked()
-            self.provider_health_state = str(snapshot.get("state", "healthy"))
+            transport = snapshot.get("transport_health", snapshot)
+            if not isinstance(transport, dict):
+                transport = snapshot
+            self.provider_health_state = str(transport.get("state", "healthy"))
             self.provider_active_tails = max(
                 0,
-                int(snapshot.get("active_tails", 0)),
+                int(transport.get("active_tails", 0)),
             )
             self.provider_peak_tails = max(
                 self.provider_peak_tails,
-                int(snapshot.get("peak_tails", 0)),
+                int(transport.get("peak_tails", 0)),
             )
             self.provider_circuit_trips = max(
                 self.provider_circuit_trips,
-                int(snapshot.get("circuit_trips", 0)),
+                int(transport.get("circuit_trips", 0)),
             )
             self.provider_fast_failures = max(
                 self.provider_fast_failures,
-                int(snapshot.get("fast_failures", 0)),
+                int(transport.get("fast_failures", 0)),
             )
             scheduler = snapshot.get("scheduler", {})
             if isinstance(scheduler, dict):
@@ -559,7 +602,11 @@ class CallBudget:
         return self.deadline.must_finalize()
 
     def ensure_stage(self, stage: str, *, optional: bool = False) -> None:
+        if self.cancellation_token.is_cancelled:
+            raise BudgetExceeded(f"{stage} cancelled")
         if not self.deadline.can_start_stage(optional=optional):
+            if self.deadline.hard_expired():
+                self.cancellation_token.cancel("case_deadline_expired")
             raise BudgetExceeded(f"{stage} deadline reached")
 
     def record_claims(self, count: int) -> None:
@@ -573,6 +620,7 @@ class CallBudget:
     def begin_tool_call(self, *, isolated: bool, default_timeout: float) -> float:
         with self._lock:
             self._ensure_mutable_locked()
+            self._ensure_active_locked()
             if self.used_tool_calls >= self.max_tool_calls:
                 raise BudgetExceeded("tool call budget exhausted")
             if isolated and self.used_isolated_tool_calls >= self.max_isolated_tool_calls:
@@ -718,6 +766,24 @@ class CallBudget:
                 ),
                 "provider_circuit_trips": self.provider_circuit_trips,
                 "provider_fast_failures": self.provider_fast_failures,
+                "transport_health": {
+                    "state": self.provider_health_state,
+                    "active_tails": self.provider_active_tails,
+                    "peak_tails": self.provider_peak_tails,
+                    "circuit_trips": self.provider_circuit_trips,
+                    "fast_failures": self.provider_fast_failures,
+                },
+                "protocol_health": {
+                    "state": self.protocol_health_state,
+                    "success_count": self.protocol_success_count,
+                    "recovery_count": self.protocol_recovery_count,
+                    "failure_count": self.protocol_failure_count,
+                },
+                "cognitive_health": {
+                    "state": self.cognitive_health_state,
+                    "rejection_count": self.cognitive_rejection_count,
+                },
+                "cancellation": self.cancellation_token.snapshot(),
                 "final_response_tokens": self.final_response_tokens,
                 "final_response_counting_mode": (
                     self.final_response_counting_mode
@@ -757,6 +823,10 @@ class CallBudget:
     def _ensure_mutable_locked(self) -> None:
         if self._frozen:
             raise RuntimeError("call budget is frozen")
+
+    def _ensure_active_locked(self) -> None:
+        if self.cancellation_token.is_cancelled:
+            raise BudgetExceeded("case cancellation requested")
 
 
 class SessionCallBudget(CallBudget):

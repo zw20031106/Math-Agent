@@ -49,7 +49,10 @@ def test_role_policy_separates_output_and_call_budgets(
     assert stage_output_cap(stage) == expected_tokens
     assert effective_output_tokens(stage, 65_536) == expected_tokens
     assert stage_call_timeout(stage) == expected_timeout
-    assert effective_call_timeout(stage, 900.0) == expected_timeout
+    assert effective_call_timeout(stage, 900.0) == min(
+        expected_timeout,
+        PROVIDER_CALL_TIMEOUT_SECONDS,
+    )
     assert effective_call_timeout(stage, 10.0) == 10.0
 
 

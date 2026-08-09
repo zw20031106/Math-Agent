@@ -8,14 +8,24 @@ from typing import Any
 from mathforge.agent_runtime.definitions import AgentRegistry
 
 
-TERMINAL_AGENT_STATES = frozenset({"completed", "abstained", "failed", "cancelled"})
+TERMINAL_AGENT_STATES = frozenset(
+    {
+        "completed",
+        "abstained",
+        "failed",
+        "cancelled",
+        "aborted",
+        "deadline_expired",
+    }
+)
+_INTERRUPTED_STATES = frozenset({"cancelled", "aborted", "deadline_expired"})
 _TRANSITIONS = {
-    "created": frozenset({"ready", "cancelled"}),
-    "ready": frozenset({"running", "completed", "abstained", "failed", "cancelled"}),
-    "running": frozenset({"ready", "waiting_message", "waiting_evidence", "waiting_resource", "completed", "abstained", "failed", "cancelled"}),
-    "waiting_message": frozenset({"ready", "running", "completed", "failed", "cancelled"}),
-    "waiting_evidence": frozenset({"ready", "running", "completed", "failed", "cancelled"}),
-    "waiting_resource": frozenset({"ready", "running", "completed", "failed", "cancelled"}),
+    "created": frozenset({"ready", *_INTERRUPTED_STATES}),
+    "ready": frozenset({"running", "completed", "abstained", "failed", *_INTERRUPTED_STATES}),
+    "running": frozenset({"ready", "waiting_message", "waiting_evidence", "waiting_resource", "completed", "abstained", "failed", *_INTERRUPTED_STATES}),
+    "waiting_message": frozenset({"ready", "running", "completed", "failed", *_INTERRUPTED_STATES}),
+    "waiting_evidence": frozenset({"ready", "running", "completed", "failed", *_INTERRUPTED_STATES}),
+    "waiting_resource": frozenset({"ready", "running", "completed", "failed", *_INTERRUPTED_STATES}),
 }
 
 
@@ -186,7 +196,12 @@ class AgentTaskRegistry:
     def transition(self, task_id: str, status: str) -> AgentTask:
         with self._lock:
             task = self._tasks[task_id]
-            allowed = {"created": {"ready"}, "ready": {"running", "completed", "failed", "cancelled"}, "running": {"ready", "completed", "failed", "cancelled"}}
+            interrupted = {"cancelled", "aborted", "deadline_expired"}
+            allowed = {
+                "created": {"ready", *interrupted},
+                "ready": {"running", "completed", "failed", *interrupted},
+                "running": {"ready", "completed", "failed", *interrupted},
+            }
             if status != task.status and status not in allowed.get(task.status, set()):
                 raise RuntimeError(f"invalid AgentTask transition {task.status}->{status}")
             task = replace(task, status=status)

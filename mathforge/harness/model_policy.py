@@ -112,10 +112,16 @@ def effective_call_timeout(
     stage: str,
     remaining_seconds: float,
     policy: dict[str, dict[str, int | float]] | None = None,
+    *,
+    client_timeout_seconds: float = PROVIDER_CALL_TIMEOUT_SECONDS,
 ) -> float:
     return max(
         0.0,
-        min(float(remaining_seconds), stage_call_timeout(stage, policy)),
+        min(
+            float(remaining_seconds),
+            stage_call_timeout(stage, policy),
+            max(0.0, float(client_timeout_seconds)),
+        ),
     )
 
 

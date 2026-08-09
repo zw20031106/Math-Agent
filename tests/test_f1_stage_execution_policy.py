@@ -90,7 +90,7 @@ def test_proof_turn_is_not_dispatched_below_its_safe_start_window():
         model_call_start_margin_seconds=0.0,
         clock=lambda: now[0],
     )
-    now[0] = 180.0
+    now[0] = 186.0
     client = _RecordingClient()
     provider = OfficialClientProvider(client, ModelCallGate(1))
 

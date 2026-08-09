@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Completed the 2026-08-09 remediation Phase 3 provider, timeout, health, and
+  cancellation repair. Effective call timeouts are now bounded by the
+  configured stage window, the 165-second injected-client delivery window,
+  and the remaining per-problem deadline, with all three values retained in
+  call telemetry. Worst-case RPM reservations reconcile downward only when
+  physical attempt counts are observable; connect/429/5xx remain the only
+  same-branch fast-retry classes and read timeouts do not retry blindly.
+  TransportHealth, ProtocolHealth, and CognitiveHealth are reported
+  separately, and only transport failures influence the provider circuit.
+  Added cooperative CancellationToken propagation from the wall-clock runner
+  through Harness, resource governance, Agent Runtime, and Provider so a
+  timed-out case cannot admit new tasks or model calls and late in-flight
+  results are discarded without cross-case health pollution. Runtime shutdown
+  now records unfinished work as cancelled, aborted, or deadline-expired
+  instead of rewriting it as completed.
 - Completed the 2026-08-09 remediation Phase 2 candidate-availability and
   gradeability repair. Every routed problem now starts with independent
   PrimarySolver and AlternativeSolver branches, missing backbone Candidates
