@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Completed the 2026-08-09 remediation Phase 0 evidence freeze. Added a
+  final-corpus aggregator that keeps resumed attempt diagnostics separate from
+  the authoritative one-record-per-case corpus, a causal failure taxonomy,
+  hashed local-88 and official-112 evidence, and redacted id=7/id=77
+  regressions. The baseline now automatically reproduces 49/88 correct, 38
+  `all_candidates_failed`, Router 0/88 accepted, 10/88 dual Candidate, 92/112
+  official invalid, and 444/657 truncated.
 - Completed true multi-Agent remediation Phase F7. Proof completion now has
   exactly four public states (`complete_hard`, `complete_audited`,
   `incomplete`, and `failed`); a repaired Candidate cannot complete without a

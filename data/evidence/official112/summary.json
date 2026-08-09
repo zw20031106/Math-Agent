@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "source_log": "eval_log_ae834323c623446684942d18fa140dfa.log",
+  "source_log_sha256": "63b09c6dd326e2610af5212a9f9bbd77648fcbda806dbdd4cb3093891adfe8b9",
+  "metrics": {
+    "case_count": 112,
+    "correct": 6,
+    "incorrect": 14,
+    "invalid": 92,
+    "request_count": 657,
+    "truncated_count": 444,
+    "valid_count": 20,
+    "invalid_rate": 0.8214285714285714,
+    "truncated_rate": 0.6757990867579908
+  }
+}

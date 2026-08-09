@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "precedence": [
+    "runner",
+    "admission",
+    "transport",
+    "protocol",
+    "candidate",
+    "verification",
+    "output"
+  ],
+  "families": {
+    "runner": {
+      "definition": "The official runner or process failed before a model result was usable.",
+      "codes": ["runner_error", "case_wall_clock_timeout", "cancelled"]
+    },
+    "admission": {
+      "definition": "A call was not dispatched because a deterministic resource gate denied it.",
+      "codes": ["budget_exhausted", "deadline_window_unavailable", "rate_limit_unavailable"]
+    },
+    "transport": {
+      "definition": "A dispatched model request failed to return assistant content.",
+      "codes": ["network_connect_failure", "network_read_timeout", "http_429", "http_5xx", "empty_response"]
+    },
+    "protocol": {
+      "definition": "Assistant content arrived but could not satisfy or recover the stage protocol.",
+      "codes": ["json_invalid", "schema_invalid", "agent_turn_payload_invalid", "router_schema_invalid", "response_truncated"]
+    },
+    "candidate": {
+      "definition": "A protocol-usable response did not yield a viable Candidate.",
+      "codes": ["candidate_schema_invalid", "candidate_contract_rejected", "all_candidates_failed"]
+    },
+    "verification": {
+      "definition": "A viable Candidate failed evidence, proof, review, repair, or audit closure.",
+      "codes": ["hard_evidence_failed", "proof_incomplete", "review_rejected", "repair_rollback", "audit_incomplete"]
+    },
+    "output": {
+      "definition": "A selected mathematical object failed final formatting or scorer compatibility.",
+      "codes": ["final_response_empty", "final_answer_contract_invalid", "scorer_roundtrip_invalid", "official_invalid"]
+    }
+  },
+  "classification_rule": "Assign the earliest causal family in precedence order; retain later effects as secondary codes."
+}

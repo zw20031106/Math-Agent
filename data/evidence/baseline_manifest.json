@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "phase": "0809-phase0",
+  "repository_parent_commit": "179fda00293e00ec812ccf4578f3fcd871819c95",
+  "evidence_run_identity": {
+    "commit": "a47dcff9c3b8c6b15b7ead0a3c5305ef6b09c23d",
+    "dirty": true,
+    "source_sha256": "cc4692de215f0a91ba1db9bdf182a828c7c7876c2aac17b7aa6ceeb2495e06f7"
+  },
+  "config_sha256": "22cad6043818868780124fda74e7f9c04e472c5185add7720ca3bf2f4456b9ac",
+  "prompt_sha256": "df74aa274030cc2b1c81d8b70100a88bf06e82ef833c5b69c663e34d93ea658a",
+  "skill_sha256": "ed0ecc8d62111094ca3d98a9dc41717f45bbb5ad408db475517242f946aa89ed",
+  "failure_taxonomy_sha256": "87931185a1b01ca991db6f3653ca2ac74b76632bb834e90d47c018724bc8d720",
+  "metric_authority": {
+    "attempt_metrics": "diagnostic_only",
+    "corpus_metrics": "one_final_record_per_case"
+  },
+  "required_reproduction": {
+    "local_correct": [
+      49,
+      88
+    ],
+    "local_all_candidates_failed": 38,
+    "local_router_llm_accepted": [
+      0,
+      88
+    ],
+    "local_dual_candidate": [
+      10,
+      88
+    ],
+    "official_invalid": [
+      92,
+      112
+    ],
+    "official_truncated": [
+      444,
+      657
+    ]
+  },
+  "artifacts": [
+    {
+      "path": "data/evidence/failure_taxonomy.json",
+      "bytes": 1897,
+      "sha256": "87931185a1b01ca991db6f3653ca2ac74b76632bb834e90d47c018724bc8d720"
+    },
+    {
+      "path": "data/evidence/local88/final_corpus.json",
+      "bytes": 48264,
+      "sha256": "c8c8e8026d8ac9fe63a28ab051e1086897c29c4af260969a3ef3faa8db567600"
+    },
+    {
+      "path": "data/evidence/local88/regression_cases.json",
+      "bytes": 2039,
+      "sha256": "ba17c871129c6e48d987fca8c113974659da95e34fa8fa523cd8867f19a42ebc"
+    },
+    {
+      "path": "data/evidence/official112/eval_log_ae834323c623446684942d18fa140dfa.log",
+      "bytes": 25836,
+      "sha256": "63b09c6dd326e2610af5212a9f9bbd77648fcbda806dbdd4cb3093891adfe8b9"
+    },
+    {
+      "path": "data/evidence/official112/summary.json",
+      "bytes": 461,
+      "sha256": "c3a58a1f9adc54bf873c2e3cfb3f3a9a14aa72c28649fc1c4c05f75117b6c78e"
+    }
+  ],
+  "privacy": {
+    "contains_credentials": false,
+    "contains_absolute_paths": false,
+    "contains_private_reasoning_transcripts": false
+  }
+}

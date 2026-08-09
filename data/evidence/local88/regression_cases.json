@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "id": 7,
+      "status": "failed",
+      "final_response": "The mathematical model call was unavailable, so a verified solution could not be produced for this problem.",
+      "correct": false,
+      "error_code": "all_candidates_failed",
+      "router_source": "router_rule_fallback",
+      "router_fallback_reason": "router_schema_invalid",
+      "candidates": [
+        {
+          "candidate_id": "primary-1",
+          "role": "PrimarySolver",
+          "status": "failed",
+          "rejection_category": "network_connect_failure"
+        },
+        {
+          "candidate_id": "alternative-1",
+          "role": "AlternativeSolver",
+          "status": "failed",
+          "rejection_category": "network_connect_failure"
+        },
+        {
+          "candidate_id": "alternative-2",
+          "role": "AlternativeSolver",
+          "status": "failed",
+          "rejection_category": "empty_response"
+        }
+      ],
+      "output_sha256": "e80c6ec0f468fbfa8937fd56878b454cd1e7a0f44bcfc4e7182f82c45912db30",
+      "privacy": "redacted_public_diagnostics_only"
+    },
+    {
+      "id": 77,
+      "status": "success",
+      "final_response": "Final answer: $F = \\frac{25}{6} \\approx 4.1667$",
+      "correct": false,
+      "error_code": "degraded_candidate_salvage",
+      "router_source": "router_rule_fallback",
+      "router_fallback_reason": "router_schema_invalid",
+      "candidates": [
+        {
+          "candidate_id": "alternative-1",
+          "role": "AlternativeSolver",
+          "status": "selected",
+          "rejection_category": ""
+        },
+        {
+          "candidate_id": "primary-1",
+          "role": "PrimarySolver",
+          "status": "failed",
+          "rejection_category": "agent_turn_payload_invalid"
+        }
+      ],
+      "output_sha256": "fbcae014adb4c4b22bfc6d7dc8398aaf73be55e155244a1d61261b91fedf3268",
+      "privacy": "redacted_public_diagnostics_only"
+    }
+  ]
+}
