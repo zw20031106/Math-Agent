@@ -433,7 +433,7 @@ def derive_route_policy(risk_level: str, problem_type: str) -> RoutePolicy:
     if risk_level not in {"low", "medium", "high"}:
         raise ValueError(f"unsupported risk level: {risk_level}")
     return RoutePolicy(
-        candidate_count={"low": 1, "medium": 2, "high": 3}[risk_level],
+        candidate_count={"low": 2, "medium": 2, "high": 3}[risk_level],
         max_reasoning_rounds=3 if risk_level == "high" else 1,
         use_rag=risk_level in {"medium", "high"},
         use_lemma_loop=(

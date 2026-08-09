@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Completed the 2026-08-09 remediation Phase 2 candidate-availability and
+  gradeability repair. Every routed problem now starts with independent
+  PrimarySolver and AlternativeSolver branches, missing backbone Candidates
+  receive bounded compact replacement attempts, damaged AgentTurn envelopes
+  can recover answer-only Candidates with explicit assurance degradation, and
+  an emergency direct PrimarySolver path prevents ordinary branch failures
+  from collapsing into zero Candidates. Final responses now pass a production
+  formatter-to-scorer round trip, including text and choice wrapper
+  normalization, before release. These recovery paths reuse the adaptive
+  problem budget and do not introduce a six-call ceiling or raise the global
+  call/token limits.
 - Completed the 2026-08-09 remediation Phase 1 prompt and structured-output
   protocol repair. Production prompts now compile from one contract-backed
   source of truth, RouterPlanner emits only minimal routing intent while the

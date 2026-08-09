@@ -624,6 +624,13 @@ def _unwrap_answer(value: str) -> str:
     boxed = re.fullmatch(r"\\boxed\{(.*)\}", normalized, re.DOTALL)
     if boxed:
         normalized = boxed.group(1).strip()
+    text_wrapper = re.fullmatch(
+        r"\\(?:text|mathrm)\s*\{(.*)\}",
+        normalized,
+        re.DOTALL,
+    )
+    if text_wrapper:
+        normalized = text_wrapper.group(1).strip()
     return normalized.rstrip(".。")
 
 

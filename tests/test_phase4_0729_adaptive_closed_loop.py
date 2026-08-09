@@ -73,8 +73,9 @@ def test_low_risk_complete_primary_suppresses_no_benefit_alternatives():
     )
 
     assert decision.requested_candidates == 3
-    assert decision.admitted_candidates == 1
+    assert decision.admitted_candidates == 2
     assert "low_risk_primary_complete" in decision.reason_codes
+    assert "independent_alternative_backbone" in decision.reason_codes
 
 
 def test_recovered_or_conflicting_primary_admits_at_most_two_alternatives():

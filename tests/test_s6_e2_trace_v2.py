@@ -112,7 +112,7 @@ def test_each_candidate_start_has_one_safe_terminal_event():
         in {"candidate_generated", "candidate_generation_failed"}
     ]
 
-    assert starts == ["primary-1", "alternative-1"]
+    assert starts == ["primary-1", "alternative-1", "replacement-1"]
     assert all(
         sum(event["candidate_id"] == candidate_id for event in terminals) == 1
         for candidate_id in starts

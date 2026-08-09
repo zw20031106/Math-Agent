@@ -421,10 +421,14 @@ class SessionAgentRuntime:
         agent_action_protocol: bool = False,
         response_truncated: bool = False,
         truncation_reason: str = "",
+        recovery_metadata: dict[str, str] | None = None,
     ) -> dict[str, str]:
         with self._lock:
             context = self._turn_contexts[turn_id]
-            digest = sha256(response.encode("utf-8")).hexdigest()
+            recovery = dict(recovery_metadata or {})
+            digest = recovery.get("response_sha256") or sha256(
+                response.encode("utf-8")
+            ).hexdigest()
             if agent_action_protocol:
                 self._agent_action_turns = True
                 try:
@@ -491,15 +495,24 @@ class SessionAgentRuntime:
                         ),
                         "response_sha256": digest,
                         "parse_tier": (
-                            parsed.parse_tier if parsed is not None else "host_wrapped"
+                            recovery.get("parse_tier")
+                            or (
+                                parsed.parse_tier
+                                if parsed is not None
+                                else "host_wrapped"
+                            )
                         ),
                         "recovery_reason": (
-                            parsed.recovery_reason if parsed is not None else ""
+                            recovery.get("recovery_reason")
+                            or (parsed.recovery_reason if parsed is not None else "")
                         ),
                         "assurance_degradation": (
-                            parsed.assurance_degradation
-                            if parsed is not None
-                            else "none"
+                            recovery.get("assurance_degradation")
+                            or (
+                                parsed.assurance_degradation
+                                if parsed is not None
+                                else "none"
+                            )
                         ),
                     },
                 },

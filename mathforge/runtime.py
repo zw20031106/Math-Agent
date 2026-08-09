@@ -89,6 +89,7 @@ from mathforge.output.loop_health import (
     build_closed_loop_health,
     minimal_closed_loop_health,
 )
+from mathforge.output.gradeability import enforce_scorer_round_trip
 from mathforge.parsing.problem_parser import ProblemParser
 from mathforge.parsing.solution_parser import SolutionParser
 from mathforge.tools.executor import ToolExecutor
@@ -664,6 +665,11 @@ class MathForgeHarness:
             )
             if not self._config.enable_alternatives:
                 session.route_plan = replace(session.route_plan, candidate_count=1)
+            else:
+                session.route_plan = replace(
+                    session.route_plan,
+                    candidate_count=max(2, session.route_plan.candidate_count),
+                )
             if not self._config.enable_lemma_loop:
                 session.route_plan = replace(session.route_plan, use_lemma_loop=False)
             if not self._config.enable_rag:
@@ -977,6 +983,13 @@ class MathForgeHarness:
                      ),
                     primary_candidate=primary_seed,
                  )
+            fanout = self._restore_candidate_availability(
+                session,
+                trace,
+                fanout,
+                role_skill_contexts=role_skill_contexts,
+                solver_contexts=solver_contexts,
+            )
             primary_candidate = next(
                 (
                     item
@@ -2804,7 +2817,11 @@ class MathForgeHarness:
                         else "soft_deadline"
                     ),
                 )
-            final_response, final_count = self._validated_final_response(
+            (
+                final_response,
+                final_count,
+                scorer_round_trip,
+            ) = self._validated_final_response(
                 final_response,
                 exact_answer=candidate.final_answer,
                 answer_type=candidate.answer_type,
@@ -2842,6 +2859,7 @@ class MathForgeHarness:
                 answer_validation={
                     "status": "pass" if not validation_errors else "warning",
                     "codes": list(validation_errors),
+                    "scorer_round_trip": scorer_round_trip.to_dict(),
                 },
             )
             session.budget.record_final_response(
@@ -3786,6 +3804,144 @@ class MathForgeHarness:
             },
         )
 
+    def _restore_candidate_availability(
+        self,
+        session,
+        trace: TraceBuilder,
+        fanout: FanoutResult,
+        *,
+        role_skill_contexts: dict[str, str],
+        solver_contexts: dict[str, Any],
+    ) -> FanoutResult:
+        backbone = 2 if self._config.enable_alternatives else 1
+        target = max(
+            1,
+            min(backbone, int(session.route_plan.candidate_count)),
+        )
+        used_methods = {
+            candidate.planned_method_family or candidate.method
+            for candidate in fanout.candidates
+        }
+        methods = list(
+            dict.fromkeys(
+                [
+                    *session.route_plan.method_families,
+                    *method_families_for(
+                        "general-math",
+                        session.problem_ir.problem_type,
+                    ),
+                ]
+            )
+        )
+        missing_slots = max(0, target - len(fanout.candidates))
+        for replacement_index in range(1, missing_slots + 1):
+            if not session.budget.deadline.can_start_model_call():
+                break
+            has_primary = any(
+                candidate.role == "PrimarySolver"
+                for candidate in fanout.candidates
+            )
+            solver = (
+                AlternativeSolver(self._contracts)
+                if has_primary or self._config.enable_alternatives
+                else PrimarySolver(self._contracts)
+            )
+            method = next(
+                (item for item in methods if item not in used_methods),
+                methods[0] if methods else "direct-deduction",
+            )
+            candidate_id = f"replacement-{replacement_index}"
+            request = SolverRequest(
+                candidate_id,
+                session.problem_ir,
+                session.route_plan,
+                role_skill_contexts.get(solver.role, ""),
+                method,
+                tuple(sorted(used_methods)),
+                solver_contexts.get(solver.role),
+            )
+            trace.add(
+                "candidate_generation_started",
+                candidate_id=candidate_id,
+                role=solver.role,
+                planned_method_family=method,
+                turn_kind="replacement_compact_candidate",
+                replacement=True,
+            )
+            try:
+                candidate = self._solver_executor.execute(
+                    solver,
+                    request,
+                    session.budget,
+                    temperature=0.0,
+                    max_tokens=self._config.primary_max_tokens,
+                    optional=False,
+                    compact=True,
+                )
+            except Exception as error:
+                reason = self._reasoning_failure_code(error)
+                fanout.failures.append(BranchFailure(candidate_id, reason))
+                trace.add(
+                    "candidate_generation_failed",
+                    **candidate_failure_trace_payload(candidate_id, reason),
+                    role=solver.role,
+                    replacement=True,
+                )
+                if isinstance(error, BudgetExceeded):
+                    break
+            else:
+                fanout.candidates.append(candidate)
+                used_methods.add(method)
+                trace.add(
+                    "candidate_generated",
+                    **candidate_trace_payload(candidate),
+                    replacement=True,
+                )
+
+        if fanout.candidates or not session.budget.deadline.can_start_model_call():
+            return fanout
+
+        emergency_id = "emergency-direct-1"
+        method = methods[0] if methods else "direct-deduction"
+        trace.add(
+            "candidate_generation_started",
+            candidate_id=emergency_id,
+            role="PrimarySolver",
+            planned_method_family=method,
+            turn_kind="emergency_direct_answer",
+            emergency=True,
+        )
+        try:
+            candidate = self._solver_executor.execute_emergency_answer(
+                PrimarySolver(self._contracts),
+                SolverRequest(
+                    emergency_id,
+                    session.problem_ir,
+                    session.route_plan,
+                    "",
+                    method,
+                ),
+                session.budget,
+                max_tokens=self._config.primary_max_tokens,
+            )
+        except Exception as error:
+            reason = self._reasoning_failure_code(error)
+            fanout.failures.append(BranchFailure(emergency_id, reason))
+            trace.add(
+                "candidate_generation_failed",
+                **candidate_failure_trace_payload(emergency_id, reason),
+                role="PrimarySolver",
+                emergency=True,
+            )
+        else:
+            fanout.candidates.append(candidate)
+            trace.add(
+                "candidate_generated",
+                **candidate_trace_payload(candidate),
+                emergency=True,
+            )
+        return fanout
+
     def _run_solver_peer_review_phase(
         self,
         session,
@@ -4460,14 +4616,31 @@ class MathForgeHarness:
             answer_type=answer_type,
             response_mode=response_mode,
         )
+        text, round_trip = enforce_scorer_round_trip(
+            text,
+            exact_answer=exact_answer,
+            answer_type=answer_type,
+            response_mode=response_mode,
+        )
         try:
-            return text, self._context_budget.ensure_text_within_window(text)
+            return (
+                text,
+                self._context_budget.ensure_text_within_window(text),
+                round_trip,
+            )
         except ContextBudgetExceeded:
             blocks = text.split("\n\n")
             deduplicated = "\n\n".join(dict.fromkeys(blocks))
+            deduplicated, round_trip = enforce_scorer_round_trip(
+                deduplicated,
+                exact_answer=exact_answer,
+                answer_type=answer_type,
+                response_mode=response_mode,
+            )
             return (
                 deduplicated,
                 self._context_budget.ensure_text_within_window(deduplicated),
+                round_trip,
             )
 
     @staticmethod

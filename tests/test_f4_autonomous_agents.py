@@ -492,12 +492,24 @@ def test_both_solver_agents_may_abstain_without_invalid_public_output():
         "PrimarySolver": 1,
         "AlternativeSolver": 1,
     }
-    assert [item["role"] for item in client.calls] == [
+    assert [item["role"] for item in client.calls[:4]] == [
         "RouterPlanner",
         "LemmaCurator",
         "PrimarySolver",
         "AlternativeSolver",
     ]
+    assert [item["role"] for item in client.calls[4:]] == [
+        "AlternativeSolver",
+        "AlternativeSolver",
+        "PrimarySolver",
+    ]
+    recovery_starts = [
+        item
+        for item in result["trace"]
+        if item["event"] == "candidate_generation_started"
+        and (item.get("replacement") or item.get("emergency"))
+    ]
+    assert len(recovery_starts) == 3
 
 
 def test_length_candidate_with_complete_payload_is_salvaged_without_recall():

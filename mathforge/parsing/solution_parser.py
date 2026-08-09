@@ -76,6 +76,62 @@ _ALLOWED_CHECK_TYPES = frozenset(
 
 
 class SolutionParser:
+    def recover_answer_candidate(
+        self,
+        response: str,
+        *,
+        candidate_id: str,
+        role: str,
+        answer_type: str,
+        planned_method_family: str = "",
+    ) -> CandidateSolution | None:
+        """Recover only a complete public answer from a damaged envelope."""
+
+        text = str(response).strip()
+        fields = StructuredOutputRecoveryLayer().salvage_top_level_fields(
+            text,
+            ("final_answer", "answer", "conclusion", "check"),
+        )
+        answer = next(
+            (
+                fields[name].strip()
+                for name in ("final_answer", "answer", "conclusion")
+                if isinstance(fields.get(name), str) and fields[name].strip()
+            ),
+            "",
+        )
+        if not answer:
+            extracted = self._extract_answer(text)
+            if extracted != text:
+                answer = extracted
+        if not answer or len(answer) > 4096:
+            return None
+        check = fields.get("check")
+        public_check = (
+            check.strip()
+            if isinstance(check, str) and check.strip()
+            else f"Recovered public answer: {answer}"
+        )
+        candidate = CandidateSolution(
+            candidate_id=candidate_id,
+            role=role,
+            method=planned_method_family or "direct-deduction",
+            final_answer=answer,
+            answer_type=answer_type,
+            public_solution_steps=[public_check],
+            solution_text=public_check,
+            parse_status="semantic_answer_salvage",
+            planned_method_family=planned_method_family,
+            contract_deviations=[
+                "protocol_envelope_unusable",
+                "answer_only_salvage",
+            ],
+            source=self._candidate_source(candidate_id, role),
+            parse_tier=CandidateParseTier.ANSWER_RECOVERED.value,
+        )
+        candidate.validate()
+        return candidate
+
     def parse(
         self,
         response: str,

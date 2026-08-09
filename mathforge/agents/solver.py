@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 import json
 
 from mathforge.agent_runtime.protocol import (
+    AgentTurnPayload,
     AgentTurnPayloadParser,
     ParsedAgentTurn,
+    PROTOCOL_SCHEMA_VERSION,
 )
 from mathforge.agents.prompt_compiler import PromptCompilation, PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
@@ -123,6 +126,18 @@ class PrimarySolver:
             autonomous=autonomous,
         )
 
+    def compile_emergency_prompt(
+        self,
+        request: SolverRequest,
+    ) -> PromptCompilation:
+        return self._compiler.compile_emergency_answer(
+            problem=request.problem,
+            user_content=(
+                f"Problem:\n{request.problem.normalized_problem}\n\n"
+                "Return the exact answer and one compact mathematical check."
+            ),
+        )
+
 
 class AlternativeSolver:
     role = "AlternativeSolver"
@@ -234,6 +249,7 @@ class SolverExecutor:
         temperature: float,
         max_tokens: int,
         optional: bool = False,
+        compact: bool = False,
     ) -> CandidateSolution:
         if request.candidate_id.startswith("lemma-round-"):
             stage = "lemma"
@@ -241,7 +257,7 @@ class SolverExecutor:
             stage = "primary"
         else:
             stage = "alternative"
-        compilation = solver.compile_prompt(request)
+        compilation = solver.compile_prompt(request, compact=compact)
         messages = compilation.messages
         max_attempts = (
             _PRIMARY_CONTRACT_ATTEMPTS
@@ -389,6 +405,63 @@ class SolverExecutor:
             if last_transport_error is not None:
                 raise last_transport_error
             raise RuntimeError("unreachable candidate response state")
+        candidate.planned_method_family = request.method_family
+        candidate.validate()
+        return candidate
+
+    def execute_emergency_answer(
+        self,
+        solver: PrimarySolver,
+        request: SolverRequest,
+        budget: CallBudget,
+        *,
+        max_tokens: int,
+    ) -> CandidateSolution:
+        compilation = solver.compile_emergency_prompt(request)
+        budget.consume(
+            stage="primary",
+            optional=False,
+            action_category="candidate_completion",
+        )
+        budget.record_prompt_chars(
+            sum(len(message["content"]) for message in compilation.messages)
+        )
+        response = self._provider.chat(
+            messages=compilation.messages,
+            temperature=0.0,
+            max_tokens=PromptCompiler.bounded_output_tokens(
+                max_tokens,
+                compilation.max_output_tokens,
+            ),
+            budget=budget,
+            stage="primary",
+            turn_kind="solver_compact_synthesis",
+            agent_id=f"{solver.role}:{request.candidate_id}",
+        )
+        candidate = self._parser.parse(
+            response,
+            candidate_id=request.candidate_id,
+            role=solver.role,
+            answer_type=request.problem.answer_type,
+            planned_method_family=request.method_family,
+        )
+        validation_code, rejected = candidate_response_validation(candidate)
+        budget.record_model_protocol_telemetry(
+            getattr(response, "model_call_index", None),
+            candidate.parse_status,
+            assurance_degradation=(
+                "none" if candidate.parse_tier == "strict" else "medium"
+            ),
+            candidate_parse_tier=candidate.parse_tier,
+        )
+        budget.record_model_response_validation(
+            getattr(response, "model_call_index", None),
+            validation_code,
+            rejected=rejected,
+        )
+        if rejected:
+            raise ModelResponseError(validation_code)
+        candidate.parse_status = f"{candidate.parse_status}:emergency_direct"
         candidate.planned_method_family = request.method_family
         candidate.validate()
         return candidate
@@ -590,13 +663,72 @@ class SolverExecutor:
             agent_action_protocol=True,
             input_artifact_ids=input_artifact_ids,
         )
-        parsed = self._parse_agent_turn(
-            response,
-            budget,
-            allowed_actions=("publish_candidate", "abstain"),
-            truncated=_response_was_truncated(response),
-            truncation_reason=_response_truncation_reason(response),
-        )
+        try:
+            parsed = self._parse_agent_turn(
+                response,
+                budget,
+                allowed_actions=("publish_candidate", "abstain"),
+                truncated=_response_was_truncated(response),
+                truncation_reason=_response_truncation_reason(response),
+            )
+        except ModelResponseError:
+            candidate = self._parser.recover_answer_candidate(
+                response,
+                candidate_id=request.candidate_id,
+                role=solver.role,
+                answer_type=request.problem.answer_type,
+                planned_method_family=request.method_family,
+            )
+            if candidate is None:
+                raise
+            payload = AgentTurnPayload(
+                protocol_version=PROTOCOL_SCHEMA_VERSION,
+                task_result_type="CandidateArtifact",
+                action="publish_candidate",
+                public_state_delta={},
+                result_payload={
+                    "method": candidate.method,
+                    "final_answer": candidate.final_answer,
+                    "public_solution_steps": list(
+                        candidate.public_solution_steps
+                    ),
+                    "claims": [],
+                    "solution_text": candidate.solution_text,
+                    "assumptions": [],
+                    "theorems": [],
+                    "unresolved_obligations": [],
+                },
+                outbound_intents=(),
+                progress_summary="Recovered a public answer from a damaged envelope.",
+                stop_reason="answer_salvaged",
+            )
+            parsed = ParsedAgentTurn(
+                payload=payload,
+                response_sha256=sha256(str(response).encode("utf-8")).hexdigest(),
+                partial=_response_was_truncated(response),
+                truncation_reason=_response_truncation_reason(response),
+                parse_tier="semantic_answer_salvage",
+                recovery_reason="complete_answer_from_damaged_agent_turn",
+                assurance_degradation="high",
+            )
+            budget.record_model_protocol_telemetry(
+                getattr(response, "model_call_index", None),
+                parsed.parse_tier,
+                parsed.recovery_reason,
+                parsed.assurance_degradation,
+                candidate_parse_tier=candidate.parse_tier,
+            )
+            budget.record_model_response_validation(
+                getattr(response, "model_call_index", None),
+                "answer_recovered_candidate",
+                rejected=False,
+            )
+            self._complete_recovered_agent_turn(
+                response,
+                budget,
+                parsed,
+            )
+            return AutonomousSolverTurn(parsed=parsed, candidate=candidate)
         if parsed.payload.action == "abstain":
             if parsed.payload.task_result_type != "CheckpointArtifact":
                 self._fail_agent_turn(response, budget, "agent_turn_result_type_invalid")
@@ -705,6 +837,34 @@ class SolverExecutor:
         except Exception as error:
             runtime.fail_model_turn(turn_id, "agent_protocol_publish_failed")
             raise ModelResponseError("agent_protocol_publish_failed") from error
+        call_index = getattr(response, "model_call_index", None)
+        if call_index is not None:
+            budget.record_model_call_lineage(call_index, lineage)
+
+    @staticmethod
+    def _complete_recovered_agent_turn(
+        response: str,
+        budget: CallBudget,
+        parsed: ParsedAgentTurn,
+    ) -> None:
+        runtime = budget.agent_runtime
+        turn_id = str(getattr(response, "protocol_turn_id", ""))
+        if runtime is None or not turn_id:
+            return
+        synthetic = json.dumps(parsed.payload.to_dict(), ensure_ascii=False)
+        lineage = runtime.complete_model_turn(
+            turn_id,
+            synthetic,
+            agent_action_protocol=True,
+            response_truncated=parsed.partial,
+            truncation_reason=parsed.truncation_reason,
+            recovery_metadata={
+                "response_sha256": parsed.response_sha256,
+                "parse_tier": parsed.parse_tier,
+                "recovery_reason": parsed.recovery_reason,
+                "assurance_degradation": parsed.assurance_degradation,
+            },
+        )
         call_index = getattr(response, "model_call_index", None)
         if call_index is not None:
             budget.record_model_call_lineage(call_index, lineage)

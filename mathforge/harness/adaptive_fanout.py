@@ -45,8 +45,13 @@ class AdaptiveFanoutPolicy:
             and not primary.contract_deviations
             and not posterior_signals
         ):
-            reasons.append("low_risk_primary_complete")
-            admitted_alternatives = 0
+            reasons.extend(
+                [
+                    "low_risk_primary_complete",
+                    "independent_alternative_backbone",
+                ]
+            )
+            admitted_alternatives = min(1, requested_alternatives)
         else:
             if posterior_signals:
                 reasons.append("primary_posterior_escalation")

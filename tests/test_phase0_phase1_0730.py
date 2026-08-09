@@ -256,7 +256,7 @@ def test_phase1_primary_two_failures_use_standby_and_return_answer():
     )
 
 
-def test_phase1_healthy_low_risk_primary_does_not_run_standby():
+def test_low_risk_primary_still_runs_independent_alternative_backbone():
     client = _ValidClient()
     harness = MathForgeHarness(client, _minimal_config(max_model_calls=3))
 
@@ -265,13 +265,20 @@ def test_phase1_healthy_low_risk_primary_does_not_run_standby():
         {"idx": "phase1-low-risk"},
     )
 
-    assert client.calls == 1
+    transport = next(
+        event
+        for event in result["trace"]
+        if event["event"] == "model_transport_completed"
+    )
+    roles = [item["role"] for item in transport["calls"]]
+    assert roles.count("PrimarySolver") == 1
+    assert roles.count("AlternativeSolver") == 1
     decision = next(
         event
         for event in result["trace"]
         if event.get("event") == "adaptive_fanout_decided"
     )
-    assert "low_risk_primary_complete" in decision["reason_codes"]
+    assert decision["admitted_candidates"] == 2
 
 
 def test_phase1_downstream_failure_salvages_last_safe_candidate(monkeypatch):

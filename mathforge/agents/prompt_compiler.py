@@ -452,6 +452,32 @@ class PromptCompiler:
             ),
         )
 
+    def compile_emergency_answer(
+        self,
+        *,
+        problem: ProblemIR,
+        user_content: str,
+    ) -> PromptCompilation:
+        instructions = "\n".join(
+            (
+                _candidate_profile_protocol("simple"),
+                self._response_mode_protocol(problem),
+                "This is the final gradeability fallback. Solve the problem "
+                "directly and return the exact scorer-facing answer plus one "
+                "short public check. Do not emit an AgentTurn envelope.",
+            )
+        )
+        return self._compile(
+            "primary_solver",
+            "emergency_direct",
+            user_content,
+            instructions,
+            2048,
+            output_schema_fields=tuple(
+                sorted(MODEL_CANDIDATE_PROFILE_FIELDS["simple"])
+            ),
+        )
+
     def compile_solver_collaboration(
         self,
         role_directory: str,
