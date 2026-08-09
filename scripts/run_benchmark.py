@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from llm_client import InternChatClient  # noqa: E402
-from mathforge.agents.registry import PromptContractLoader, SkillRegistry  # noqa: E402
+from mathforge.agents.registry import PromptContractLoader  # noqa: E402
 from mathforge.benchmark import (  # noqa: E402
     benchmark_record_to_dict,
     load_jsonl,
@@ -28,6 +28,7 @@ from mathforge.model_identity import (  # noqa: E402
 from mathforge.provenance import build_run_provenance  # noqa: E402
 from mathforge.retrieval.retriever import Retriever  # noqa: E402
 from mathforge.runtime import MathForgeHarness  # noqa: E402
+from mathforge.skills.registry import SkillRegistry  # noqa: E402
 from mathforge.tools.registry import ToolRegistry  # noqa: E402
 
 

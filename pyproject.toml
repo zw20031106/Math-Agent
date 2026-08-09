@@ -28,6 +28,13 @@ py-modules = ["user_agent"]
 [tool.setuptools.packages.find]
 include = ["mathforge*"]
 
+[tool.setuptools.package-data]
+mathforge = [
+    "skills/packages/**/SKILL.md",
+    "skills/packages/**/references/*",
+    "skills/packages/**/assets/*",
+]
+
 [tool.setuptools.data-files]
 "share/mathforge/config" = ["config/*.json"]
 "share/mathforge/config/ablation" = ["config/ablation/*.json"]

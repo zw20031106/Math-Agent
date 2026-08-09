@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
-from mathforge.agents.registry import PromptContractLoader, SkillRegistry
+from mathforge.agents.registry import PromptContractLoader
 from mathforge.config import HarnessConfig
 from mathforge.harness.context_budget import tokenizer_provenance
 from mathforge.harness.fingerprints import semantic_fingerprint
@@ -16,6 +16,7 @@ from mathforge.model_identity import ModelIdentity, unreported_model_identity
 from mathforge.retrieval.retriever import Retriever
 from mathforge.retrieval.schemas import RAG_SCHEMA_VERSION
 from mathforge.resources import resource_path
+from mathforge.skills.registry import SkillRegistry
 from mathforge.tools.registry import ToolRegistry
 
 

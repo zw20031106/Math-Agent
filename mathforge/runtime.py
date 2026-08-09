@@ -5,8 +5,9 @@ from dataclasses import dataclass, replace
 import json
 from time import perf_counter
 
-from mathforge.agents.registry import PromptContractLoader, SkillRegistry
-from mathforge.agents.skill_selector import DynamicSkillSelector
+from mathforge.agents.registry import PromptContractLoader
+from mathforge.skills.registry import SkillRegistry
+from mathforge.skills.selector import DynamicSkillSelector
 from mathforge.agents.router_planner import RouterPlanner, method_families_for
 from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.harness.adaptive_fanout import AdaptiveFanoutPolicy

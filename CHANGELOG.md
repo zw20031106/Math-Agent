@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Completed the 2026-08-09 remediation Phase 4 standard Skill Package and
+  Math Skill V3 work. Added a read-only V3 package schema and loader alongside
+  the validated V2 compatibility adapter, 51 high-frequency method packages,
+  pattern-aware Top-K selection, tuple-safe subject matching, role-specific
+  progressive disclosure, bounded references/assets, and ToolRegistry-only
+  capability authorization. Added explicit selection precision/recall, token
+  increment, and Skill ON/OFF contract-canary metrics; these results are
+  labeled synthetic and do not claim real-set accuracy improvement.
 - Completed the 2026-08-09 remediation Phase 3 provider, timeout, health, and
   cancellation repair. Effective call timeouts are now bounded by the
   configured stage window, the 165-second injected-client delivery window,
