@@ -722,6 +722,9 @@ class MathForgeHarness:
                     if session.route_plan.method_families
                     else ""
                 ),
+                session_id=session.session_id,
+                branch_id="branch-host",
+                agent_id="Host",
             )
             pre_allocation_budget = session.budget.snapshot()
             autonomous_agents_enabled = bool(
@@ -3444,6 +3447,9 @@ class MathForgeHarness:
                     state=ReasoningState.initialize(
                         session.problem_ir,
                         strategy=spec.method_family,
+                        session_id=session.session_id,
+                        branch_id=f"branch-{candidate_id}",
+                        agent_id=spec.agent_role,
                     ),
                     plan_id=effective.plan_id,
                     plan_version=effective.version,
@@ -5014,6 +5020,9 @@ class MathForgeHarness:
             state=ReasoningState.initialize(
                 session.problem_ir,
                 strategy=method,
+                session_id=session.session_id,
+                branch_id=f"branch-{candidate_id}",
+                agent_id=role,
             ),
         )
         prior_plan_id = session.agent_plan.plan_id

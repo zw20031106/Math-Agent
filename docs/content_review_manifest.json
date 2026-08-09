@@ -71,10 +71,10 @@
         "mathforge/runtime.py"
       ],
       "expected_count": 8,
-      "version": "effective-agent-governance-1-phase5",
-      "engineering_reviewer": "codex-0809-phase5-governance-audit",
+        "version": "effective-agent-governance-1-phase5-phase6-state-identity",
+        "engineering_reviewer": "codex-0809-phase6-reasoning-state-audit",
       "review_date": "2026-08-09",
-      "sha256": "b4dc6f301132c11dacfd1aadf0d1f3d5f472f7c7e1fe92a63806f91752e9af5d"
+        "sha256": "0bdefae7d449ecb325492a44aed7a2cefa057ce3087f1bff552bd66a492a3138"
     },
     {
       "id": "prompt-contracts",
@@ -113,17 +113,17 @@
       "version": "model-candidate-boundary-3.1-0809-answer-recovery",
       "engineering_reviewer": "codex-0809-phase2-availability-audit",
       "review_date": "2026-08-09",
-      "sha256": "481ba326ba2fe41349f230ab086ceb9f69f45e3b1d6c858282407c06d1f43029"
+      "sha256": "98e7accbdcf8d25cd58e2d697155e4602e4d4c20c2f8659e596264dd92d7ba92"
     },
     {
       "id": "reasoning-state",
       "kind": "file",
       "path": "mathforge/harness/reasoning_state.py",
       "expected_count": 1,
-      "version": "reasoning-state-1.2-f7-autonomous-only",
-      "engineering_reviewer": "codex-phase-f7-runtime-proof-audit",
-      "review_date": "2026-08-08",
-      "sha256": "88e509f3e2defe9c0fa80aec5b709d4ac80b6e86bf68f264add76aab498fe4ce"
+      "version": "reasoning-state-2.0-phase6",
+      "engineering_reviewer": "codex-0809-phase6-reasoning-state-audit",
+      "review_date": "2026-08-09",
+      "sha256": "a712403ea4b2115233f3adb32cfea1fd041d4ce6a724ab028dc8968fb637e43d"
     },
     {
       "id": "proof-obligations",
@@ -207,7 +207,7 @@
       "version": "verification-closure-15-phase3",
       "engineering_reviewer": "codex-0809-phase3-provider-audit",
         "review_date": "2026-08-09",
-      "sha256": "e3853bd29c3ab9629cf6ad0917d7d114d813e751cde7268a611eafde68c52dd0"
+      "sha256": "a3b81e361c2c2924522efe0b3b0ecd8edeac973068c9dada3a09e8b201a3c718"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -237,7 +237,7 @@
       "version": "phase-f6-agent-protocol-6-phase3",
       "engineering_reviewer": "codex-0809-phase3-provider-audit",
       "review_date": "2026-08-09",
-      "sha256": "9399c327058f37bb801f498e455668318d2ac638982284b9c7d92eb3387cd786"
+      "sha256": "9ecc74dd2b3999f888eee356b2128d5d6f7a4c295b6400af8282189a05cda07f"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -260,7 +260,7 @@
       "version": "phase-f7-runtime-5-phase3",
       "engineering_reviewer": "codex-0809-phase3-provider-audit",
       "review_date": "2026-08-09",
-      "sha256": "cd7df514a5039aa827cfe0d55b1fc5226dc64e67c366e99f7b919b7bfa09d34a"
+      "sha256": "79fc02df0511b641e1827b3de3133bd9a6f15586a8e79fb0394dc5ef621050cb"
     },
     {
       "id": "reviewed-method-cards",
@@ -331,7 +331,7 @@
       "version": "provider-controls-1-phase3",
       "engineering_reviewer": "codex-0809-phase3-provider-audit",
       "review_date": "2026-08-09",
-      "sha256": "2e6080eb6e17f09549aa3db47fd1494843bd9925ba68198857d680819e6e27c1"
+      "sha256": "dfdfde0b2d08e6e55211016ae11927b2d2c2836c5249794fba27a470c2b8fa9f"
     },
     {
       "id": "phase7-live-calibration",

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Completed the 2026-08-09 remediation Phase 6 ReasoningState V2 work.
+  Claims now carry lifecycle status, monotonically increasing versions,
+  supersession links, evidence references, provenance, and branch identity.
+  Tool evidence transitions active claims to supported, verified, or
+  challenged states and contributes to information gain. Semantic GC keeps
+  only the branch-local active frontier, compacts stale rounds and tool
+  payloads, and the compressor emits an active-frontier projection with
+  dependency and evidence invariants. Twenty-four-round synthetic stress
+  coverage verifies bounded context growth and supersession behavior.
 - Completed the 2026-08-09 remediation Phase 5 Router/Host/Agent governance
   work. RouterIntent and the compatibility AuthoritativePlan now pass through
   explicit HostAdmittedPlan and EffectiveExecutionPlan layers, with fanout,

@@ -11,7 +11,7 @@ from mathforge.harness.context_budget import InternS2TokenCounter
 from mathforge.harness.schemas import CandidateSolution, ProblemIR
 
 
-REASONING_STATE_SCHEMA_VERSION = "1.1"
+REASONING_STATE_SCHEMA_VERSION = "2.0"
 REASONING_STATE_MAX_TOKENS = 32768
 _PUBLIC_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$")
 _PRIVATE_KEYS = re.compile(
@@ -20,7 +20,25 @@ _PRIVATE_KEYS = re.compile(
     re.I,
 )
 _SUBGOAL_STATUSES = frozenset({"open", "active", "closed", "blocked"})
-_CLAIM_STATUSES = frozenset({"pending", "accepted", "rejected"})
+_CLAIM_STATUSES = frozenset(
+    {
+        # ``pending``/``accepted`` are retained as wire-compatible aliases
+        # for the pre-V2 progress protocol.  New lifecycle transitions use
+        # the more explicit V2 names.
+        "pending",
+        "accepted",
+        "proposed",
+        "supported",
+        "verified",
+        "challenged",
+        "rejected",
+        "superseded",
+        "archived",
+    }
+)
+_ACTIVE_CLAIM_STATUSES = frozenset(
+    {"pending", "accepted", "proposed", "supported", "verified", "challenged"}
+)
 _PROGRESS_MODES = frozenset({"explore", "continue"})
 
 
@@ -249,6 +267,11 @@ class PublicClaim:
     status: str = "pending"
     importance: str = "supporting"
     check_type: str = "reasoning"
+    version: int = 1
+    supersedes: tuple[str, ...] = ()
+    evidence_refs: tuple[str, ...] = ()
+    provenance: tuple[str, ...] = ()
+    branch_id: str = "branch-main"
 
     def validate(self) -> None:
         _public_id(self.claim_id, "PublicClaim.claim_id")
@@ -256,15 +279,22 @@ class PublicClaim:
             raise ReasoningStateValidationError("PublicClaim statement is empty")
         if self.status not in _CLAIM_STATUSES:
             raise ReasoningStateValidationError("PublicClaim status is invalid")
+        if type(self.version) is not int or self.version < 1:
+            raise ReasoningStateValidationError("PublicClaim version is invalid")
         if self.importance not in {"critical", "supporting"}:
             raise ReasoningStateValidationError(
                 "PublicClaim importance is invalid"
             )
         _public_id(self.check_type, "PublicClaim.check_type")
+        _public_id(self.branch_id, "PublicClaim.branch_id")
         for dependency in self.depends_on:
             _public_id(dependency, "PublicClaim.depends_on")
         for subgoal_id in self.subgoal_ids:
             _public_id(subgoal_id, "PublicClaim.subgoal_ids")
+        for claim_id in self.supersedes:
+            _public_id(claim_id, "PublicClaim.supersedes")
+        for reference in (*self.evidence_refs, *self.provenance):
+            _public_id(reference, "PublicClaim evidence/provenance reference")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -275,6 +305,11 @@ class PublicClaim:
             "status": self.status,
             "importance": self.importance,
             "check_type": self.check_type,
+            "version": self.version,
+            "supersedes": list(self.supersedes),
+            "evidence_refs": list(self.evidence_refs),
+            "provenance": list(self.provenance),
+            "branch_id": self.branch_id,
         }
 
     @classmethod
@@ -283,7 +318,7 @@ class PublicClaim:
             raise ReasoningStateValidationError(
                 "PublicClaim payload must be an object"
             )
-        expected = {
+        legacy_expected = {
             "claim_id",
             "statement",
             "depends_on",
@@ -292,7 +327,16 @@ class PublicClaim:
             "importance",
             "check_type",
         }
-        if set(payload) != expected:
+        v2_fields = {
+            "version",
+            "supersedes",
+            "evidence_refs",
+            "provenance",
+            "branch_id",
+        }
+        if not legacy_expected <= set(payload) or bool(
+            set(payload) - legacy_expected - v2_fields
+        ):
             raise ReasoningStateValidationError(
                 "PublicClaim fields do not match the public schema"
             )
@@ -310,6 +354,20 @@ class PublicClaim:
             status=str(payload["status"]).strip(),
             importance=str(payload["importance"]).strip(),
             check_type=str(payload["check_type"]).strip(),
+            version=int(payload.get("version", 1)),
+            supersedes=_string_list(
+                payload.get("supersedes", []), "PublicClaim.supersedes"
+            ),
+            evidence_refs=_string_list(
+                payload.get("evidence_refs", []), "PublicClaim.evidence_refs"
+            ),
+            provenance=_string_list(
+                payload.get("provenance", []), "PublicClaim.provenance"
+            ),
+            branch_id=_public_id(
+                payload.get("branch_id", "branch-main"),
+                "PublicClaim.branch_id",
+            ),
         )
         claim.validate()
         return claim
@@ -319,12 +377,20 @@ class PublicClaim:
 class ClaimLedger:
     items: tuple[PublicClaim, ...] = ()
 
-    def validate(self, subgoal_ids: set[str]) -> None:
+    def validate(
+        self,
+        subgoal_ids: set[str],
+        branch_id: str | None = None,
+    ) -> None:
         by_id = {item.claim_id: item for item in self.items}
         if len(by_id) != len(self.items):
             raise ReasoningStateValidationError("duplicate PublicClaim id")
         for item in self.items:
             item.validate()
+            if branch_id is not None and item.branch_id != branch_id:
+                raise ReasoningStateValidationError(
+                    "PublicClaim branch does not match ReasoningState branch"
+                )
             unknown_claims = set(item.depends_on) - set(by_id)
             if unknown_claims:
                 raise ReasoningStateValidationError(
@@ -657,6 +723,9 @@ class ReasoningState:
     strategy: str = ""
     rounds: tuple[RoundDelta, ...] = ()
     schema_version: str = REASONING_STATE_SCHEMA_VERSION
+    session_id: str = "session-default"
+    branch_id: str = "branch-main"
+    agent_id: str = "reasoning"
 
     @classmethod
     def initialize(
@@ -664,21 +733,40 @@ class ReasoningState:
         problem: ProblemIR,
         *,
         strategy: str = "",
+        session_id: str = "session-default",
+        branch_id: str = "branch-main",
+        agent_id: str = "reasoning",
     ) -> "ReasoningState":
         frame = ProblemFrame.from_problem_ir(problem)
+        session_id = _public_id(session_id, "ReasoningState.session_id")
+        branch_id = _public_id(branch_id, "ReasoningState.branch_id")
+        agent_id = _public_id(agent_id, "ReasoningState.agent_id")
         digest = sha256(
             json.dumps(
-                frame.to_dict(),
+                {
+                    "frame": frame.to_dict(),
+                    "session_id": session_id,
+                    "branch_id": branch_id,
+                    "agent_id": agent_id,
+                },
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()[:20]
         state = cls(
-            state_id=f"rs-{digest}",
+            # The digest binds the full identifiers; bounded fragments keep
+            # the public ID within the protocol's 96-character limit.
+            state_id=(
+                f"rs-{digest}-{session_id[:20]}-{branch_id[:20]}-"
+                f"{agent_id[:20]}"
+            ),
             version=1,
             problem_frame=frame,
             strategy=strategy,
+            session_id=session_id,
+            branch_id=branch_id,
+            agent_id=agent_id,
         )
         state.validate()
         return state
@@ -689,6 +777,9 @@ class ReasoningState:
                 "ReasoningState schema version is invalid"
             )
         _public_id(self.state_id, "ReasoningState.state_id")
+        _public_id(self.session_id, "ReasoningState.session_id")
+        _public_id(self.branch_id, "ReasoningState.branch_id")
+        _public_id(self.agent_id, "ReasoningState.agent_id")
         if type(self.version) is not int or self.version != len(self.rounds) + 1:
             raise ReasoningStateValidationError(
                 "ReasoningState version does not match round history"
@@ -698,7 +789,7 @@ class ReasoningState:
         subgoal_ids = {
             item.subgoal_id for item in self.subgoal_ledger.items
         }
-        self.claim_ledger.validate(subgoal_ids)
+        self.claim_ledger.validate(subgoal_ids, self.branch_id)
         claim_ids = {item.claim_id for item in self.claim_ledger.items}
         obligation_ids: set[str] = set()
         for item in self.open_obligations:
@@ -751,6 +842,9 @@ class ReasoningState:
             "contradictions": list(self.contradictions),
             "strategy": self.strategy,
             "rounds": [item.to_dict() for item in self.rounds],
+            "session_id": self.session_id,
+            "branch_id": self.branch_id,
+            "agent_id": self.agent_id,
         }
 
     @classmethod
@@ -759,7 +853,7 @@ class ReasoningState:
             raise ReasoningStateValidationError(
                 "ReasoningState payload must be an object"
             )
-        expected = {
+        legacy_expected = {
             "schema_version",
             "state_id",
             "version",
@@ -773,10 +867,43 @@ class ReasoningState:
             "strategy",
             "rounds",
         }
-        if set(payload) != expected:
+        v2_expected = legacy_expected | {"session_id", "branch_id", "agent_id"}
+        if set(payload) not in (legacy_expected, v2_expected):
             raise ReasoningStateValidationError(
                 "ReasoningState fields do not match the public schema"
             )
+        schema_version = str(payload["schema_version"])
+        if schema_version not in {"1.1", cls.SCHEMA_VERSION}:
+            raise ReasoningStateValidationError(
+                "ReasoningState schema version is invalid"
+            )
+        session_id = _public_id(
+            payload.get("session_id", "session-default"),
+            "ReasoningState.session_id",
+        )
+        branch_id = _public_id(
+            payload.get("branch_id", "branch-main"),
+            "ReasoningState.branch_id",
+        )
+        agent_id = _public_id(
+            payload.get("agent_id", "reasoning"),
+            "ReasoningState.agent_id",
+        )
+        raw_claim_ledger = ClaimLedger.from_dict(payload["claim_ledger"])
+        if schema_version == cls.SCHEMA_VERSION and any(
+            item.branch_id != branch_id for item in raw_claim_ledger.items
+        ):
+            raise ReasoningStateValidationError(
+                "ReasoningState claim branch does not match state branch"
+            )
+        claim_ledger = ClaimLedger(
+            tuple(
+                item
+                if item.branch_id == branch_id
+                else replace(item, branch_id=branch_id)
+                for item in raw_claim_ledger.items
+            )
+        )
         state = cls(
             state_id=_public_id(payload["state_id"], "ReasoningState.state_id"),
             version=int(payload["version"]),
@@ -784,7 +911,7 @@ class ReasoningState:
             subgoal_ledger=SubgoalLedger.from_dict(
                 payload["subgoal_ledger"]
             ),
-            claim_ledger=ClaimLedger.from_dict(payload["claim_ledger"]),
+            claim_ledger=claim_ledger,
             open_obligations=tuple(
                 OpenObligation.from_dict(item) for item in _object_list(
                     payload["open_obligations"],
@@ -811,7 +938,10 @@ class ReasoningState:
                     payload["rounds"], "ReasoningState.rounds"
                 )
             ),
-            schema_version=str(payload["schema_version"]),
+            schema_version=cls.SCHEMA_VERSION,
+            session_id=session_id,
+            branch_id=branch_id,
+            agent_id=agent_id,
         )
         state.validate()
         return state
@@ -826,6 +956,9 @@ class ReasoningState:
                 "evidence_ids": list(self.evidence_refs),
                 "strategy_changed": False,
                 "failure_codes": [],
+                "claim_status_transitions": [],
+                "updated_claim_ids": [],
+                "information_gain": 0,
             }
         existing_ids = {item.work_item_id for item in self.tool_results}
         new_results = [
@@ -833,11 +966,20 @@ class ReasoningState:
         ]
         for item in new_results:
             item.validate()
+            if item.claim_id not in {
+                claim.claim_id for claim in self.claim_ledger.items
+            }:
+                raise ReasoningStateValidationError(
+                    "PublicToolResult references an unknown Claim"
+                )
+        existing_claims = {
+            item.claim_id: item for item in self.claim_ledger.items
+        }
         evidence_refs = tuple(
             dict.fromkeys(
                 (
                     *self.evidence_refs,
-                    *(f"tool-{item.work_item_id}" for item in new_results),
+                    *(_tool_evidence_id(item.work_item_id) for item in new_results),
                 )
             )
         )
@@ -854,6 +996,43 @@ class ReasoningState:
             if switch is not None
             else self.strategy
         )
+        claim_status_transitions: list[dict[str, str]] = []
+        updated_claim_ids: list[str] = []
+        for item in new_results:
+            prior = existing_claims[item.claim_id]
+            if prior.status in {"rejected", "superseded", "archived"}:
+                target_status = prior.status
+            elif item.status == "pass":
+                target_status = (
+                    "verified"
+                    if item.strength in {"medium", "hard"}
+                    else "supported"
+                )
+            else:
+                target_status = "challenged"
+            evidence_id = _tool_evidence_id(item.work_item_id)
+            updated = replace(
+                prior,
+                status=target_status,
+                version=prior.version + 1,
+                evidence_refs=tuple(
+                    dict.fromkeys((*prior.evidence_refs, evidence_id))
+                ),
+                provenance=tuple(
+                    dict.fromkeys((*prior.provenance, evidence_id))
+                ),
+            )
+            existing_claims[item.claim_id] = updated
+            updated_claim_ids.append(item.claim_id)
+            if prior.status != target_status:
+                claim_status_transitions.append(
+                    {
+                        "claim_id": item.claim_id,
+                        "from": prior.status,
+                        "to": target_status,
+                        "evidence_id": evidence_id,
+                    }
+                )
         contradictions = tuple(
             dict.fromkeys(
                 (
@@ -870,14 +1049,23 @@ class ReasoningState:
             self,
             evidence_refs=evidence_refs,
             tool_results=(*self.tool_results, *new_results),
+            claim_ledger=ClaimLedger(tuple(existing_claims.values())),
             contradictions=contradictions,
             strategy=strategy,
         )
         state.validate()
+        information_gain = (
+            len(new_results)
+            + len(claim_status_transitions)
+            + int(strategy != self.strategy)
+        )
         return state, {
             "work_item_ids": [item.work_item_id for item in new_results],
             "evidence_ids": list(evidence_refs),
             "strategy_changed": strategy != self.strategy,
+            "claim_status_transitions": claim_status_transitions,
+            "updated_claim_ids": updated_claim_ids,
+            "information_gain": information_gain,
             "failure_codes": [
                 item.reason_code
                 for item in new_results
@@ -929,16 +1117,120 @@ class ReasoningState:
         existing_claims = {
             item.claim_id: item for item in self.claim_ledger.items
         }
+        raw_claims = tuple(
+            replace(claim, branch_id=self.branch_id)
+            if claim.branch_id == "branch-main"
+            else claim
+            for claim in delta.claims
+        )
+        for claim in raw_claims:
+            if claim.branch_id != self.branch_id:
+                raise ReasoningStateValidationError(
+                    "PublicClaim branch does not match ReasoningState branch"
+                )
+        if len({claim.claim_id for claim in raw_claims}) != len(raw_claims):
+            raise ReasoningStateValidationError(
+                "duplicate PublicClaim id in RoundDelta"
+            )
+        raw_claim_ids = {claim.claim_id for claim in raw_claims}
         added_claims: list[str] = []
-        for claim in delta.claims:
+        revised_claims: list[str] = []
+        superseded_claims: list[str] = []
+        semantic_repetitions: list[str] = []
+        claim_status_changes: list[dict[str, str]] = []
+        committed_claims_list: list[PublicClaim] = []
+        pending_supersessions: list[tuple[PublicClaim, tuple[str, ...]]] = []
+        for claim in raw_claims:
+            unknown_supersedes = set(claim.supersedes) - (
+                set(existing_claims) | raw_claim_ids
+            )
+            if unknown_supersedes:
+                raise ReasoningStateValidationError(
+                    "PublicClaim supersedes an unknown Claim: "
+                    f"{sorted(unknown_supersedes)}"
+                )
             prior_claim = existing_claims.get(claim.claim_id)
             if prior_claim is None:
+                is_semantic_repetition = not claim.supersedes and any(
+                    _claim_semantic_key(claim) == _claim_semantic_key(item)
+                    and item.status in _ACTIVE_CLAIM_STATUSES
+                    for item in self.claim_ledger.items
+                )
+                if is_semantic_repetition:
+                    claim = replace(
+                        claim,
+                        status="archived",
+                        provenance=tuple(
+                            dict.fromkeys(
+                                (*claim.provenance, "semantic-repetition")
+                            )
+                        ),
+                    )
                 existing_claims[claim.claim_id] = claim
                 added_claims.append(claim.claim_id)
-            elif prior_claim != claim:
+                pending_supersessions.append((claim, claim.supersedes))
+                committed_claims_list.append(claim)
+                if is_semantic_repetition:
+                    semantic_repetitions.append(claim.claim_id)
+                continue
+            if prior_claim == claim:
+                committed_claims_list.append(claim)
+                continue
+            same_core = _claim_content_key(prior_claim) == _claim_content_key(
+                claim
+            )
+            is_versioned_revision = (
+                claim.version > prior_claim.version
+                and prior_claim.claim_id in claim.supersedes
+            )
+            is_lifecycle_transition = same_core and (
+                claim.status != prior_claim.status
+                or claim.evidence_refs != prior_claim.evidence_refs
+                or claim.provenance != prior_claim.provenance
+            )
+            if not is_versioned_revision and not is_lifecycle_transition:
                 raise ReasoningStateValidationError(
-                    "PublicClaim content cannot be rewritten across rounds"
+                    "PublicClaim content cannot be rewritten without a version"
                 )
+            if claim.version <= prior_claim.version:
+                claim = replace(claim, version=prior_claim.version + 1)
+            existing_claims[claim.claim_id] = claim
+            revised_claims.append(claim.claim_id)
+            pending_supersessions.append((claim, claim.supersedes))
+            committed_claims_list.append(claim)
+            if prior_claim.status != claim.status:
+                claim_status_changes.append(
+                    {
+                        "claim_id": claim.claim_id,
+                        "from": prior_claim.status,
+                        "to": claim.status,
+                    }
+                )
+
+        for claim, supersedes in pending_supersessions:
+            for superseded_id in supersedes:
+                if superseded_id == claim.claim_id:
+                    # Same-id version revisions are represented by the new
+                    # version in the ledger; the prior version remains in the
+                    # round audit trail.
+                    continue
+                prior = existing_claims.get(superseded_id)
+                if prior is None:
+                    raise ReasoningStateValidationError(
+                        "PublicClaim supersedes an unknown Claim"
+                    )
+                if prior.status != "superseded":
+                    existing_claims[superseded_id] = replace(
+                        prior,
+                        status="superseded",
+                        version=prior.version + 1,
+                        provenance=tuple(
+                            dict.fromkeys(
+                                (*prior.provenance, f"superseded-by-{claim.claim_id}")
+                            )
+                        ),
+                    )
+                    superseded_claims.append(superseded_id)
 
         existing_obligations = {
             item.obligation_id: item for item in self.open_obligations
@@ -968,18 +1260,38 @@ class ReasoningState:
             for item in delta.contradictions
             if item not in self.contradictions
         ]
-        information_gain = sum(
-            (
-                len(added_subgoals),
-                len(updated_subgoals),
-                len(added_claims),
-                len(opened_obligations),
-                len(closed_obligations),
-                len(new_contradictions),
-            )
+        new_claim_evidence = {
+            evidence_id
+            for claim in committed_claims_list
+            for evidence_id in claim.evidence_refs
+        }
+        new_evidence_refs = new_claim_evidence - set(self.evidence_refs)
+        evidence_refs = tuple(
+            dict.fromkeys((*self.evidence_refs, *sorted(new_evidence_refs)))
         )
+        meaningful_claims = (
+            len(added_claims)
+            - len(semantic_repetitions)
+            + len(revised_claims)
+            + len(superseded_claims)
+            + len(claim_status_changes)
+        )
+        information_gain = max(
+            0,
+            meaningful_claims
+            + len(updated_subgoals)
+            + len(closed_subgoals)
+            + len(opened_obligations)
+            + (2 * len(closed_obligations))
+            + len(new_contradictions)
+            + len(new_evidence_refs)
+            + int((delta.strategy or self.strategy) != self.strategy)
+            - len(semantic_repetitions),
+        )
+        committed_claims = tuple(committed_claims_list)
         committed_delta = replace(
             delta,
+            claims=committed_claims,
             information_gain=information_gain,
         )
         state = replace(
@@ -990,6 +1302,7 @@ class ReasoningState:
             ),
             claim_ledger=ClaimLedger(tuple(existing_claims.values())),
             open_obligations=tuple(existing_obligations.values()),
+            evidence_refs=evidence_refs,
             contradictions=tuple(
                 dict.fromkeys((*self.contradictions, *new_contradictions))
             ),
@@ -1006,6 +1319,10 @@ class ReasoningState:
             "updated_subgoal_ids": updated_subgoals,
             "closed_subgoal_ids": closed_subgoals,
             "added_claim_ids": added_claims,
+            "revised_claim_ids": revised_claims,
+            "superseded_claim_ids": list(dict.fromkeys(superseded_claims)),
+            "claim_status_changes": claim_status_changes,
+            "semantic_repetition_ids": semantic_repetitions,
             "claim_dependency_refs": {
                 item.claim_id: list(item.depends_on)
                 for item in committed_delta.claims
@@ -1014,11 +1331,186 @@ class ReasoningState:
             "opened_obligation_ids": opened_obligations,
             "closed_obligation_ids": closed_obligations,
             "information_gain": information_gain,
+            "information_gain_components": {
+                "meaningful_claims": meaningful_claims,
+                "new_evidence": len(new_evidence_refs),
+                "closed_obligations": len(closed_obligations),
+                "resolved_subgoals": len(closed_subgoals),
+                "new_contradictions": len(new_contradictions),
+                "semantic_repetitions": len(semantic_repetitions),
+            },
             "next_step": committed_delta.next_step,
             "stop_reason": committed_delta.stop_reason,
             "degraded_reason": "",
         }
         return state, summary
+
+    def active_frontier(self) -> tuple[str, ...]:
+        """Return the branch-local claims required for the next decision.
+
+        Pending/proposed/supporting/challenged claims are live work. Critical
+        verified claims and dependencies of open obligations remain live as
+        well; low-level verified facts without a live consumer are eligible
+        for semantic GC.
+        """
+        by_id = {item.claim_id: item for item in self.claim_ledger.items}
+        keep: set[str] = {
+            item.claim_id
+            for item in self.claim_ledger.items
+            if item.status in {"pending", "accepted", "proposed", "supported", "challenged"}
+            or (item.status == "verified" and item.importance == "critical")
+        }
+        for obligation in self.open_obligations:
+            keep.update(obligation.depends_on)
+        if not keep and self.claim_ledger.items:
+            keep.add(self.claim_ledger.items[-1].claim_id)
+        changed = True
+        while changed:
+            changed = False
+            for claim_id in tuple(keep):
+                claim = by_id.get(claim_id)
+                if claim is None:
+                    continue
+                before = len(keep)
+                keep.update(claim.depends_on)
+                changed = changed or len(keep) != before
+        return tuple(
+            claim.claim_id
+            for claim in self.claim_ledger.items
+            if claim.claim_id in keep
+        )
+
+    def semantic_gc(self) -> tuple["ReasoningState", dict[str, Any]]:
+        """Compact historical state while preserving the active frontier."""
+        active_ids = set(self.active_frontier())
+        retained_claims = tuple(
+            claim
+            for claim in self.claim_ledger.items
+            if claim.claim_id in active_ids
+        )
+        removed_claim_ids = tuple(
+            claim.claim_id
+            for claim in self.claim_ledger.items
+            if claim.claim_id not in active_ids
+        )
+        retained_ids = {claim.claim_id for claim in retained_claims}
+        by_subgoal_id = {
+            item.subgoal_id: item for item in self.subgoal_ledger.items
+        }
+        retained_subgoal_ids: set[str] = {
+            item.subgoal_id
+            for item in self.subgoal_ledger.items
+            if item.status != "closed"
+        }
+        retained_subgoal_ids.update(
+            subgoal_id
+            for claim in retained_claims
+            for subgoal_id in claim.subgoal_ids
+        )
+        changed = True
+        while changed:
+            changed = False
+            for subgoal_id in tuple(retained_subgoal_ids):
+                subgoal = by_subgoal_id.get(subgoal_id)
+                if subgoal is None:
+                    continue
+                before = len(retained_subgoal_ids)
+                retained_subgoal_ids.update(subgoal.depends_on)
+                changed = changed or len(retained_subgoal_ids) != before
+        retained_subgoals = tuple(
+            item
+            for item in self.subgoal_ledger.items
+            if item.subgoal_id in retained_subgoal_ids
+        )
+        obligations = tuple(
+            obligation
+            for obligation in self.open_obligations
+            if set(obligation.depends_on) <= retained_ids
+        )
+
+        # Keep only the latest public result per active claim and reduce a
+        # historical payload to its digest plus conclusion.  This retains
+        # evidence identity without replaying stale tool output.
+        latest_results: list[PublicToolResult] = []
+        seen_claims: set[str] = set()
+        for result in reversed(self.tool_results):
+            if result.claim_id not in retained_ids or result.claim_id in seen_claims:
+                continue
+            seen_claims.add(result.claim_id)
+            latest_results.append(
+                replace(
+                    result,
+                    public_payload={
+                        "summary": result.summary,
+                        "result_digest": result.result_digest,
+                    },
+                )
+            )
+        latest_results.reverse()
+        kept_evidence = tuple(
+            dict.fromkeys(
+                (
+                    *(
+                        reference
+                        for claim in retained_claims
+                        for reference in claim.evidence_refs
+                    ),
+                    *(
+                        _tool_evidence_id(result.work_item_id)
+                        for result in latest_results
+                    ),
+                )
+            )
+        )
+
+        # Preserve round numbering/version while replacing old verbose
+        # deltas with bounded audit summaries.  The last two rounds remain
+        # fully inspectable for the next model call.
+        compacted_rounds = tuple(
+            item
+            if index > max(0, len(self.rounds) - 2)
+            else replace(
+                item,
+                public_summary=(
+                    f"gc-round-{item.round_index}: "
+                    f"{item.public_summary[:512]}"
+                ),
+                subgoals=(),
+                claims=(),
+                open_obligations=(),
+                contradictions=item.contradictions[-4:],
+            )
+            for index, item in enumerate(self.rounds, start=1)
+        )
+        state = replace(
+            self,
+            subgoal_ledger=SubgoalLedger(retained_subgoals),
+            claim_ledger=ClaimLedger(retained_claims),
+            open_obligations=obligations,
+            evidence_refs=kept_evidence,
+            tool_results=tuple(latest_results),
+            rounds=compacted_rounds,
+        )
+        state.validate()
+        summary = {
+            "active_claim_ids": list(active_ids),
+            "removed_claim_ids": list(removed_claim_ids),
+            "removed_subgoal_ids": [
+                item.subgoal_id
+                for item in self.subgoal_ledger.items
+                if item.subgoal_id not in retained_subgoal_ids
+            ],
+            "retained_tool_result_ids": [
+                item.work_item_id for item in latest_results
+            ],
+            "compacted_round_count": max(0, len(self.rounds) - 2),
+            "context_growth_bound": "active_frontier",
+        }
+        return state, summary
+
+    def gc_active_frontier(self) -> tuple["ReasoningState", dict[str, Any]]:
+        """Compatibility alias for callers that name the operation explicitly."""
+        return self.semantic_gc()
 
     def apply_candidate(
         self,
@@ -1079,6 +1571,7 @@ class CompressedReasoningState:
     compressed: bool
     omitted_rounds: int
     semantic_invariants: tuple[str, ...]
+    active_claim_ids: tuple[str, ...] = ()
 
 
 class ReasoningStateCompressor:
@@ -1109,8 +1602,12 @@ class ReasoningStateCompressor:
             "target",
             "subgoal_dependencies",
             "claim_dependencies",
+            "claim_lifecycle",
             "open_obligations",
             "tool_results",
+            "evidence_transitions",
+            "branch_identity",
+            "active_frontier",
         )
         if full_count.tokens <= max_tokens:
             return CompressedReasoningState(
@@ -1120,19 +1617,26 @@ class ReasoningStateCompressor:
                 False,
                 0,
                 invariants,
+                state.active_frontier(),
             )
 
+        compact_state, gc_summary = state.semantic_gc()
+        compact_payload = compact_state.to_dict()
+        active_claim_ids = tuple(gc_summary["active_claim_ids"])
         payload = {
-            **full_payload,
+            **compact_payload,
             "rounds": [
                 item.to_summary_dict()
-                for item in state.rounds[-2:]
+                for item in compact_state.rounds[-2:]
             ],
-            "contradictions": list(state.contradictions[-16:]),
+            "contradictions": list(compact_state.contradictions[-16:]),
             "compression": {
-                "kind": "public_state_projection",
+                "kind": "active_frontier",
                 "omitted_rounds": max(0, len(state.rounds) - 2),
                 "preserved_invariants": list(invariants),
+                "active_claim_ids": list(active_claim_ids),
+                "removed_claim_ids": list(gc_summary["removed_claim_ids"]),
+                "removed_subgoal_ids": list(gc_summary["removed_subgoal_ids"]),
             },
         }
         text, count = self._serialize_and_count(payload)
@@ -1141,10 +1645,17 @@ class ReasoningStateCompressor:
             payload["compression"]["omitted_rounds"] = len(state.rounds)
             text, count = self._serialize_and_count(payload)
         if count.tokens > max_tokens:
+            payload["contradictions"] = []
+            text, count = self._serialize_and_count(payload)
+        if count.tokens > max_tokens:
             raise ContextBudgetExceeded(
                 "ReasoningState core exceeds its token budget"
             )
-        _validate_projection_invariants(state, payload)
+        _validate_projection_invariants(
+            state,
+            payload,
+            active_claim_ids=set(active_claim_ids),
+        )
         return CompressedReasoningState(
             text,
             count.tokens,
@@ -1152,6 +1663,7 @@ class ReasoningStateCompressor:
             True,
             int(payload["compression"]["omitted_rounds"]),
             invariants,
+            active_claim_ids,
         )
 
     def _serialize_and_count(
@@ -1188,6 +1700,7 @@ class ProgressDeltaParser:
         *,
         round_index: int,
         mode: str,
+        branch_id: str = "branch-main",
     ) -> RoundDelta:
         if mode not in _PROGRESS_MODES:
             raise ReasoningStateValidationError(
@@ -1210,7 +1723,10 @@ class ProgressDeltaParser:
         raw_claims = _object_list(
             payload["claims"], "ProgressDelta.claims"
         )
-        claims = tuple(_progress_claim(item) for item in raw_claims)
+        branch_id = _public_id(branch_id, "ProgressDelta.branch_id")
+        claims = tuple(
+            _progress_claim(item, branch_id=branch_id) for item in raw_claims
+        )
         obligations = tuple(
             OpenObligation.from_dict(item)
             for item in _object_list(
@@ -1241,21 +1757,32 @@ class ProgressDeltaParser:
         return delta
 
 
-def _progress_claim(payload: dict[str, Any]) -> PublicClaim:
-    if not isinstance(payload, dict) or set(payload) not in ({
+def _progress_claim(
+    payload: dict[str, Any],
+    *,
+    branch_id: str = "branch-main",
+) -> PublicClaim:
+    base_fields = {
         "claim_id",
         "statement",
         "depends_on",
         "subgoal_ids",
         "importance",
+    }
+    optional_fields = {
         "check_type",
-    }, {
-        "claim_id",
-        "statement",
-        "depends_on",
-        "subgoal_ids",
-        "importance",
-    }):
+        "status",
+        "version",
+        "supersedes",
+        "evidence_refs",
+        "provenance",
+        "branch_id",
+    }
+    if (
+        not isinstance(payload, dict)
+        or not base_fields <= set(payload)
+        or bool(set(payload) - base_fields - optional_fields)
+    ):
         raise ReasoningStateValidationError(
             "ProgressDelta Claim fields are invalid"
         )
@@ -1270,9 +1797,23 @@ def _progress_claim(payload: dict[str, Any]) -> PublicClaim:
         subgoal_ids=_string_list(
             payload["subgoal_ids"], "ProgressDelta.subgoal_ids"
         ),
-        status="pending",
+        status=str(payload.get("status", "pending")).strip(),
         importance=str(payload["importance"]).strip(),
         check_type=str(payload.get("check_type", "reasoning")).strip(),
+        version=int(payload.get("version", 1)),
+        supersedes=_string_list(
+            payload.get("supersedes", []), "ProgressDelta.supersedes"
+        ),
+        evidence_refs=_string_list(
+            payload.get("evidence_refs", []), "ProgressDelta.evidence_refs"
+        ),
+        provenance=_string_list(
+            payload.get("provenance", []), "ProgressDelta.provenance"
+        ),
+        branch_id=_public_id(
+            branch_id,
+            "ProgressDelta.branch_id",
+        ),
     )
     claim.validate()
     return claim
@@ -1304,6 +1845,35 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     raise ReasoningStateValidationError(
         "ProgressDelta response is not a JSON object"
     )
+
+
+def _claim_content_key(claim: PublicClaim) -> tuple[Any, ...]:
+    """Fields that are immutable unless a V2 revision is explicitly made."""
+    return (
+        claim.statement,
+        claim.depends_on,
+        claim.subgoal_ids,
+        claim.importance,
+        claim.check_type,
+        claim.branch_id,
+    )
+
+
+def _claim_semantic_key(claim: PublicClaim) -> tuple[Any, ...]:
+    """Normalized meaning used to discount repeated IDs from information gain."""
+    return (
+        " ".join(claim.statement.split()).casefold(),
+        tuple(claim.depends_on),
+        tuple(claim.subgoal_ids),
+        claim.check_type,
+    )
+
+
+def _tool_evidence_id(work_item_id: str) -> str:
+    candidate = f"tool-{work_item_id}"
+    if len(candidate) <= 96:
+        return candidate
+    return f"tool-{sha256(work_item_id.encode('utf-8')).hexdigest()[:24]}"
 
 
 def _object_list(value: Any, name: str) -> list[dict[str, Any]]:
@@ -1339,30 +1909,75 @@ def _validate_acyclic(
 def _validate_projection_invariants(
     state: ReasoningState,
     payload: dict[str, Any],
+    *,
+    active_claim_ids: set[str] | None = None,
 ) -> None:
     if payload["problem_frame"] != state.problem_frame.to_dict():
         raise ReasoningStateValidationError(
             "ReasoningState compression changed the ProblemFrame"
         )
-    if payload["subgoal_ledger"] != state.subgoal_ledger.to_dict():
+    subgoal_payload = SubgoalLedger.from_dict(payload["subgoal_ledger"])
+    source_subgoal_ids = {
+        item.subgoal_id for item in state.subgoal_ledger.items
+    }
+    projected_subgoal_ids = {
+        item.subgoal_id for item in subgoal_payload.items
+    }
+    if not projected_subgoal_ids <= source_subgoal_ids:
         raise ReasoningStateValidationError(
-            "ReasoningState compression changed Subgoals"
+            "ReasoningState compression invented Subgoals"
         )
-    if payload["claim_ledger"] != state.claim_ledger.to_dict():
+    claim_payload = ClaimLedger.from_dict(payload["claim_ledger"])
+    source_claim_ids = {item.claim_id for item in state.claim_ledger.items}
+    projected_claim_ids = {item.claim_id for item in claim_payload.items}
+    allowed_claim_ids = active_claim_ids or source_claim_ids
+    if not projected_claim_ids <= source_claim_ids:
         raise ReasoningStateValidationError(
-            "ReasoningState compression changed Claims"
+            "ReasoningState compression invented Claims"
         )
-    if payload["open_obligations"] != [
-        item.to_dict() for item in state.open_obligations
-    ]:
+    if not projected_claim_ids <= allowed_claim_ids:
         raise ReasoningStateValidationError(
-            "ReasoningState compression changed open obligations"
+            "ReasoningState compression retained a non-frontier Claim"
         )
-    if payload["tool_results"] != [
-        item.to_dict() for item in state.tool_results
-    ]:
+    claim_payload.validate(
+        projected_subgoal_ids,
+        state.branch_id,
+    )
+    projected_obligations = tuple(
+        OpenObligation.from_dict(item)
+        for item in _object_list(
+            payload["open_obligations"],
+            "compressed.open_obligations",
+        )
+    )
+    if not set(item.obligation_id for item in projected_obligations) <= {
+        item.obligation_id for item in state.open_obligations
+    }:
         raise ReasoningStateValidationError(
-            "ReasoningState compression changed tool results"
+            "ReasoningState compression invented open obligations"
+        )
+    if any(
+        set(item.depends_on) - projected_claim_ids
+        for item in projected_obligations
+    ):
+        raise ReasoningStateValidationError(
+            "ReasoningState compression broke obligation dependencies"
+        )
+    projected_results = tuple(
+        PublicToolResult.from_dict(item)
+        for item in _object_list(
+            payload["tool_results"],
+            "compressed.tool_results",
+        )
+    )
+    source_work_items = {item.work_item_id for item in state.tool_results}
+    if any(item.work_item_id not in source_work_items for item in projected_results):
+        raise ReasoningStateValidationError(
+            "ReasoningState compression invented tool results"
+        )
+    if any(item.claim_id not in projected_claim_ids for item in projected_results):
+        raise ReasoningStateValidationError(
+            "ReasoningState compression retained evidence for a non-frontier Claim"
         )
 
 

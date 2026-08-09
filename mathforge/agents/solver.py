@@ -505,6 +505,7 @@ class SolverExecutor:
                     request.reasoning_state_json
                 ),
                 mode=mode,
+                branch_id=f"branch-{request.candidate_id}",
             )
         except (ValueError, TypeError) as error:
             budget.record_model_response_validation(
@@ -591,6 +592,7 @@ class SolverExecutor:
                         request.reasoning_state_json
                     ),
                     mode=mode,
+                    branch_id=f"branch-{request.candidate_id}",
                 )
             except (ValueError, TypeError) as error:
                 self._fail_agent_turn(response, budget, "agent_progress_delta_invalid")
