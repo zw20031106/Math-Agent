@@ -134,6 +134,10 @@ from mathforge.verification.cross_review import (
 from mathforge.verification.candidate_pool import CandidatePool
 from mathforge.tools.shadow_solver import ShadowOutcome
 from mathforge.verification.answer_normalization import canonical_answer
+from mathforge.verification.review_repair_audit_v2 import (
+    build_audit_requirements,
+    decide_bidirectional_review,
+)
 from mathforge.runtime_flows import (
     AgentEventProjector,
     FinalProofStatusService,
@@ -1567,6 +1571,41 @@ class MathForgeHarness:
                         )
                     if repair_result.triggered:
                         repair_attempted = True
+                        session.repair_lineage.append(
+                            {
+                                "source_candidate_id": item.candidate_id,
+                                "proposed_candidate_id": (
+                                    repair_result.proposed.candidate_id
+                                    if repair_result.proposed is not None
+                                    else ""
+                                ),
+                                "repair_artifact_id": next(
+                                    (
+                                        artifact["artifact_id"]
+                                        for artifact in reversed(
+                                            session.agent_runtime.artifacts.snapshot()
+                                        )
+                                        if artifact["artifact_type"]
+                                        == "RepairPatchArtifact"
+                                    ),
+                                    "",
+                                ),
+                                "affected_claim_ids": list(
+                                    repair_result.affected_claim_ids
+                                ),
+                                "rolled_back": repair_result.rolled_back,
+                                "reason": repair_result.reason,
+                                "reverified": bool(repair_result.new_evidence),
+                                "repair_category": "local_arithmetic",
+                                "repair_action": "local_patch",
+                                "transaction_steps": list(
+                                    repair_result.transaction_steps
+                                ),
+                                "transaction_status": (
+                                    repair_result.transaction_status
+                                ),
+                            }
+                        )
                         trace.add(
                             "repair_completed",
                             source_candidate_id=item.candidate_id,
@@ -1604,6 +1643,12 @@ class MathForgeHarness:
                             ),
                             rolled_back=repair_result.rolled_back,
                             reason=repair_result.reason,
+                            repair_category="local_arithmetic",
+                            repair_action="local_patch",
+                            transaction_steps=list(
+                                repair_result.transaction_steps
+                            ),
+                            transaction_status=repair_result.transaction_status,
                         )
                     repaired_candidates.append(repair_result.selected)
                     if (
@@ -2208,6 +2253,19 @@ class MathForgeHarness:
                             repair_stage="post_verifier",
                         )
                     if repair_result.triggered:
+                        trigger_directive = (
+                            next(
+                                (
+                                    directive
+                                    for directive in trigger_critique.repair_directives()
+                                    if directive["candidate_id"]
+                                    == item.candidate_id
+                                ),
+                                {},
+                            )
+                            if trigger_critique is not None
+                            else {}
+                        )
                         session.repair_lineage.append(
                             {
                                 "source_candidate_id": item.candidate_id,
@@ -2243,6 +2301,20 @@ class MathForgeHarness:
                                 "rolled_back": repair_result.rolled_back,
                                 "reason": repair_result.reason,
                                 "reverified": bool(repair_result.new_evidence),
+                                "repair_category": trigger_directive.get(
+                                    "category",
+                                    "local_arithmetic",
+                                ),
+                                "repair_action": trigger_directive.get(
+                                    "action",
+                                    "local_patch",
+                                ),
+                                "transaction_steps": list(
+                                    repair_result.transaction_steps
+                                ),
+                                "transaction_status": (
+                                    repair_result.transaction_status
+                                ),
                             }
                         )
                         trace.add(
@@ -2295,6 +2367,18 @@ class MathForgeHarness:
                                 if session.repair_lineage
                                 else ""
                             ),
+                            repair_category=session.repair_lineage[-1].get(
+                                "repair_category",
+                                "local_arithmetic",
+                            ),
+                            repair_action=session.repair_lineage[-1].get(
+                                "repair_action",
+                                "local_patch",
+                            ),
+                            transaction_steps=list(
+                                repair_result.transaction_steps
+                            ),
+                            transaction_status=repair_result.transaction_status,
                         )
                     viable = [
                         (
@@ -2661,6 +2745,8 @@ class MathForgeHarness:
                         item
                         for item in reversed(session.audits)
                         if item.candidate_id == candidate.candidate_id
+                        and item.candidate_version == candidate.version
+                        and item.complete
                     ),
                     None,
                 )
@@ -4096,6 +4182,35 @@ class MathForgeHarness:
                 or candidate.candidate_id in active_ids
             ]
 
+        review_trigger = decide_bidirectional_review(
+            solver_candidates,
+            risk_level=session.route_plan.risk_level,
+            independent_candidate_ids=(
+                entry.candidate_id for entry in independent
+            ),
+        )
+        trace.add(
+            "peer_review_trigger_decided",
+            **review_trigger.to_dict(),
+            incremental=incremental,
+        )
+        if not review_trigger.should_run:
+            trace.add(
+                "solver_peer_review_phase_completed",
+                status="skipped_no_review_value",
+                bidirectional_reviews=0,
+                rebuttals=0,
+                candidate_pool=pool.snapshot(),
+                trigger=review_trigger.to_dict(),
+            )
+            active_ids = set(pool.active_candidate_ids())
+            return [
+                candidate
+                for candidate in candidates
+                if candidate.role not in {"PrimarySolver", "AlternativeSolver"}
+                or candidate.candidate_id in active_ids
+            ]
+
         candidate_by_id = {
             candidate.candidate_id: candidate for candidate in solver_candidates
         }
@@ -5200,6 +5315,59 @@ class MathForgeHarness:
             input_artifacts = list(
                 dict.fromkeys(item for item in input_artifacts if item)
             )
+            candidate_peer_reviews = [
+                item
+                for item in session.peer_reviews
+                if item.candidate_id == candidate.candidate_id
+            ]
+            peer_counts: dict[str, int] = {}
+            for review in candidate_peer_reviews:
+                for finding in review.finding_items:
+                    peer_counts[finding.finding_id] = (
+                        peer_counts.get(finding.finding_id, 0) + 1
+                    )
+            required_finding_ids = [
+                (
+                    finding.finding_id
+                    if peer_counts[finding.finding_id] == 1
+                    else f"{review.review_id}:{finding.finding_id}"
+                )
+                for review in candidate_peer_reviews
+                for finding in review.finding_items
+                if finding.status != "pass"
+            ]
+            required_finding_ids.extend(
+                finding.finding_id
+                for critique in session.critiques
+                for finding in critique.findings
+                if finding.candidate_id == candidate.candidate_id
+                and finding.status != "pass"
+            )
+            repaired = any(
+                item.get("proposed_candidate_id") == candidate.candidate_id
+                and not bool(item.get("rolled_back"))
+                for item in session.repair_lineage
+            )
+            low_support = not any(
+                record.candidate_id == candidate.candidate_id
+                and record.transaction_status == "active"
+                and is_semantic_hard_pass(record)
+                for record in session.evidence
+            )
+            audit_requirements = build_audit_requirements(
+                candidate,
+                obligations=session.proof_obligations.get(
+                    candidate.candidate_id,
+                    [],
+                ),
+                finding_ids=required_finding_ids,
+                artifact_ids=input_artifacts,
+                response_mode=session.problem_ir.response_mode,
+                risk_level=session.route_plan.risk_level,
+                repaired=repaired,
+                unresolved_review_history=bool(required_finding_ids),
+                low_support=low_support,
+            )
             trace.add(
                 "final_audit_started",
                 candidate_id=candidate.candidate_id,
@@ -5207,6 +5375,7 @@ class MathForgeHarness:
                 verifier_instance_ordinal=len(session.audits) + 1,
                 input_artifact_ids=input_artifacts,
                 independent_model_call=True,
+                audit_requirements=audit_requirements.to_dict(),
             )
             try:
                 outcome = self._verification_closure_agent.final_audit(
@@ -5224,6 +5393,7 @@ class MathForgeHarness:
                     input_artifact_ids=tuple(input_artifacts),
                     budget=session.budget,
                     max_tokens=self._config.primary_max_tokens,
+                    requirements=audit_requirements,
                     ordinal=len(session.audits) + 1,
                 )
             except Exception as error:
@@ -5481,6 +5651,12 @@ class MathForgeHarness:
             ),
             peer_review_assessment_count=len(
                 getattr(verifier_result, "peer_review_assessments", ())
+            ),
+            repair_directives=(
+                list(verifier_result.repair_directives())
+                if verifier_result is not None
+                and hasattr(verifier_result, "repair_directives")
+                else []
             ),
             independent_model_call=bool(
                 self._config.enable_verification_closure

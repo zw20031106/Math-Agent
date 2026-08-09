@@ -44,6 +44,21 @@ class ConversationThread:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class MessageConsumptionReceipt:
+    receipt_id: str
+    message_id: str
+    session_id: str
+    consumer_agent_id: str
+    turn_id: str
+    artifact_ids: tuple[str, ...]
+    sequence: int
+    schema_version: str = PROTOCOL_SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 class SessionMailbox:
     def __init__(self, session_id: str, agents: AgentStateRegistry, tasks: AgentTaskRegistry, artifacts: SessionArtifactStore, definitions: AgentRegistry) -> None:
         self.session_id = session_id
@@ -53,6 +68,8 @@ class SessionMailbox:
         self._definitions = definitions
         self._threads: dict[str, ConversationThread] = {}
         self._messages: dict[str, MessageEnvelope] = {}
+        self._receipts: dict[str, MessageConsumptionReceipt] = {}
+        self._consumed_message_ids: set[str] = set()
         self._dedupe: dict[str, str] = {}
         self._sequence = 0
         self._thread_sequence = 0
@@ -108,6 +125,97 @@ class SessionMailbox:
             self._agents.append(recipient_agent_id, "unread_message_ids", message_id)
             return message
 
+    def pending_recipient_for_artifacts(
+        self,
+        *,
+        recipient_role: str,
+        artifact_ids: tuple[str, ...],
+    ) -> str:
+        """Resolve the concrete Agent already named by a pending Message."""
+
+        supplied = set(artifact_ids)
+        if not supplied:
+            return ""
+        with self._lock:
+            for message in sorted(self._messages.values(), key=lambda item: item.sequence):
+                if message.message_id in self._consumed_message_ids:
+                    continue
+                if not set(message.artifact_ids) <= supplied:
+                    continue
+                recipient = self._agents.instance(message.recipient_agent_id)
+                if recipient.role == recipient_role:
+                    return recipient.agent_id
+        return ""
+
+    def pending_artifacts_for_recipient(
+        self,
+        recipient_agent_id: str,
+    ) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(
+                dict.fromkeys(
+                    artifact_id
+                    for message in sorted(
+                        self._messages.values(),
+                        key=lambda item: item.sequence,
+                    )
+                    if message.recipient_agent_id == recipient_agent_id
+                    and message.message_id not in self._consumed_message_ids
+                    for artifact_id in message.artifact_ids
+                )
+            )
+
+    def consume_for_turn(
+        self,
+        *,
+        consumer_agent_id: str,
+        turn_id: str,
+        input_artifact_ids: tuple[str, ...],
+    ) -> tuple[MessageConsumptionReceipt, ...]:
+        """Acknowledge only Messages actually supplied to their named consumer."""
+
+        supplied = set(input_artifact_ids)
+        receipts: list[MessageConsumptionReceipt] = []
+        if not supplied:
+            return ()
+        with self._lock:
+            for message in sorted(self._messages.values(), key=lambda item: item.sequence):
+                if message.message_id in self._consumed_message_ids:
+                    continue
+                if message.recipient_agent_id != consumer_agent_id:
+                    continue
+                if not set(message.artifact_ids) <= supplied:
+                    continue
+                receipt_id = f"receipt-{self.session_id[:8]}-{len(self._receipts) + 1:04d}"
+                receipt = MessageConsumptionReceipt(
+                    receipt_id,
+                    message.message_id,
+                    self.session_id,
+                    consumer_agent_id,
+                    str(turn_id),
+                    message.artifact_ids,
+                    len(self._receipts) + 1,
+                )
+                self._receipts[receipt_id] = receipt
+                self._consumed_message_ids.add(message.message_id)
+                receipts.append(receipt)
+            if receipts:
+                state = next(
+                    item["state"]
+                    for item in self._agents.snapshot()
+                    if item["agent_id"] == consumer_agent_id
+                )
+                consumed_ids = {item.message_id for item in receipts}
+                self._agents.update(
+                    consumer_agent_id,
+                    unread_message_ids=tuple(
+                        item
+                        for item in state["unread_message_ids"]
+                        if item not in consumed_ids
+                    ),
+                )
+        return tuple(receipts)
+
     def close(self, thread_id: str) -> ConversationThread:
         with self._lock:
             thread = self._threads[thread_id]
@@ -145,10 +253,18 @@ class SessionMailbox:
 
     def snapshot(self) -> dict[str, list[dict[str, Any]]]:
         with self._lock:
-            return {"messages": [deepcopy(item.to_dict()) for item in self._messages.values()], "threads": [deepcopy(item.to_dict()) for item in self._threads.values()]}
+            return {
+                "messages": [deepcopy(item.to_dict()) for item in self._messages.values()],
+                "threads": [deepcopy(item.to_dict()) for item in self._threads.values()],
+                "message_consumptions": [
+                    deepcopy(item.to_dict()) for item in self._receipts.values()
+                ],
+            }
 
     def clear(self) -> None:
         with self._lock:
             self._threads.clear()
             self._messages.clear()
+            self._receipts.clear()
+            self._consumed_message_ids.clear()
             self._dedupe.clear()

@@ -321,10 +321,34 @@ class SessionAgentRuntime:
                 and str(descriptor).startswith("final-audit")
                 else _MODE_BY_ROLE[role]
             )
-            instance = self._ensure_agent(
-                role,
-                descriptor or "default",
-                mode=requested_mode,
+            pending_recipient_id = self.mailbox.pending_recipient_for_artifacts(
+                recipient_role=role,
+                artifact_ids=tuple(input_artifact_ids),
+            )
+            pending_recipient = (
+                self.agents.instance(pending_recipient_id)
+                if pending_recipient_id
+                else None
+            )
+            instance = (
+                pending_recipient
+                if pending_recipient is not None
+                and pending_recipient.mode == requested_mode
+                else self._ensure_agent(
+                    role,
+                    descriptor or "default",
+                    mode=requested_mode,
+                )
+            )
+            input_artifact_ids = tuple(
+                dict.fromkeys(
+                    (
+                        *input_artifact_ids,
+                        *self.mailbox.pending_artifacts_for_recipient(
+                            instance.agent_id
+                        ),
+                    )
+                )
             )
             task_type = _TASK_BY_ROLE[role]
             plan_id, plan_version, subgoal_ids, method_family = self._task_plan(role, descriptor)
@@ -410,6 +434,11 @@ class SessionAgentRuntime:
             )
             self._turn_contexts[turn_id] = context
             self._turns[turn_id] = TurnLineage(instance.agent_id, task_id, turn_id)
+            self.mailbox.consume_for_turn(
+                consumer_agent_id=instance.agent_id,
+                turn_id=turn_id,
+                input_artifact_ids=tuple(input_artifact_ids),
+            )
             return context
 
     def _collaboration_turn_route(
@@ -894,6 +923,28 @@ class SessionAgentRuntime:
             artifacts = self.artifacts.snapshot()
             mailbox_snapshot = self.mailbox.snapshot()
             turns = [item.to_dict() for item in self._turns.values()]
+            messages_by_id = {
+                item["message_id"]: item
+                for item in mailbox_snapshot["messages"]
+            }
+            consumed_ids = {
+                item["message_id"]
+                for item in mailbox_snapshot["message_consumptions"]
+            }
+            recipient_called_mismatches = []
+            for receipt in mailbox_snapshot["message_consumptions"]:
+                message = messages_by_id.get(receipt["message_id"])
+                context = self._turn_contexts.get(receipt["turn_id"])
+                if (
+                    message is None
+                    or context is None
+                    or message["recipient_agent_id"]
+                    != receipt["consumer_agent_id"]
+                    or context.agent_id != receipt["consumer_agent_id"]
+                    or not set(message["artifact_ids"])
+                    <= set(context.input_artifact_ids)
+                ):
+                    recipient_called_mismatches.append(receipt["receipt_id"])
             return {
                 "schema_version": PROTOCOL_SCHEMA_VERSION,
                 "mode": (
@@ -919,9 +970,21 @@ class SessionAgentRuntime:
                     if self._authoritative_plan is not None
                     else ""
                 ),
-                "counts": {"model_calls": len(model_call_records), "turns": len(turns), "agents": len(self.agents.snapshot()), "tasks": len(self.tasks.snapshot()), "artifacts": len(artifacts), "messages": len(mailbox_snapshot["messages"]), "threads": len(mailbox_snapshot["threads"])},
+                "counts": {"model_calls": len(model_call_records), "turns": len(turns), "agents": len(self.agents.snapshot()), "tasks": len(self.tasks.snapshot()), "artifacts": len(artifacts), "messages": len(mailbox_snapshot["messages"]), "message_consumptions": len(mailbox_snapshot["message_consumptions"]), "threads": len(mailbox_snapshot["threads"])},
                 "call_turn_count_match": len(model_call_records) == len(turns), "agents": self.agents.snapshot(), "tasks": self.tasks.snapshot(),
-                "artifacts": artifacts, "messages": mailbox_snapshot["messages"], "threads": mailbox_snapshot["threads"], "turn_lineage": turns,
+                "communication_integrity": {
+                    "recipient_called_mismatch_count": len(
+                        recipient_called_mismatches
+                    ),
+                    "mismatched_receipt_ids": recipient_called_mismatches,
+                    "consumed_message_count": len(consumed_ids),
+                    "unconsumed_message_ids": [
+                        item["message_id"]
+                        for item in mailbox_snapshot["messages"]
+                        if item["message_id"] not in consumed_ids
+                    ],
+                },
+                "artifacts": artifacts, "messages": mailbox_snapshot["messages"], "message_consumptions": mailbox_snapshot["message_consumptions"], "threads": mailbox_snapshot["threads"], "turn_lineage": turns,
             }
 
     def release(self) -> None:

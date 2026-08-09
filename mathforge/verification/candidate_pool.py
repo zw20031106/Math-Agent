@@ -9,6 +9,7 @@ from typing import Any
 
 from mathforge.harness.schemas import CandidateSolution
 from mathforge.verification.answer_normalization import canonical_answer
+from mathforge.verification.review_repair_audit_v2 import classify_concession
 
 
 _CANDIDATE_STATES = frozenset(
@@ -342,6 +343,8 @@ class CandidatePool:
         *,
         conceded_finding_ids: tuple[str, ...] = (),
         finding_severities: dict[str, str] | None = None,
+        finding_scopes: dict[str, str] | None = None,
+        confirmed_finding_ids: tuple[str, ...] = (),
     ) -> CandidatePoolEntry:
         entry = self._entries[candidate_id]
         conceded = tuple(
@@ -351,13 +354,23 @@ class CandidatePool:
             finding_id: str((finding_severities or {}).get(finding_id, "warning"))
             for finding_id in conceded_finding_ids
         }
-        status = entry.status
-        if any(value in {"error", "critical"} for value in severities.values()):
+        dispositions = [
+            classify_concession(
+                severity,
+                scope=str((finding_scopes or {}).get(finding_id, "local")),
+                confirmed=finding_id in set(confirmed_finding_ids),
+            )
+            for finding_id, severity in severities.items()
+        ]
+        status = "rebutted"
+        if any(item.candidate_status == "rejected" for item in dispositions):
+            status = "rejected"
+        elif any(
+            item.candidate_status == "repair_requested" for item in dispositions
+        ):
             status = "repair_requested"
-        elif conceded_finding_ids:
+        elif dispositions:
             status = "challenged"
-        else:
-            status = "rebutted"
         return self._update(
             candidate_id,
             status=status,

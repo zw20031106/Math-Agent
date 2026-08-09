@@ -205,6 +205,7 @@ def _audit_matches(candidate: CandidateSolution, audits: Iterable[Any]) -> bool:
             and str(getattr(audit, "status", "")) in {"complete_audited", "complete_hard"}
             and not getattr(audit, "open_finding_ids", ())
             and not getattr(audit, "open_obligation_ids", ())
+            and bool(getattr(audit, "coverage_complete", True))
         ):
             return True
     return False

@@ -41,6 +41,7 @@ JUDGE_EVENT_STAGES = {
     "artifact_published": "communication",
     "message_sent": "communication",
     "message_delivered": "communication",
+    "message_consumed": "communication",
     "agent_stopped": "agent_lifecycle",
     "candidate_pool_initialized": "peer_review",
     "peer_review_completed": "peer_review",
@@ -569,6 +570,7 @@ def project_judge_trace(
                     "selection_authority",
                     "counts",
                     "call_turn_count_match",
+                    "communication_integrity",
                 ),
             ),
             "tasks": [
@@ -603,6 +605,20 @@ def project_judge_trace(
                 for item in (protocol or {}).get("messages", [])
                 if isinstance(item, dict)
             ],
+            "message_consumptions": [
+                _select(
+                    item,
+                    (
+                        "receipt_id",
+                        "message_id",
+                        "consumer_agent_id",
+                        "turn_id",
+                        "artifact_ids",
+                    ),
+                )
+                for item in (protocol or {}).get("message_consumptions", [])
+                if isinstance(item, dict)
+            ],
             "threads": [
                 _select(
                     item,
@@ -626,6 +642,7 @@ def project_judge_trace(
         "artifact_published",
         "message_sent",
         "message_delivered",
+        "message_consumed",
         "repair_committed",
         "repair_rolled_back",
         "agent_stopped",

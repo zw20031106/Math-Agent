@@ -17,6 +17,7 @@ from mathforge.harness.schemas import (
 )
 from mathforge.verification.peer_review import PeerReviewRecord, RebuttalRecord
 from mathforge.verification.verification_closure import AuditRecord, CritiqueRecord
+from mathforge.verification.review_repair_audit_v2 import AuditRequirements
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,7 @@ class VerificationClosureAgent:
         input_artifact_ids: tuple[str, ...],
         budget: CallBudget,
         max_tokens: int,
+        requirements: AuditRequirements | None = None,
         ordinal: int = 1,
     ) -> FinalAuditOutcome:
         valid_finding_ids = {
@@ -139,12 +141,29 @@ class VerificationClosureAgent:
         }
         valid_obligation_ids = {item.obligation_id for item in obligations}
         allowed_artifact_ids = {item for item in input_artifact_ids if item}
-        candidate_peer_finding_ids = {
-            finding.finding_id
+        candidate_peer_reviews = [
+            review
             for review in peer_reviews
             if review.candidate_id == candidate.candidate_id
+        ]
+        peer_finding_counts: dict[str, int] = {}
+        for review in candidate_peer_reviews:
+            for finding in review.finding_items:
+                peer_finding_counts[finding.finding_id] = (
+                    peer_finding_counts.get(finding.finding_id, 0) + 1
+                )
+        candidate_peer_finding_ids = {
+            (
+                finding.finding_id
+                if peer_finding_counts[finding.finding_id] == 1
+                else f"{review.review_id}:{finding.finding_id}"
+            )
+            for review in candidate_peer_reviews
             for finding in review.finding_items
         }
+        valid_finding_ids.update(candidate_peer_finding_ids)
+        if requirements is not None:
+            valid_finding_ids.update(requirements.required_finding_ids)
         candidate_critiques = []
         for critique in critiques:
             normalized = critique.to_dict()
@@ -191,6 +210,19 @@ class VerificationClosureAgent:
             ],
             "repair_lineage": candidate_repair_lineage,
             "allowed_reviewed_artifact_ids": sorted(allowed_artifact_ids),
+            "audit_requirements": (
+                requirements.to_dict()
+                if requirements is not None
+                else {
+                    "candidate_id": candidate.candidate_id,
+                    "candidate_version": candidate.version,
+                    "required_artifact_ids": [],
+                    "required_finding_ids": [],
+                    "required_obligation_ids": [],
+                    "reason_codes": [],
+                    "mandatory": False,
+                }
+            ),
         }
         compilation = self._compiler.compile_verifier_closure(
             user_content=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
@@ -216,6 +248,21 @@ class VerificationClosureAgent:
                 valid_finding_ids=valid_finding_ids,
                 valid_obligation_ids=valid_obligation_ids,
                 allowed_artifact_ids=allowed_artifact_ids,
+                required_finding_ids=(
+                    set(requirements.required_finding_ids)
+                    if requirements is not None
+                    else set()
+                ),
+                required_obligation_ids=(
+                    set(requirements.required_obligation_ids)
+                    if requirements is not None
+                    else set()
+                ),
+                required_artifact_ids=(
+                    set(requirements.required_artifact_ids)
+                    if requirements is not None
+                    else set()
+                ),
             )
             lineage = self._complete(response, budget)
         except Exception as error:

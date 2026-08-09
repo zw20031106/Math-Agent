@@ -96,6 +96,7 @@ class FinalProofStatusService:
                 and all_covered
                 and not matching_audit.open_finding_ids
                 and not matching_audit.open_obligation_ids
+                and bool(getattr(matching_audit, "coverage_complete", True))
             ):
                 return status(
                     "complete_audited",
@@ -107,6 +108,7 @@ class FinalProofStatusService:
                 and decision.status == "complete_hard"
                 and not matching_audit.open_finding_ids
                 and not matching_audit.open_obligation_ids
+                and bool(getattr(matching_audit, "coverage_complete", True))
             ):
                 return status(
                     "complete_hard",

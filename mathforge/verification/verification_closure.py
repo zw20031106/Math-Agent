@@ -5,6 +5,7 @@ from typing import Any
 
 from mathforge.harness.schemas import CandidateSolution, ProofObligation
 from mathforge.verification.peer_review import PeerReviewRecord
+from mathforge.verification.review_repair_audit_v2 import classify_repair_finding
 
 
 _FINDING_STATUSES = frozenset({"pass", "fail", "unknown"})
@@ -158,8 +159,12 @@ class CritiqueRecord:
                 raise ValueError("Critique actionability is invalid")
             if scope == "local" and status == "fail" and not claim_id:
                 raise ValueError("Local failure must cite a real Claim")
-            if scope == "global" and actionability == "local_repair":
-                raise ValueError("Global failure cannot be classified as a local repair")
+            if (
+                scope == "global"
+                and status == "fail"
+                and actionability not in {"new_branch", "replan"}
+            ):
+                raise ValueError("Global failure must request a new branch or replan")
             rationale = str(item["public_rationale"]).strip()
             if not rationale:
                 raise ValueError("Critique public rationale is required")
@@ -230,11 +235,21 @@ class CritiqueRecord:
                 result.setdefault(finding.candidate_id, set()).add(finding.claim_id)
         return {key: sorted(value) for key, value in result.items()}
 
+    def repair_directives(self) -> tuple[dict[str, str], ...]:
+        return tuple(
+            classify_repair_finding(item).to_dict()
+            for item in self.findings
+            if item.status == "fail"
+        )
+
     @property
     def requires_new_branch(self) -> bool:
         return self.recommended_action in {"new_branch", "replan"} or any(
             item.status == "fail"
-            and item.actionability in {"new_branch", "replan"}
+            and (
+                item.scope == "global"
+                or item.actionability in {"new_branch", "replan"}
+            )
             for item in self.findings
         )
 
@@ -271,6 +286,11 @@ class AuditRecord:
     artifact_id: str = ""
     message_id: str = ""
     thread_id: str = ""
+    reviewed_finding_ids: tuple[str, ...] = ()
+    reviewed_obligation_ids: tuple[str, ...] = ()
+    required_artifact_ids: tuple[str, ...] = ()
+    required_finding_ids: tuple[str, ...] = ()
+    required_obligation_ids: tuple[str, ...] = ()
 
     @classmethod
     def from_model_payload(
@@ -283,8 +303,11 @@ class AuditRecord:
         valid_finding_ids: set[str],
         valid_obligation_ids: set[str],
         allowed_artifact_ids: set[str],
+        required_finding_ids: set[str] | None = None,
+        required_obligation_ids: set[str] | None = None,
+        required_artifact_ids: set[str] | None = None,
     ) -> "AuditRecord":
-        expected = {
+        expected_v1 = {
             "candidate_id",
             "candidate_version",
             "status",
@@ -295,7 +318,14 @@ class AuditRecord:
             "public_rationale",
             "stop_reason",
         }
-        if not isinstance(payload, dict) or set(payload) != expected:
+        expected_v2 = expected_v1 | {
+            "reviewed_finding_ids",
+            "reviewed_obligation_ids",
+        }
+        if not isinstance(payload, dict) or frozenset(payload) not in {
+            frozenset(expected_v1),
+            frozenset(expected_v2),
+        }:
             raise ValueError("Audit result fields do not match the schema")
         if str(payload["candidate_id"]).strip() != candidate.candidate_id:
             raise ValueError("Audit Candidate reference is invalid")
@@ -306,6 +336,14 @@ class AuditRecord:
         findings = _string_tuple(payload["open_finding_ids"], "open_finding_ids")
         obligations = _string_tuple(payload["open_obligation_ids"], "open_obligation_ids")
         artifacts = _string_tuple(payload["reviewed_artifact_ids"], "reviewed_artifact_ids")
+        reviewed_findings = _string_tuple(
+            payload.get("reviewed_finding_ids", []),
+            "reviewed_finding_ids",
+        )
+        reviewed_obligations = _string_tuple(
+            payload.get("reviewed_obligation_ids", []),
+            "reviewed_obligation_ids",
+        )
         if status not in _AUDIT_STATUSES or action not in _ACTIONS:
             raise ValueError("Audit status or requested action is invalid")
         if not set(findings) <= valid_finding_ids:
@@ -314,29 +352,62 @@ class AuditRecord:
             raise ValueError("Audit obligation reference is invalid")
         if not set(artifacts) <= allowed_artifact_ids:
             raise ValueError("Audit Artifact reference is invalid")
+        if not set(reviewed_findings) <= valid_finding_ids:
+            raise ValueError("Audit reviewed Finding reference is invalid")
+        if not set(reviewed_obligations) <= valid_obligation_ids:
+            raise ValueError("Audit reviewed obligation reference is invalid")
         if status.startswith("complete_") and (findings or obligations):
             raise ValueError("Complete audit cannot retain open items")
+        required_findings = set(required_finding_ids or ())
+        required_obligations = set(required_obligation_ids or ())
+        required_artifacts = set(required_artifact_ids or ())
+        if not required_findings <= valid_finding_ids:
+            raise ValueError("Required audit Finding reference is invalid")
+        if not required_obligations <= valid_obligation_ids:
+            raise ValueError("Required audit obligation reference is invalid")
+        if not required_artifacts <= allowed_artifact_ids:
+            raise ValueError("Required audit Artifact reference is invalid")
+        if status.startswith("complete_") and (
+            not required_findings <= set(reviewed_findings)
+            or not required_obligations <= set(reviewed_obligations)
+            or not required_artifacts <= set(artifacts)
+        ):
+            raise ValueError("Complete audit does not cover every required item")
         rationale = str(payload["public_rationale"]).strip()
         stop_reason = str(payload["stop_reason"]).strip()
         if not rationale or not stop_reason:
             raise ValueError("Audit rationale and stop reason are required")
         return cls(
-            audit_id,
-            source_turn_id,
-            candidate.candidate_id,
-            candidate.version,
-            status,
-            findings,
-            obligations,
-            artifacts,
-            action,
-            rationale,
-            stop_reason,
+            audit_id=audit_id,
+            source_turn_id=source_turn_id,
+            candidate_id=candidate.candidate_id,
+            candidate_version=candidate.version,
+            status=status,
+            open_finding_ids=findings,
+            open_obligation_ids=obligations,
+            reviewed_artifact_ids=artifacts,
+            requested_action=action,
+            public_rationale=rationale,
+            stop_reason=stop_reason,
+            reviewed_finding_ids=reviewed_findings,
+            reviewed_obligation_ids=reviewed_obligations,
+            required_artifact_ids=tuple(sorted(required_artifacts)),
+            required_finding_ids=tuple(sorted(required_findings)),
+            required_obligation_ids=tuple(sorted(required_obligations)),
         )
 
     @property
     def complete(self) -> bool:
-        return self.status in {"complete_hard", "complete_audited"}
+        return self.status in {"complete_hard", "complete_audited"} and self.coverage_complete
+
+    @property
+    def coverage_complete(self) -> bool:
+        return (
+            set(self.required_artifact_ids) <= set(self.reviewed_artifact_ids)
+            and set(self.required_finding_ids) <= set(self.reviewed_finding_ids)
+            and set(self.required_obligation_ids)
+            <= set(self.reviewed_obligation_ids)
+        )
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -344,6 +415,12 @@ class AuditRecord:
             "open_finding_ids",
             "open_obligation_ids",
             "reviewed_artifact_ids",
+            "reviewed_finding_ids",
+            "reviewed_obligation_ids",
+            "required_artifact_ids",
+            "required_finding_ids",
+            "required_obligation_ids",
         ):
             payload[name] = list(payload[name])
+        payload["coverage_complete"] = self.coverage_complete
         return payload

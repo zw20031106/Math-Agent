@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Completed the 2026-08-09 remediation Phase 8 Review / Repair /
+  Communication / Audit work. Concrete Message recipients are now reused by
+  downstream model Turns, consumed Artifact references produce bounded
+  `message_consumed` receipts, and the protocol reports a deterministic
+  recipient/called integrity check. Bidirectional Solver review now requires
+  two independent Candidates with incremental review value. Concessions are
+  severity-aware: warnings remain challenged, local errors request repair,
+  and only confirmed global critical findings reject. Added the five-class
+  repair taxonomy, explicit detect-to-commit/rollback transaction lineage,
+  and global-failure new-branch enforcement. Final Audit now carries positive
+  reviewed Finding/obligation coverage, enforces required Artifact/Finding/
+  obligation sets, rejects stale Candidate versions, and cannot commit a
+  Decision from an incomplete or stale Audit. Added focused Phase 8 regression
+  coverage for all five gates.
 - Completed the 2026-08-09 remediation Phase 7 Verification V2 work.
   Host-selected conclusion Claims now define a transitive critical dependency
   closure, required obligations without a real Claim remain explicitly

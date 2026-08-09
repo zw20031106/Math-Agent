@@ -28,6 +28,10 @@ class AgentEventProjector:
             snapshot.get("messages", ()),
             key=lambda item: int(item.get("sequence", 0)),
         )
+        consumptions = sorted(
+            snapshot.get("message_consumptions", ()),
+            key=lambda item: int(item.get("sequence", 0)),
+        )
 
         for item in agents:
             events.append(
@@ -108,6 +112,20 @@ class AgentEventProjector:
                     {**public, "delivery_status": "accepted_by_session_mailbox"},
                 )
             )
+        for item in consumptions:
+            events.append(
+                (
+                    "message_consumed",
+                    {
+                        "receipt_id": item.get("receipt_id", ""),
+                        "message_id": item.get("message_id", ""),
+                        "consumer_agent_id": item.get("consumer_agent_id", ""),
+                        "turn_id": item.get("turn_id", ""),
+                        "artifact_ids": list(item.get("artifact_ids", ())),
+                        "consumption_status": "consumed_by_named_recipient",
+                    },
+                )
+            )
         for item in repair_lineage:
             if bool(item.get("rolled_back")):
                 events.append(
@@ -148,5 +166,9 @@ class AgentEventProjector:
             "repair_artifact_id": item.get("repair_artifact_id", ""),
             "affected_claim_ids": list(item.get("affected_claim_ids", ())),
             "reverified": bool(item.get("reverified")),
+            "repair_category": item.get("repair_category", ""),
+            "repair_action": item.get("repair_action", ""),
+            "transaction_steps": list(item.get("transaction_steps", ())),
+            "transaction_status": item.get("transaction_status", ""),
             "reason": item.get("reason", ""),
         }

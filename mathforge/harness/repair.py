@@ -45,6 +45,19 @@ class RepairResult:
     new_evidence: list[EvidenceRecord]
     reason: str
 
+    @property
+    def transaction_steps(self) -> tuple[str, ...]:
+        if not self.triggered:
+            return ("detect",)
+        terminal = "rollback" if self.rolled_back else "commit"
+        return ("detect", "scope", "patch", "reverify", "compare", terminal)
+
+    @property
+    def transaction_status(self) -> str:
+        if not self.triggered:
+            return "not_started"
+        return "rolled_back" if self.rolled_back else "committed"
+
     def to_dict(self) -> dict:
         return {
             "selected_candidate_id": self.selected.candidate_id,
@@ -55,6 +68,8 @@ class RepairResult:
             "changed_claim_ids": list(self.changed_claim_ids),
             "new_evidence": [record.to_dict() for record in self.new_evidence],
             "reason": self.reason,
+            "transaction_steps": list(self.transaction_steps),
+            "transaction_status": self.transaction_status,
         }
 
 

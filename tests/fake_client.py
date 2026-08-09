@@ -63,6 +63,7 @@ class FakeClient:
                 verifier_input = json.loads(user_content)
                 if "Public protocol mode is final_audit" in system_content:
                     candidate = verifier_input["final_active_candidate"]
+                    requirements = verifier_input.get("audit_requirements", {})
                     return json.dumps(
                         _agent_envelope(
                             task_result_type="AuditArtifact",
@@ -73,7 +74,15 @@ class FakeClient:
                                 "status": "complete_audited",
                                 "open_finding_ids": [],
                                 "open_obligation_ids": [],
-                                "reviewed_artifact_ids": [],
+                                "reviewed_artifact_ids": list(
+                                    requirements.get("required_artifact_ids", [])
+                                ),
+                                "reviewed_finding_ids": list(
+                                    requirements.get("required_finding_ids", [])
+                                ),
+                                "reviewed_obligation_ids": list(
+                                    requirements.get("required_obligation_ids", [])
+                                ),
                                 "requested_action": "retain",
                                 "public_rationale": (
                                     "The normalized final Candidate and closure "
