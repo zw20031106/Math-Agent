@@ -169,10 +169,11 @@ def test_semantically_duplicate_candidate_does_not_pass_independence_gate():
 
     assert first.independent is True
     assert duplicate.independent is False
-    assert duplicate.status == "rejected"
+    assert duplicate.status == "submitted"
     assert duplicate.duplicate_of == "primary-1"
     assert "semantic_candidate_duplicate" in duplicate.independence_reason_codes
     assert len(pool.independent_entries()) == 1
+    assert len(pool.viable_entries()) == 2
 
 
 def test_repeated_review_content_closes_thread_and_only_new_content_reopens():
@@ -218,7 +219,7 @@ class _ConcedingClient(FakeClient):
         return response
 
 
-def test_author_concession_rejects_candidate_before_downstream_admission():
+def test_author_concession_requests_local_repair_without_global_rejection():
     result = MathForgeHarness(_ConcedingClient(), _config()).solve(
         "Compute 2+2.",
         {},
@@ -233,8 +234,8 @@ def test_author_concession_rejects_candidate_before_downstream_admission():
         item for item in result["trace"] if item["event"] == "rebuttal_completed"
     ]
 
-    assert alternative["status"] == "rejected"
+    assert alternative["status"] == "repair_requested"
     assert alternative["conceded_finding_ids"]
-    assert "alternative-1" not in completed["active_candidate_ids"]
+    assert "alternative-1" in completed["active_candidate_ids"]
     assert any(item["conceded_finding_ids"] for item in rebuttals)
     assert completed["downstream_candidate_filter_applied"] is True

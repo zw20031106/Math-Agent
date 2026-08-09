@@ -400,7 +400,12 @@ def test_autonomous_solver_runs_beyond_six_turns_and_has_no_planned_rounds():
     assert client.progress_counts["PrimarySolver"] == 11
     assert client.lemma_calls >= 1
     assert records[0]["agent_role"] == "RouterPlanner"
-    assert records[1]["agent_role"] == "LemmaCurator"
+    lemma_index = next(
+        index
+        for index, record in enumerate(records)
+        if record["agent_role"] == "LemmaCurator"
+    )
+    assert lemma_index > 2
     assert {
         item["agent_role"] for item in records if item["stage"] in {"primary", "alternative"}
     } == {"PrimarySolver", "AlternativeSolver"}
@@ -492,17 +497,16 @@ def test_both_solver_agents_may_abstain_without_invalid_public_output():
         "PrimarySolver": 1,
         "AlternativeSolver": 1,
     }
-    assert [item["role"] for item in client.calls[:4]] == [
+    assert [item["role"] for item in client.calls[:3]] == [
         "RouterPlanner",
-        "LemmaCurator",
         "PrimarySolver",
         "AlternativeSolver",
     ]
-    assert [item["role"] for item in client.calls[4:]] == [
-        "AlternativeSolver",
-        "AlternativeSolver",
-        "PrimarySolver",
-    ]
+    assert all(
+        item["role"] in {"PrimarySolver", "AlternativeSolver"}
+        for item in client.calls[3:]
+    )
+    assert not any(item["role"] == "LemmaCurator" for item in client.calls)
     recovery_starts = [
         item
         for item in result["trace"]

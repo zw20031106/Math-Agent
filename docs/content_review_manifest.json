@@ -58,6 +58,25 @@
       "sha256": "f5508c3c6a6a20bf2a9880a1b55104baa24f18d7f32a722e25b12477c0333b6f"
     },
     {
+      "id": "phase5-effective-agent-governance",
+      "kind": "file_set",
+      "paths": [
+        "mathforge/agent_runtime/execution_plan.py",
+        "mathforge/agent_runtime/action_registry.py",
+        "mathforge/agent_runtime/runtime.py",
+        "mathforge/agent_runtime/definitions.py",
+        "mathforge/agent_runtime/protocol.py",
+        "mathforge/agent_runtime/state.py",
+        "mathforge/verification/candidate_pool.py",
+        "mathforge/runtime.py"
+      ],
+      "expected_count": 8,
+      "version": "effective-agent-governance-1-phase5",
+      "engineering_reviewer": "codex-0809-phase5-governance-audit",
+      "review_date": "2026-08-09",
+      "sha256": "b4dc6f301132c11dacfd1aadf0d1f3d5f472f7c7e1fe92a63806f91752e9af5d"
+    },
+    {
       "id": "prompt-contracts",
       "kind": "tree",
       "path": "prompts",
@@ -188,7 +207,7 @@
       "version": "verification-closure-15-phase3",
       "engineering_reviewer": "codex-0809-phase3-provider-audit",
         "review_date": "2026-08-09",
-      "sha256": "005e49664821cf15fd909cca5259793ec2acacaf4819e48320c80c604d170d30"
+      "sha256": "e3853bd29c3ab9629cf6ad0917d7d114d813e751cde7268a611eafde68c52dd0"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -218,7 +237,7 @@
       "version": "phase-f6-agent-protocol-6-phase3",
       "engineering_reviewer": "codex-0809-phase3-provider-audit",
       "review_date": "2026-08-09",
-      "sha256": "9371c12bc8ef9c6ae35c4e80fd5853e5ebc8c5cf379360f767a8f97bc9a2221e"
+      "sha256": "9399c327058f37bb801f498e455668318d2ac638982284b9c7d92eb3387cd786"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -241,7 +260,7 @@
       "version": "phase-f7-runtime-5-phase3",
       "engineering_reviewer": "codex-0809-phase3-provider-audit",
       "review_date": "2026-08-09",
-      "sha256": "fe0600df35854f1cd44305f59cf47c90417fdac05fa59915dd9bb8bcd9bd0878"
+      "sha256": "cd7df514a5039aa827cfe0d55b1fc5226dc64e67c366e99f7b919b7bfa09d34a"
     },
     {
       "id": "reviewed-method-cards",
@@ -312,7 +331,7 @@
       "version": "provider-controls-1-phase3",
       "engineering_reviewer": "codex-0809-phase3-provider-audit",
       "review_date": "2026-08-09",
-      "sha256": "81a258f78ec82c5385bf9757901daa50d0ae00f5887e275179b7738c99539cac"
+      "sha256": "2e6080eb6e17f09549aa3db47fd1494843bd9925ba68198857d680819e6e27c1"
     },
     {
       "id": "phase7-live-calibration",

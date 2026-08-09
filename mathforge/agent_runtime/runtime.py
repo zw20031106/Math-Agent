@@ -6,11 +6,18 @@ import re
 from threading import RLock
 from typing import Any
 
+from mathforge.agent_runtime.action_registry import ActionRegistry
 from mathforge.agent_runtime.artifact_store import SessionArtifactStore
 from mathforge.agent_runtime.definitions import AgentRegistry
 from mathforge.agent_runtime.mailbox import SessionMailbox
 from mathforge.agent_runtime.protocol import AgentTurnPayload, AgentTurnPayloadParser, PROTOCOL_SCHEMA_VERSION, TurnContext, TurnLineage
 from mathforge.agent_runtime.router_protocol import AuthoritativePlan
+from mathforge.agent_runtime.execution_plan import (
+    EffectiveExecutionPlan,
+    ReplanBarrier,
+    admit_router_plan,
+    build_effective_execution_plan,
+)
 from mathforge.agent_runtime.state import AgentInstance, AgentStateRegistry, AgentTaskRegistry, TERMINAL_AGENT_STATES
 from mathforge.harness.cancellation import CancellationToken
 
@@ -56,6 +63,10 @@ class SessionAgentRuntime:
         self._review_thread_by_artifact: dict[str, str] = {}
         self._sequence = 0
         self._authoritative_plan: AuthoritativePlan | None = None
+        self._effective_execution_plan: EffectiveExecutionPlan | None = None
+        self._host_admitted_plan = None
+        self._replan_barrier: ReplanBarrier | None = None
+        self._actions = ActionRegistry()
         self._agent_action_turns = False
         self._cancellation_token: CancellationToken | None = None
         self._released = False
@@ -67,7 +78,12 @@ class SessionAgentRuntime:
                 raise RuntimeError("cancellation token is already bound")
             self._cancellation_token = token
 
-    def bind_authoritative_plan(self, plan: AuthoritativePlan) -> None:
+    def bind_authoritative_plan(
+        self,
+        plan: AuthoritativePlan,
+        *,
+        candidate_limit: int | None = None,
+    ) -> None:
         with self._lock:
             plan.validate()
             if self._authoritative_plan is not None:
@@ -80,17 +96,64 @@ class SessionAgentRuntime:
                     != self._authoritative_plan.original_condition_digest
                 ):
                     raise ValueError("authoritative replan changed original conditions")
+            previous_version = (
+                self._effective_execution_plan.version
+                if self._effective_execution_plan is not None
+                else 0
+            )
+            admitted = admit_router_plan(
+                plan,
+                self.definitions,
+                candidate_limit=candidate_limit,
+            )
+            effective = build_effective_execution_plan(plan, admitted)
+            if previous_version:
+                required = tuple(
+                    item["agent_id"]
+                    for item in self.agents.snapshot()
+                    if item["role"] in {"PrimarySolver", "AlternativeSolver"}
+                )
+                self._replan_barrier = ReplanBarrier(
+                    previous_version,
+                    effective.version,
+                    required,
+                )
             self._authoritative_plan = plan
+            self._host_admitted_plan = admitted
+            self._effective_execution_plan = effective
+
+    @property
+    def effective_execution_plan(self) -> EffectiveExecutionPlan:
+        if self._effective_execution_plan is None:
+            raise RuntimeError("EffectiveExecutionPlan is not bound")
+        return self._effective_execution_plan
+
+    def acknowledge_replan(self, agent_id: str, version: int) -> None:
+        with self._lock:
+            if self._replan_barrier is None:
+                raise RuntimeError("no replan barrier is active")
+            self._replan_barrier.acknowledge(agent_id, version)
+
+    def resume_replan(self) -> None:
+        with self._lock:
+            if self._replan_barrier is None:
+                raise RuntimeError("no replan barrier is active")
+            self._replan_barrier.resume()
+
+    @property
+    def replan_barrier(self) -> dict[str, Any] | None:
+        return self._replan_barrier.to_dict() if self._replan_barrier else None
 
     def publish_router_decision(
         self,
         *,
         route_payload: dict[str, Any],
         plan: AuthoritativePlan,
-    ) -> dict[str, str]:
+        candidate_limit: int | None = None,
+    ) -> dict[str, Any]:
         with self._lock:
             self._ensure_active()
-            self.bind_authoritative_plan(plan)
+            self.bind_authoritative_plan(plan, candidate_limit=candidate_limit)
             router_context = next(
                 (
                     context
@@ -134,7 +197,13 @@ class SessionAgentRuntime:
                 producer_agent_id=router_context.agent_id,
                 task_id=router_context.task_id,
                 turn_id=router_context.turn_id,
-                payload=plan.to_dict(),
+                payload={
+                    "router_plan": plan.to_dict(),
+                    "host_admitted_plan": self._host_admitted_plan.to_dict(),
+                    "effective_execution_plan": (
+                        self.effective_execution_plan.to_dict()
+                    ),
+                },
                 parent_artifact_ids=(route_artifact.artifact_id,),
             )
             for artifact in (route_artifact, plan_artifact):
@@ -168,10 +237,27 @@ class SessionAgentRuntime:
                 ),
                 reply_to_message_id=self.mailbox.latest_message_id(thread_id),
             )
+            if self._replan_barrier is not None:
+                for agent_id in self._replan_barrier.required_agent_ids:
+                    self._replan_barrier.acknowledge(agent_id, plan.version)
+                self._replan_barrier.resume()
             return {
                 "route_artifact_id": route_artifact.artifact_id,
                 "plan_artifact_id": plan_artifact.artifact_id,
                 "plan_message_id": message.message_id,
+                "effective_plan_id": self.effective_execution_plan.plan_id,
+                "effective_plan_version": self.effective_execution_plan.version,
+                "host_admitted_plan_id": self._host_admitted_plan.plan_id,
+                "host_rejected_proposal_ids": list(
+                    self._host_admitted_plan.rejected_proposal_ids
+                ),
+                "effective_branch_ids": [
+                    item.branch_id
+                    for item in self.effective_execution_plan.branches
+                ],
+                "shared_lemma_policy": (
+                    self.effective_execution_plan.shared_lemma_policy
+                ),
             }
 
     def _ensure_agent(
@@ -216,6 +302,12 @@ class SessionAgentRuntime:
             self._ensure_active()
             hinted_role = str(agent_hint).split(":", 1)[0]
             role = hinted_role if hinted_role in self.definitions.roles() else _ROLE_BY_STAGE.get(stage, "PrimarySolver")
+            if (
+                self._replan_barrier is not None
+                and self._replan_barrier.status == "paused"
+                and role in {"PrimarySolver", "AlternativeSolver"}
+            ):
+                raise RuntimeError("Solver Turn blocked by replan ACK barrier")
             descriptor = (
                 str(agent_hint).split(":", 1)[1]
                 if ":" in str(agent_hint)
@@ -235,7 +327,7 @@ class SessionAgentRuntime:
                 mode=requested_mode,
             )
             task_type = _TASK_BY_ROLE[role]
-            plan_id, subgoal_ids, method_family = self._task_plan(role, descriptor)
+            plan_id, plan_version, subgoal_ids, method_family = self._task_plan(role, descriptor)
             artifact_type, message_type, recipient_role = _OUTPUT_BY_ROLE[role]
             mode = instance.mode
             recipient_agent_id = ""
@@ -285,6 +377,7 @@ class SessionAgentRuntime:
                     task_type,
                     instance.agent_id,
                     plan_id=plan_id,
+                    plan_version=plan_version,
                     subgoal_ids=subgoal_ids,
                     method_family=method_family,
                     input_artifact_ids=tuple(input_artifact_ids),
@@ -313,6 +406,7 @@ class SessionAgentRuntime:
                 thread_id,
                 reply_to_message_id,
                 close_thread_after_publish,
+                plan_version,
             )
             self._turn_contexts[turn_id] = context
             self._turns[turn_id] = TurnLineage(instance.agent_id, task_id, turn_id)
@@ -378,17 +472,17 @@ class SessionAgentRuntime:
         self,
         role: str,
         descriptor: str,
-    ) -> tuple[str, tuple[str, ...], str]:
-        plan = self._authoritative_plan
+    ) -> tuple[str, int, tuple[str, ...], str]:
+        plan = self._effective_execution_plan
         if plan is None or role == "RouterPlanner":
-            return "", (), ""
+            return "", 0, (), ""
         proposals = [
-            proposal
-            for proposal in plan.task_proposals
-            if proposal.agent_role == role
+            branch
+            for branch in plan.branches
+            if branch.agent_role == role
         ]
         if not proposals:
-            return plan.plan_id, (), ""
+            return plan.plan_id, plan.version, (), ""
         if descriptor.startswith("new-branch-"):
             used_methods = {
                 context.method_family
@@ -404,14 +498,14 @@ class SessionAgentRuntime:
                 ),
                 proposals[-1],
             )
-            return plan.plan_id, proposal.subgoal_ids, proposal.method_family
+            return plan.plan_id, plan.version, proposal.subgoal_ids, proposal.method_family
         index = 0
         if role == "AlternativeSolver":
             match = re.search(r"(\d+)$", descriptor)
             if match:
                 index = max(0, int(match.group(1)) - 1)
         proposal = proposals[min(index, len(proposals) - 1)]
-        return plan.plan_id, proposal.subgoal_ids, proposal.method_family
+        return plan.plan_id, plan.version, proposal.subgoal_ids, proposal.method_family
 
     def mark_dispatched(self, turn_id: str, *, budget_snapshot: dict[str, Any] | None = None) -> None:
         with self._lock:
@@ -446,9 +540,7 @@ class SessionAgentRuntime:
                 try:
                     parsed = AgentTurnPayloadParser().parse(
                         response,
-                        allowed_actions=self.definitions.get(
-                            context.role
-                        ).allowed_action_types,
+                        allowed_actions=self._actions.actions_for(context.role),
                         truncated=response_truncated,
                         truncation_reason=truncation_reason,
                     )
@@ -640,53 +732,15 @@ class SessionAgentRuntime:
             },
         }
 
-    @staticmethod
     def _action_protocol_route(
+        self,
         context: TurnContext,
         payload: AgentTurnPayload,
     ) -> tuple[str, str, str]:
-        expected = {
-            "continue_reasoning": ("ProgressArtifact", "progress_shared", "RouterPlanner"),
-            "request_lemma": ("ProgressArtifact", "lemma_requested", "LemmaCurator"),
-            "request_tool_check": ("ToolRequestArtifact", "tool_check_requested", "RouterPlanner"),
-            "request_replan": ("ProgressArtifact", "replan_requested", "RouterPlanner"),
-            "publish_candidate": ("CandidateArtifact", "candidate_published", "VerifierSkeptic"),
-            "challenge_candidate": (
-                (
-                    "CritiqueArtifact",
-                    "conflict_escalated",
-                    context.recipient_role,
-                )
-                if context.role == "VerifierSkeptic"
-                else (
-                    "PeerReviewArtifact",
-                    "peer_review_published",
-                    context.recipient_role,
-                )
-            ),
-            "publish_rebuttal": (
-                "RebuttalArtifact",
-                "rebuttal_published",
-                context.recipient_role,
-            ),
-            "abstain": ("CheckpointArtifact", "task_abstained", "RouterPlanner"),
-            "complete": (context.artifact_type, context.message_type, context.recipient_role),
-        }.get(payload.action)
-        if expected is None:
-            raise ValueError("Agent Action is not implemented by the Host")
-        artifact_type, message_type, recipient_role = expected
-        if payload.task_result_type != artifact_type:
-            raise ValueError("Agent Action task_result_type is inconsistent")
-        if payload.outbound_intents:
-            proposed = str(payload.outbound_intents[0].get("recipient_role", ""))
-            if proposed in {
-                "RouterPlanner",
-                "PrimarySolver",
-                "AlternativeSolver",
-                "LemmaCurator",
-                "VerifierSkeptic",
-            }:
-                recipient_role = proposed
+        handler = self._actions.resolve(context, payload)
+        artifact_type = handler.artifact_type
+        message_type = handler.message_type
+        recipient_role = handler.recipient_role
         return artifact_type, message_type, recipient_role
 
     def fail_model_turn(self, turn_id: str, failure_code: str) -> None:

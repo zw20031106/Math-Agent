@@ -64,6 +64,7 @@ from mathforge.harness.orchestration import (
 )
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
 from mathforge.harness.session import create_session
+from mathforge.harness.schemas import MethodFamily
 from mathforge.harness.stages import (
     CandidateStage,
     ContextRouteStage,
@@ -150,6 +151,10 @@ class _AutonomousBranch:
     context_view: Any
     skill_context: str
     state: ReasoningState
+    plan_id: str = ""
+    plan_version: int = 0
+    shared_context_hash: str = ""
+    branch_context_hash: str = ""
     mode: str = "explore"
     status: str = "exploring"
     stop_reason: str = ""
@@ -669,10 +674,7 @@ class MathForgeHarness:
             )
             session.route_plan = router_outcome.route_plan
             session.agent_plan = router_outcome.authoritative_plan
-            router_protocol_refs = session.agent_runtime.publish_router_decision(
-                route_payload=session.route_plan.to_dict(),
-                plan=session.agent_plan,
-            )
+            router_protocol_refs = {}
             if not self._config.enable_alternatives:
                 session.route_plan = replace(session.route_plan, candidate_count=1)
             else:
@@ -754,6 +756,11 @@ class MathForgeHarness:
                     session.route_plan.use_llm_finalizer
                     and allocation.finalizer_reserve > 0
                 ),
+            )
+            router_protocol_refs = session.agent_runtime.publish_router_decision(
+                route_payload=session.route_plan.to_dict(),
+                plan=session.agent_plan,
+                candidate_limit=session.route_plan.candidate_count,
             )
             skill_compositions = (
                 {
@@ -3402,69 +3409,58 @@ class MathForgeHarness:
         solver_contexts: dict[str, Any],
     ) -> tuple[FanoutResult, ReasoningState, dict[str, Any]]:
         tracker = AgentProgressTracker()
-        shared_lemma_context = self._run_initial_llm_lemma_curator(
-            session,
-            trace,
-        )
-        methods = list(dict.fromkeys(session.route_plan.method_families))
-        methods.extend(
-            method
-            for method in method_families_for(
-                session.route_plan.primary_subject,
-                session.route_plan.problem_type,
+        effective = session.agent_runtime.effective_execution_plan
+        solver_specs = list(effective.solver_branches)
+        if not self._config.enable_alternatives:
+            solver_specs = [
+                item for item in solver_specs if item.agent_role == "PrimarySolver"
+            ]
+        all_methods = tuple(item.method_family for item in solver_specs)
+        role_ordinals: dict[str, int] = {}
+        branches: list[_AutonomousBranch] = []
+        for spec in solver_specs:
+            ordinal = role_ordinals.get(spec.agent_role, 0) + 1
+            role_ordinals[spec.agent_role] = ordinal
+            candidate_id = (
+                f"primary-{ordinal}"
+                if spec.agent_role == "PrimarySolver"
+                else f"alternative-{ordinal}"
             )
-            if method not in methods
-        )
-        methods.extend(
-            method
-            for method in method_families_for(
-                "general-math",
-                session.route_plan.problem_type,
-            )
-            if method not in methods
-        )
-        target_count = 2 if self._config.enable_alternatives else 1
-        if len(methods) < target_count:
-            methods.append("independent-direct-check")
-        branches = [
-            _AutonomousBranch(
-                role="PrimarySolver",
-                candidate_id="primary-1",
-                solver=PrimarySolver(self._contracts),
-                method_family=methods[0],
-                forbidden_method_families=tuple(methods[1:target_count]),
-                context_view=solver_contexts.get("PrimarySolver"),
-                skill_context=(
-                    role_skill_contexts.get("PrimarySolver", "")
-                    + shared_lemma_context
-                ),
-                state=ReasoningState.initialize(
-                    session.problem_ir,
-                    strategy=methods[0],
-                ),
-            )
-        ]
-        if target_count > 1:
             branches.append(
                 _AutonomousBranch(
-                    role="AlternativeSolver",
-                    candidate_id="alternative-1",
-                    solver=AlternativeSolver(self._contracts),
-                    method_family=methods[1],
+                    role=spec.agent_role,
+                    candidate_id=candidate_id,
+                    solver=(
+                        PrimarySolver(self._contracts)
+                        if spec.agent_role == "PrimarySolver"
+                        else AlternativeSolver(self._contracts)
+                    ),
+                    method_family=spec.method_family,
                     forbidden_method_families=tuple(
-                        method for method in methods[:target_count] if method != methods[1]
+                        method for method in all_methods if method != spec.method_family
                     ),
-                    context_view=solver_contexts.get("AlternativeSolver"),
-                    skill_context=(
-                        role_skill_contexts.get("AlternativeSolver", "")
-                        + shared_lemma_context
-                    ),
+                    context_view=solver_contexts.get(spec.agent_role),
+                    skill_context=role_skill_contexts.get(spec.agent_role, ""),
                     state=ReasoningState.initialize(
                         session.problem_ir,
-                        strategy=methods[1],
+                        strategy=spec.method_family,
                     ),
+                    plan_id=effective.plan_id,
+                    plan_version=effective.version,
+                    shared_context_hash=spec.shared_context_hash,
+                    branch_context_hash=spec.branch_context_hash,
                 )
             )
+        trace.add(
+            "effective_execution_plan_dispatched",
+            plan_id=effective.plan_id,
+            plan_version=effective.version,
+            branches=[item.to_dict() for item in solver_specs],
+            shared_lemma_policy=effective.shared_lemma_policy,
+            execution_matches_effective_plan=(
+                len(branches) == len(effective.solver_branches)
+            ),
+        )
 
         action_turns = 0
         progress_turns = 0
@@ -3474,6 +3470,30 @@ class MathForgeHarness:
             for branch in branches:
                 if branch.status != "exploring":
                     continue
+                current_plan = session.agent_runtime.effective_execution_plan
+                if branch.plan_version != current_plan.version:
+                    ordinal = int(branch.candidate_id.rsplit("-", 1)[-1]) - 1
+                    role_specs = [
+                        item
+                        for item in current_plan.solver_branches
+                        if item.agent_role == branch.role
+                    ]
+                    if ordinal >= len(role_specs):
+                        branch.status = "ready_to_synthesize"
+                        branch.stop_reason = "branch_removed_by_effective_replan"
+                        continue
+                    spec = role_specs[ordinal]
+                    branch.plan_id = current_plan.plan_id
+                    branch.plan_version = current_plan.version
+                    branch.method_family = spec.method_family
+                    branch.branch_context_hash = spec.branch_context_hash
+                    trace.add(
+                        "branch_replan_acknowledged",
+                        candidate_id=branch.candidate_id,
+                        plan_id=current_plan.plan_id,
+                        plan_version=current_plan.version,
+                        method_family=spec.method_family,
+                    )
                 pending_candidates = sum(
                     item.status not in {"abstained", "candidate_published"}
                     for item in branches
@@ -3794,6 +3814,13 @@ class MathForgeHarness:
                     role=branch.role,
                 )
 
+        if len(candidates) >= 2:
+            self._run_initial_llm_lemma_curator(session, trace)
+            trace.add(
+                "post_backbone_shared_context_released",
+                candidate_ids=[item.candidate_id for item in candidates[:2]],
+                context_independence_preserved=True,
+            )
         primary_state = branches[0].state
         return (
             FanoutResult(candidates, failures),
@@ -3992,6 +4019,20 @@ class MathForgeHarness:
                         "source_turn_id",
                         "candidate_artifact_id",
                     )
+                }, provenance={
+                    "branch_id": candidate.candidate_id,
+                    "plan_id": session.agent_runtime.effective_execution_plan.plan_id,
+                    "plan_version": session.agent_runtime.effective_execution_plan.version,
+                    "skill_set_hash": self._skills.fingerprint,
+                    "shared_context_hash": "",
+                    "branch_context_hash": semantic_fingerprint(
+                        {
+                            "candidate_id": candidate.candidate_id,
+                            "method": candidate.planned_method_family,
+                        }
+                    ),
+                    "lemma_ids": (),
+                    "tool_evidence_refs": (),
                 })
             except (KeyError, ValueError) as error:
                 trace.add(
@@ -4000,11 +4041,14 @@ class MathForgeHarness:
                     failure_code=type(error).__name__,
                 )
         independent = list(pool.independent_entries())
+        viable = list(pool.viable_entries())
         trace.add(
             "candidate_pool_initialized",
             entries=pool.snapshot(),
             submitted_count=len(solver_candidates),
             independent_count=len(independent),
+            viable_count=len(viable),
+            diversity_quota_met=len(independent) >= 2,
             structural_independence_gate=True,
             candidate_isolation_released=True,
             incremental=incremental,
@@ -4016,7 +4060,7 @@ class MathForgeHarness:
                     for candidate in solver_candidates
                     if candidate.candidate_id == entry.candidate_id
                 ): entry
-                for entry in independent
+                for entry in viable
             }
             review_entries = (
                 by_role.get("PrimarySolver"),
@@ -4024,7 +4068,7 @@ class MathForgeHarness:
             )
         else:
             independent_by_id = {
-                entry.candidate_id: entry for entry in independent
+                entry.candidate_id: entry for entry in viable
             }
             review_entries = tuple(
                 independent_by_id.get(candidate_id)
@@ -4165,6 +4209,10 @@ class MathForgeHarness:
                 target.candidate_id,
                 outcome.record.rebuttal_id,
                 conceded_finding_ids=outcome.record.conceded_finding_ids,
+                finding_severities={
+                    item.finding_id: item.severity
+                    for item in review.finding_items
+                },
             )
             trace.add(
                 "rebuttal_completed",
@@ -4425,6 +4473,7 @@ class MathForgeHarness:
             refs = session.agent_runtime.publish_router_decision(
                 route_payload=session.route_plan.to_dict(),
                 plan=session.agent_plan,
+                candidate_limit=session.route_plan.candidate_count,
             )
         except Exception as error:
             trace.add(
@@ -4920,20 +4969,18 @@ class MathForgeHarness:
             for item in session.candidates
             if item.role in {"PrimarySolver", "AlternativeSolver"}
         }
-        if session.candidate_pool is not None:
-            prior_method_families.update(
-                str(item.get("method_signature", {}).get("method_family", ""))
-                .strip()
-                .replace(" ", "-")
-                for item in session.candidate_pool.snapshot()
-            )
-            prior_method_families.discard("")
         methods = [
             method
             for method in session.route_plan.method_families
             if method not in prior_method_families
         ]
-        method = methods[0] if methods else "independent-new-branch"
+        if not methods:
+            methods = [
+                item.value
+                for item in MethodFamily
+                if item.value not in prior_method_families
+            ]
+        method = methods[0]
         context_view = self._build_role_context(
             session,
             blackboard,

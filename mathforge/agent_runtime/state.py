@@ -68,6 +68,7 @@ class AgentTask:
     output_artifact_ids: tuple[str, ...] = ()
     created_sequence: int = 0
     plan_id: str = ""
+    plan_version: int = 0
     subgoal_ids: tuple[str, ...] = ()
     method_family: str = ""
 
@@ -159,6 +160,7 @@ class AgentTaskRegistry:
         *,
         parent_task_id: str = "",
         plan_id: str = "",
+        plan_version: int = 0,
         subgoal_ids: tuple[str, ...] = (),
         method_family: str = "",
         input_artifact_ids: tuple[str, ...] = (),
@@ -182,6 +184,7 @@ class AgentTaskRegistry:
                 parent_task_id=parent_task_id,
                 created_sequence=self._sequence,
                 plan_id=str(plan_id),
+                plan_version=int(plan_version),
                 subgoal_ids=tuple(subgoal_ids),
                 method_family=str(method_family),
                 input_artifact_ids=tuple(input_artifact_ids),

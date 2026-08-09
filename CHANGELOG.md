@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Completed the 2026-08-09 remediation Phase 5 Router/Host/Agent governance
+  work. RouterIntent and the compatibility AuthoritativePlan now pass through
+  explicit HostAdmittedPlan and EffectiveExecutionPlan layers, with fanout,
+  Agent tasks, model-call lineage, plan versions, and replan ACK barriers tied
+  to the effective plan. Added a unified least-privilege ActionRegistry,
+  branch-local override validation, post-backbone-only shared provisional
+  lemmas, four-dimensional Candidate independence and public branch
+  provenance. Non-independent Candidates remain viable corroboration rather
+  than being rejected, and concessions request severity-scoped repair unless
+  later evidence confirms a global critical failure.
 - Completed the 2026-08-09 remediation Phase 4 standard Skill Package and
   Math Skill V3 work. Added a read-only V3 package schema and loader alongside
   the validated V2 compatibility adapter, 51 high-frequency method packages,

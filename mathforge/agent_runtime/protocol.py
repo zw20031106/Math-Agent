@@ -328,6 +328,7 @@ class TurnContext:
     thread_id: str = ""
     reply_to_message_id: str = ""
     close_thread_after_publish: bool = False
+    plan_version: int = 0
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -349,6 +350,7 @@ class TurnContext:
             "thread_id": self.thread_id,
             "reply_to_message_id": self.reply_to_message_id,
             "close_thread_after_publish": self.close_thread_after_publish,
+            "plan_version": self.plan_version,
         }
 
 

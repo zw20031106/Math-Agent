@@ -127,7 +127,7 @@ def test_router_intent_causally_configures_host_plan_and_solver():
     assert route["method_families"][0] == "spectral"
     assert route["route_artifact_id"] and route["plan_artifact_id"]
     assert "Required core method family: spectral." in client.solver_prompts[0]
-    assert solver_call["plan_id"] == route["plan_id"]
+    assert solver_call["plan_id"] == route["effective_plan_id"]
     assert solver_call["subgoal_ids"] == ["sg-1"]
     assert solver_call["planned_method_family"] == "spectral"
     artifact_types = {item["artifact_type"] for item in protocol["artifacts"]}
@@ -250,13 +250,18 @@ def test_replan_versions_plan_and_preserves_conditions_and_verified_facts():
         agent_hint="PrimarySolver:primary-1",
     )
     runtime.bind_authoritative_plan(second.authoritative_plan)
+    barrier = runtime.replan_barrier
+    assert barrier is not None and barrier["status"] == "paused"
+    for agent_id in barrier["required_agent_ids"]:
+        runtime.acknowledge_replan(agent_id, second.authoritative_plan.version)
+    runtime.resume_replan()
     second_task = runtime.begin_model_turn(
         stage="primary",
         turn_kind="solver_candidate_standard",
         agent_hint="PrimarySolver:primary-1",
     )
     assert second_task.task_id != first_task.task_id
-    assert second_task.plan_id == second.authoritative_plan.plan_id
+    assert second_task.plan_id == runtime.effective_execution_plan.plan_id
 
 
 def test_production_profiles_cannot_disable_or_starve_router():

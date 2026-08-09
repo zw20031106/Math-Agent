@@ -105,6 +105,10 @@ class IndependenceAssessment:
     score: int
     reason_codes: tuple[str, ...]
     compared_candidate_id: str = ""
+    execution_independence: bool = True
+    method_independence: bool = True
+    context_independence: bool = True
+    evidence_independence: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -129,6 +133,18 @@ class CandidatePoolEntry:
     peer_review_ids: tuple[str, ...] = ()
     rebuttal_ids: tuple[str, ...] = ()
     conceded_finding_ids: tuple[str, ...] = ()
+    branch_id: str = ""
+    plan_id: str = ""
+    plan_version: int = 0
+    skill_set_hash: str = ""
+    shared_context_hash: str = ""
+    branch_context_hash: str = ""
+    lemma_ids: tuple[str, ...] = ()
+    tool_evidence_refs: tuple[str, ...] = ()
+    execution_independence: bool = True
+    method_independence: bool = True
+    context_independence: bool = True
+    evidence_independence: bool = True
 
     def __post_init__(self) -> None:
         if self.status not in _CANDIDATE_STATES:
@@ -146,6 +162,8 @@ class CandidatePoolEntry:
             "peer_review_ids",
             "rebuttal_ids",
             "conceded_finding_ids",
+            "lemma_ids",
+            "tool_evidence_refs",
         ):
             payload[name] = list(payload[name])
         return payload
@@ -165,11 +183,19 @@ class CandidatePool:
         author_agent_id: str,
         source_turn_id: str,
         candidate_artifact_id: str,
+        provenance: dict[str, Any] | None = None,
     ) -> CandidatePoolEntry:
         if candidate.candidate_id in self._entries:
             raise ValueError("candidate version is already registered")
+        provenance = dict(provenance or {})
         signature = MethodSignature.from_candidate(candidate)
-        assessment = self._assess(candidate, signature, author_agent_id, source_turn_id)
+        assessment = self._assess(
+            candidate,
+            signature,
+            author_agent_id,
+            source_turn_id,
+            provenance,
+        )
         entry = CandidatePoolEntry(
             candidate_id=candidate.candidate_id,
             author_agent_id=author_agent_id,
@@ -177,13 +203,27 @@ class CandidatePool:
             candidate_artifact_id=candidate_artifact_id,
             method_signature=signature,
             version=candidate.version,
-            status="submitted" if assessment.independent else "rejected",
+            status="submitted",
             independent=assessment.independent,
             duplicate_of=(
                 "" if assessment.independent else assessment.compared_candidate_id
             ),
             independence_score=assessment.score,
             independence_reason_codes=assessment.reason_codes,
+            branch_id=str(provenance.get("branch_id", candidate.candidate_id)),
+            plan_id=str(provenance.get("plan_id", "")),
+            plan_version=int(provenance.get("plan_version", 0)),
+            skill_set_hash=str(provenance.get("skill_set_hash", "")),
+            shared_context_hash=str(provenance.get("shared_context_hash", "")),
+            branch_context_hash=str(provenance.get("branch_context_hash", "")),
+            lemma_ids=tuple(str(item) for item in provenance.get("lemma_ids", ())),
+            tool_evidence_refs=tuple(
+                str(item) for item in provenance.get("tool_evidence_refs", ())
+            ),
+            execution_independence=assessment.execution_independence,
+            method_independence=assessment.method_independence,
+            context_independence=assessment.context_independence,
+            evidence_independence=assessment.evidence_independence,
         )
         self._entries[candidate.candidate_id] = entry
         self._candidates[candidate.candidate_id] = deepcopy(candidate)
@@ -195,6 +235,7 @@ class CandidatePool:
         signature: MethodSignature,
         author_agent_id: str,
         source_turn_id: str,
+        provenance: dict[str, Any],
     ) -> IndependenceAssessment:
         if not self._entries:
             return IndependenceAssessment(True, 4, ("first_candidate",))
@@ -237,10 +278,32 @@ class CandidatePool:
                 score += 1
             elif same_answer:
                 reasons.append("semantic_candidate_duplicate")
-            independent = (
+            execution_independence = (
                 author_agent_id != other.author_agent_id
                 and source_turn_id != other.source_turn_id
-                and not (same_answer and structural_same >= 3)
+            )
+            method_independence = (
+                signature.method_family != other.method_signature.method_family
+                and structural_same < 3
+            )
+            shared_context_hash = str(provenance.get("shared_context_hash", ""))
+            context_independence = not (
+                shared_context_hash
+                and shared_context_hash == other.shared_context_hash
+            )
+            evidence_refs = {
+                str(item) for item in provenance.get("tool_evidence_refs", ())
+            }
+            evidence_independence = not bool(
+                evidence_refs.intersection(other.tool_evidence_refs)
+            )
+            independent = all(
+                (
+                    execution_independence,
+                    method_independence,
+                    context_independence,
+                    evidence_independence,
+                )
             )
             if not independent:
                 return IndependenceAssessment(
@@ -248,6 +311,10 @@ class CandidatePool:
                     score,
                     tuple(dict.fromkeys(reasons)),
                     other_id,
+                    execution_independence,
+                    method_independence,
+                    context_independence,
+                    evidence_independence,
                 )
         return IndependenceAssessment(True, 4, ("structurally_distinct",))
 
@@ -274,14 +341,26 @@ class CandidatePool:
         rebuttal_id: str,
         *,
         conceded_finding_ids: tuple[str, ...] = (),
+        finding_severities: dict[str, str] | None = None,
     ) -> CandidatePoolEntry:
         entry = self._entries[candidate_id]
         conceded = tuple(
             dict.fromkeys((*entry.conceded_finding_ids, *conceded_finding_ids))
         )
+        severities = {
+            finding_id: str((finding_severities or {}).get(finding_id, "warning"))
+            for finding_id in conceded_finding_ids
+        }
+        status = entry.status
+        if any(value in {"error", "critical"} for value in severities.values()):
+            status = "repair_requested"
+        elif conceded_finding_ids:
+            status = "challenged"
+        else:
+            status = "rebutted"
         return self._update(
             candidate_id,
-            status="rejected" if conceded else "rebutted",
+            status=status,
             rebuttal_ids=tuple(dict.fromkeys((*entry.rebuttal_ids, rebuttal_id))),
             conceded_finding_ids=conceded,
         )
@@ -304,12 +383,18 @@ class CandidatePool:
             if entry.independent and entry.status != "rejected"
         )
 
+    def viable_entries(self) -> tuple[CandidatePoolEntry, ...]:
+        return tuple(
+            entry
+            for entry in self._entries.values()
+            if entry.status not in {"rejected", "superseded", "incomplete"}
+        )
+
     def active_candidate_ids(self) -> tuple[str, ...]:
         return tuple(
             entry.candidate_id
             for entry in self._entries.values()
-            if entry.independent
-            and entry.status not in {"rejected", "superseded", "incomplete"}
+            if entry.status not in {"rejected", "superseded", "incomplete"}
         )
 
     def snapshot(self) -> list[dict[str, Any]]:

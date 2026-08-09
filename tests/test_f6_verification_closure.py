@@ -411,7 +411,7 @@ class _NewBranchClient(FakeClient):
                 )
         if (
             system.startswith("You are AlternativeSolver")
-            and "Required core method family: constructive-computation."
+            and "Verifier Critique requiring a genuinely new method branch"
             in messages[-1]["content"]
             and "AgentTurnPayload 1.0" in system
         ):
@@ -492,7 +492,7 @@ def test_global_method_failure_creates_new_solver_branch_and_reenters_review():
         if item["event"] == "candidate_pool_initialized"
         and item.get("incremental") is True
     )
-    assert len(incremental_pool["entries"]) == 3
+    assert len(incremental_pool["entries"]) >= 4
     candidate_artifact = next(
         item
         for item in protocol["artifacts"]

@@ -53,8 +53,10 @@ class AgentRegistry:
 
     @classmethod
     def default(cls) -> "AgentRegistry":
+        from mathforge.agent_runtime.action_registry import ActionRegistry
+
         common_messages = tuple(sorted(MESSAGE_TYPES))
-        common_actions = tuple(sorted(ACTION_TYPES))
+        actions = ActionRegistry()
         common_read = tuple(sorted(ARTIFACT_TYPES))
         return cls(
             (
@@ -65,7 +67,7 @@ class AgentRegistry:
                     common_messages,
                     common_read,
                     ("RouteArtifact", "PlanArtifact", "ProgressArtifact", "CheckpointArtifact"),
-                    common_actions,
+                    tuple(sorted(actions.actions_for("RouterPlanner"))),
                     "router_planner",
                 ),
                 _definition(
@@ -75,7 +77,7 @@ class AgentRegistry:
                     common_messages,
                     common_read,
                     ("ProgressArtifact", "CandidateArtifact", "ToolRequestArtifact", "PeerReviewArtifact", "RebuttalArtifact", "CheckpointArtifact"),
-                    common_actions,
+                    tuple(sorted(actions.actions_for("PrimarySolver"))),
                     "primary_solver",
                 ),
                 _definition(
@@ -85,7 +87,7 @@ class AgentRegistry:
                     common_messages,
                     common_read,
                     ("ProgressArtifact", "CandidateArtifact", "ToolRequestArtifact", "PeerReviewArtifact", "RebuttalArtifact", "CheckpointArtifact"),
-                    common_actions,
+                    tuple(sorted(actions.actions_for("AlternativeSolver"))),
                     "alternative_solver",
                 ),
                 _definition(
@@ -95,7 +97,7 @@ class AgentRegistry:
                     common_messages,
                     common_read,
                     ("LemmaArtifact", "ProgressArtifact", "CheckpointArtifact"),
-                    common_actions,
+                    tuple(sorted(actions.actions_for("LemmaCurator"))),
                     "lemma_curator",
                 ),
                 _definition(
@@ -105,7 +107,7 @@ class AgentRegistry:
                     common_messages,
                     common_read,
                     ("PeerReviewArtifact", "CritiqueArtifact", "AuditArtifact", "ProgressArtifact", "CheckpointArtifact"),
-                    common_actions,
+                    tuple(sorted(actions.actions_for("VerifierSkeptic"))),
                     "verifier_skeptic",
                 ),
                 _definition(
@@ -115,7 +117,7 @@ class AgentRegistry:
                     common_messages,
                     common_read,
                     ("RepairPatchArtifact", "RepairResultArtifact", "CandidateArtifact", "ProgressArtifact", "CheckpointArtifact"),
-                    common_actions,
+                    tuple(sorted(actions.actions_for("RepairAgent"))),
                     "repair",
                 ),
                 _definition(
@@ -125,7 +127,7 @@ class AgentRegistry:
                     common_messages,
                     common_read,
                     ("DecisionArtifact", "CandidateArtifact", "ProgressArtifact", "CheckpointArtifact"),
-                    common_actions,
+                    tuple(sorted(actions.actions_for("LLMFinalizer"))),
                     "finalizer",
                 ),
             )
