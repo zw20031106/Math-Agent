@@ -3,9 +3,21 @@
 from mathforge.runtime_flows.agent_flow import AgentEventProjector
 from mathforge.runtime_flows.final_flow import FinalProofStatusService
 from mathforge.runtime_flows.session_flow import PublicContractGuard
+from mathforge.runtime_flows.scheduler_flow import (
+    ClosureAdmission,
+    SchedulerFlow,
+    TaskGraph,
+    TaskNode,
+    WaveOutcome,
+)
 
 __all__ = [
     "AgentEventProjector",
     "FinalProofStatusService",
     "PublicContractGuard",
+    "ClosureAdmission",
+    "SchedulerFlow",
+    "TaskGraph",
+    "TaskNode",
+    "WaveOutcome",
 ]

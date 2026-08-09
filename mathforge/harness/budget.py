@@ -789,6 +789,7 @@ class CallBudget:
                     self.final_response_counting_mode
                 ),
                 "model_call_records": self._call_ledger.snapshot(),
+                "call_accounting": self._call_ledger.accounting_snapshot(),
                 "max_claims": self.max_claims,
                 "used_claims": self.used_claims,
                 "max_tool_calls": self.max_tool_calls,

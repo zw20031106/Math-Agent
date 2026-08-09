@@ -74,7 +74,7 @@
         "version": "effective-agent-governance-1-phase5-phase8-closure",
         "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-        "sha256": "3c0ec20bbc5707fe4a4d360a91f90cbfce2c95ec6da6c45ebf75d528ffc01615"
+      "sha256": "ee49cfa2b9364496f7476a2ad94149105a1233436ded0f3bd1396ec1c1c46042"
     },
     {
       "id": "prompt-contracts",
@@ -221,7 +221,7 @@
       "version": "verification-closure-17-phase8",
       "engineering_reviewer": "codex-0809-phase7-verification-audit",
         "review_date": "2026-08-09",
-      "sha256": "a7411dd4c4501d15ed68d959ddf52666df99e9d9560f5b3a04a406d81206886a"
+      "sha256": "ffa1fcda25538574cfe2467a330d54e98ba7be1c1301e4afd39f971e4eb6a647"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -251,7 +251,7 @@
       "version": "phase-f6-agent-protocol-8-phase8",
       "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "24f845ed36b9e64f8452621ea768b17aa214ebdc538fdbcd23cbd86d3a30b53a"
+      "sha256": "b65dc409bf095bf053d7b7eacaa4b6317ab9c26b45a07e2d6d7765cd539c59b6"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -274,7 +274,7 @@
       "version": "phase-f7-runtime-7-phase8-closure",
       "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "af9f2bb8108f7bb4ce066acf834db1b6ffb0174f023f34859d89afaa6cd4b1ab"
+      "sha256": "26c5fcffa1abdd298d1e337114a52253f427d140a67c8cdabc5d357899b05c54"
     },
     {
       "id": "reviewed-method-cards",
@@ -345,7 +345,7 @@
       "version": "provider-controls-3-phase8-communication",
       "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "f6970f667f436f9869485e02be0cf9baec793b86e00ef25e27e2f183f9148b81"
+      "sha256": "e405eebdf041aa2efc838361b980d8d683960a1f106fe276a679bfdf2d5440dc"
     },
     {
       "id": "phase7-live-calibration",
@@ -395,7 +395,28 @@
       "version": "review-repair-communication-audit-2.0-phase8",
       "engineering_reviewer": "codex-0809-phase8-closure-audit",
       "review_date": "2026-08-09",
-      "sha256": "d206f978195279a680c07f59dccd3dad9d0a380fbed6cec4380d8abe1d83c482"
+      "sha256": "4801e5b31bb78a1db11d386cbdfd7e9f80d678f90dd5a69d61e7be0872ba80cd"
+    },
+    {
+      "id": "phase9-scheduler-runtime",
+      "kind": "file_set",
+      "paths": [
+        "CHANGELOG.md",
+        "docs/PHASE_9_SCHEDULER_RUNTIME_EXECUTION_REPORT_2026-08-09.md",
+        "mathforge/agent_runtime/call_ledger.py",
+        "mathforge/agent_runtime/resource_governor.py",
+        "mathforge/harness/budget.py",
+        "mathforge/harness/provider.py",
+        "mathforge/runtime.py",
+        "mathforge/runtime_flows/__init__.py",
+        "mathforge/runtime_flows/scheduler_flow.py",
+        "tests/test_phase9_scheduler_runtime.py"
+      ],
+      "expected_count": 10,
+      "version": "scheduler-runtime-2.0-phase9",
+      "engineering_reviewer": "codex-0809-phase9-scheduler-audit",
+      "review_date": "2026-08-09",
+      "sha256": "8203d32da8cf6c999d1cd42f2383c9fff1bb788481a2d85b7e68d5bafadfa259"
     },
     {
       "id": "router-e5-gold",

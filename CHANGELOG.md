@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Completed the 2026-08-09 remediation Phase 9 Scheduler / Runtime
+  modularization work. Added a validated TaskNode DAG with dependency and
+  cycle checks, critical-path p95 calculation, bounded Solver and Review
+  waves, and stateless atomic closure admission for repair/reverification.
+  The autonomous Primary/Alternative candidate synthesis and bidirectional
+  Solver review paths now use the extracted SchedulerFlow while the global
+  provider continues to enforce case concurrency 3, model concurrency 6,
+  per-Agent inflight 1, and 200 RPM. Model-call records now carry action and
+  scheduler task identities and expose deterministic accounting grouped by
+  role, action, task, and terminal status. Added Phase 9 gate coverage for
+  DAG integrity, parallel overlap, closure isolation, call accounting, and
+  frozen resource boundaries.
 - Completed the 2026-08-09 remediation Phase 8 Review / Repair /
   Communication / Audit work. Concrete Message recipients are now reused by
   downstream model Turns, consumed Artifact references produce bounded

@@ -190,3 +190,27 @@ class ResourceGovernor:
         if normalized == "finalizer":
             return "finalization"
         return "speculative_exploration"
+
+    @staticmethod
+    def action_category_for_turn(stage: str, turn_kind: str) -> str:
+        normalized = str(turn_kind or stage)
+        if normalized in {"router", "replan"}:
+            return "replan"
+        if normalized in {
+            "solver_candidate_standard",
+            "solver_candidate_proof",
+            "solver_compact_synthesis",
+            "emergency_direct_answer",
+        }:
+            return "candidate_completion"
+        if normalized in {"peer_review", "respond_to_review"}:
+            return "peer_review_response"
+        if normalized == "verifier":
+            return "verification"
+        if normalized == "repair":
+            return "repair"
+        if normalized == "final_audit":
+            return "final_audit"
+        if normalized == "finalizer":
+            return "finalization"
+        return "speculative_exploration"

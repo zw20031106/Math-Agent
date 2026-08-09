@@ -34,8 +34,8 @@ from mathforge.harness.effective_config import (
     build_effective_config_snapshot,
 )
 from mathforge.harness.model_policy import (
+    stage_p95_seconds,
     stage_sequence_feasible,
-    stage_sequence_reserve_seconds,
 )
 from mathforge.harness.reasoning_state import (
     REASONING_STATE_MAX_TOKENS,
@@ -142,6 +142,9 @@ from mathforge.runtime_flows import (
     AgentEventProjector,
     FinalProofStatusService,
     PublicContractGuard,
+    SchedulerFlow,
+    TaskGraph,
+    TaskNode,
 )
 
 
@@ -318,6 +321,9 @@ class MathForgeHarness:
         self._adaptive_fanout = AdaptiveFanoutPolicy()
         self._final_proof_status = FinalProofStatusService()
         self._agent_event_projector = AgentEventProjector()
+        self._scheduler_flow = SchedulerFlow(
+            max_workers=min(2, self._config.model_max_concurrency)
+        )
         self._reasoning_state_compressor = ReasoningStateCompressor(
             self._context_budget.token_counter
         )
@@ -2036,25 +2042,39 @@ class MathForgeHarness:
                     )
                 )
             atomic_repair_budget = session.budget.snapshot()
-            repair_pair_time_reserve = stage_sequence_reserve_seconds(
-                ("repair", "verifier"),
-                session.budget.model_queue_budget_seconds,
-            )
-            repair_pair_time_available = stage_sequence_feasible(
-                ("repair", "verifier"),
+            closure_admission = self._scheduler_flow.admit_closure(
+                (
+                    TaskNode(
+                        "post-verifier-repair",
+                        "RepairAgent",
+                        "repair",
+                        "post-verifier-repair",
+                        closure_value=1,
+                    ),
+                    TaskNode(
+                        "post-repair-verification",
+                        "VerifierSkeptic",
+                        "verifier",
+                        "post-repair-verification",
+                        dependencies=("post-verifier-repair",),
+                        closure_value=1,
+                    ),
+                ),
+                remaining_calls=atomic_repair_budget.remaining_calls,
                 remaining_seconds=(
                     session.budget.deadline.remaining_for_model_call()
                 ),
-                maximum_queue_seconds=(
-                    session.budget.model_queue_budget_seconds
-                ),
+                maximum_queue_seconds=session.budget.model_queue_budget_seconds,
+            )
+            repair_pair_time_reserve = closure_admission.required_seconds
+            repair_pair_time_available = (
+                closure_admission.reason != "insufficient_time_capacity"
             )
             repair_pair_available = (
-                atomic_repair_budget.remaining_calls >= 2
+                closure_admission.admitted
                 and atomic_repair_budget.stage_remaining.get("repair", 0) >= 1
                 and atomic_repair_budget.stage_remaining.get("verifier", 0) >= 1
                 and atomic_repair_budget.exploration_open
-                and repair_pair_time_available
             )
             trace.add(
                 "repair_actionability_gate",
@@ -2066,6 +2086,7 @@ class MathForgeHarness:
                     session.budget.deadline.remaining_for_model_call(),
                     6,
                 ),
+                closure_transaction=closure_admission.to_dict(),
                 budget=atomic_repair_budget.to_dict(),
             )
             if (
@@ -3489,6 +3510,147 @@ class MathForgeHarness:
         )
         return result
 
+    def _build_scheduler_task_graph(
+        self,
+        plan_id: str,
+        branches: list[_AutonomousBranch],
+        response_mode: str,
+    ) -> TaskGraph:
+        solver_nodes = tuple(
+            TaskNode(
+                node_id=f"solve:{branch.candidate_id}",
+                role=branch.role,
+                action=(
+                    "solver_candidate_proof"
+                    if response_mode == "proof_full"
+                    else "solver_candidate_standard"
+                ),
+                task_id=f"solve:{branch.candidate_id}",
+                dependencies=("router",),
+                priority=0,
+                expected_p50=stage_p95_seconds("solver_progress") * 0.5,
+                expected_p95=stage_p95_seconds(
+                    "solver_candidate_proof"
+                    if response_mode == "proof_full"
+                    else "solver_candidate_standard"
+                ),
+                token_cap=int(self._config.primary_max_tokens),
+                closure_value=1,
+                optional=False,
+                parallel_group="solver-wave",
+            )
+            for branch in branches
+        )
+        solver_ids = tuple(node.node_id for node in solver_nodes)
+        review_nodes = tuple(
+            TaskNode(
+                node_id=f"review:{branch.candidate_id}",
+                role=(
+                    "AlternativeSolver"
+                    if branch.role == "PrimarySolver"
+                    else "PrimarySolver"
+                ),
+                action="peer_review",
+                task_id=f"review:{branch.candidate_id}",
+                dependencies=solver_ids,
+                priority=1,
+                expected_p50=stage_p95_seconds("peer_review") * 0.5,
+                expected_p95=stage_p95_seconds("peer_review"),
+                token_cap=int(self._config.primary_max_tokens),
+                closure_value=1,
+                optional=True,
+                parallel_group="review-wave",
+            )
+            for branch in branches[:2]
+        )
+        review_ids = tuple(node.node_id for node in review_nodes)
+        verifier_dependencies = review_ids or solver_ids
+        verifier = TaskNode(
+            "verification",
+            "VerifierSkeptic",
+            "verifier",
+            "verification",
+            dependencies=verifier_dependencies,
+            priority=2,
+            expected_p50=stage_p95_seconds("verifier") * 0.5,
+            expected_p95=stage_p95_seconds("verifier"),
+            token_cap=int(self._config.primary_max_tokens),
+            closure_value=2,
+            optional=True,
+        )
+        repair = TaskNode(
+            "repair",
+            "RepairAgent",
+            "repair",
+            "repair",
+            dependencies=(verifier.node_id,),
+            priority=3,
+            expected_p50=stage_p95_seconds("repair") * 0.5,
+            expected_p95=stage_p95_seconds("repair"),
+            token_cap=int(self._config.primary_max_tokens),
+            closure_value=2,
+            optional=True,
+        )
+        reverify = TaskNode(
+            "reverify",
+            "VerifierSkeptic",
+            "verifier",
+            "reverify",
+            dependencies=(repair.node_id,),
+            priority=3,
+            expected_p50=stage_p95_seconds("verifier") * 0.5,
+            expected_p95=stage_p95_seconds("verifier"),
+            token_cap=int(self._config.primary_max_tokens),
+            closure_value=2,
+            optional=True,
+        )
+        audit = TaskNode(
+            "final-audit",
+            "VerifierSkeptic",
+            "final_audit",
+            "final-audit",
+            dependencies=(reverify.node_id,),
+            priority=4,
+            expected_p50=stage_p95_seconds("verifier") * 0.5,
+            expected_p95=stage_p95_seconds("verifier"),
+            token_cap=int(self._config.primary_max_tokens),
+            closure_value=3,
+            optional=True,
+        )
+        finalizer = TaskNode(
+            "finalization",
+            "DeterministicHost",
+            "finalization",
+            "finalization",
+            dependencies=(audit.node_id,),
+            priority=5,
+            expected_p50=0.01,
+            expected_p95=0.05,
+            closure_value=4,
+        )
+        return TaskGraph(
+            f"scheduler:{plan_id}",
+            (
+                TaskNode(
+                    "router",
+                    "RouterPlanner",
+                    "router",
+                    "router",
+                    expected_p50=stage_p95_seconds("router") * 0.5,
+                    expected_p95=stage_p95_seconds("router"),
+                    token_cap=int(self._config.primary_max_tokens),
+                    closure_value=1,
+                ),
+                *solver_nodes,
+                *review_nodes,
+                verifier,
+                repair,
+                reverify,
+                audit,
+                finalizer,
+            ),
+        )
+
     def _run_autonomous_solver_fanout(
         self,
         session,
@@ -3551,6 +3713,20 @@ class MathForgeHarness:
             shared_lemma_policy=effective.shared_lemma_policy,
             execution_matches_effective_plan=(
                 len(branches) == len(effective.solver_branches)
+            ),
+        )
+        scheduler_graph = self._build_scheduler_task_graph(
+            effective.plan_id,
+            branches,
+            session.problem_ir.response_mode,
+        )
+        trace.add(
+            "scheduler_task_graph_created",
+            **scheduler_graph.to_dict(),
+            release_threshold_seconds=self._config.hard_deadline_seconds,
+            p95_within_release_threshold=(
+                scheduler_graph.critical_path_p95
+                <= self._config.hard_deadline_seconds
             ),
         )
 
@@ -3768,6 +3944,7 @@ class MathForgeHarness:
         candidate_synthesis_attempts = 0
         compact_recoveries = 0
         proof_degradations = 0
+        synthesis_tasks = []
         for branch in branches:
             if branch.status == "abstained":
                 failures.append(
@@ -3787,124 +3964,139 @@ class MathForgeHarness:
                 ),
                 autonomous=True,
             )
-            try:
-                compressed = self._compress_reasoning_state(branch.state, trace)
+
+            def synthesize(active_branch=branch):
+                compressed = self._compress_reasoning_state(active_branch.state, trace)
                 request = SolverRequest(
-                    branch.candidate_id,
+                    active_branch.candidate_id,
                     session.problem_ir,
                     session.route_plan,
-                    branch.skill_context
+                    active_branch.skill_context
                     + self._autonomous_budget_context(
                         session.budget.snapshot()
                     ),
-                    branch.method_family,
-                    branch.forbidden_method_families,
-                    branch.context_view,
+                    active_branch.method_family,
+                    active_branch.forbidden_method_families,
+                    active_branch.context_view,
                     compressed.prompt_json,
                 )
-                turn = self._solver_executor.execute_autonomous_candidate(
-                    branch.solver,
-                    request,
-                    session.budget,
-                    temperature=(
-                        self._config.primary_temperature
-                        if branch.role == "PrimarySolver"
-                        else max(self._config.primary_temperature, 0.35)
-                    ),
-                    max_tokens=self._config.primary_max_tokens,
-                )
+                compact_recovery = False
+                proof_degradation = False
+                try:
+                    turn = self._solver_executor.execute_autonomous_candidate(
+                        active_branch.solver,
+                        request,
+                        session.budget,
+                        temperature=(
+                            self._config.primary_temperature
+                            if active_branch.role == "PrimarySolver"
+                            else max(self._config.primary_temperature, 0.35)
+                        ),
+                        max_tokens=self._config.primary_max_tokens,
+                    )
+                except ModelTransportError as error:
+                    if session.problem_ir.response_mode != "proof_full":
+                        raise
+                    proof_degradation = True
+                    trace.add(
+                        "proof_token_canary_degraded",
+                        candidate_id=active_branch.candidate_id,
+                        requested_tokens=12288,
+                        fallback_tokens=8192,
+                        failure_code=error.code,
+                    )
+                    turn = self._solver_executor.execute_autonomous_candidate(
+                        active_branch.solver,
+                        request,
+                        session.budget,
+                        temperature=0.0,
+                        max_tokens=8192,
+                        compact=True,
+                    )
                 if turn.partial and turn.candidate is None:
-                    compact_recoveries += 1
+                    compact_recovery = True
                     trace.add(
                         "candidate_partial_recovery_started",
-                        candidate_id=branch.candidate_id,
+                        candidate_id=active_branch.candidate_id,
                         truncation_reason=turn.parsed.truncation_reason,
                         recovery_turn_kind="solver_compact_synthesis",
                         raw_response_reused=False,
                     )
                     turn = self._solver_executor.execute_autonomous_candidate(
-                        branch.solver,
+                        active_branch.solver,
                         request,
                         session.budget,
                         temperature=0.0,
                         max_tokens=self._config.primary_max_tokens,
                         compact=True,
                     )
-                if turn.action == "abstain" or turn.candidate is None:
-                    failures.append(
-                        BranchFailure(branch.candidate_id, "agent_abstained")
-                    )
-                    branch.status = "abstained"
-                    trace.add(
-                        "candidate_generation_failed",
-                        **candidate_failure_trace_payload(
-                            branch.candidate_id,
-                            "agent_abstained",
-                        ),
-                        role=branch.role,
-                    )
-                    continue
-                branch.candidate = turn.candidate
-                branch.status = "candidate_published"
-                candidates.append(turn.candidate)
-                trace.add(
-                    "candidate_generated",
-                    **candidate_trace_payload(turn.candidate),
-                    autonomous=True,
+                candidate = (
+                    None
+                    if turn.action == "abstain" or turn.candidate is None
+                    else turn.candidate
                 )
-            except ModelTransportError as error:
-                if session.problem_ir.response_mode == "proof_full":
-                    proof_degradations += 1
-                    trace.add(
-                        "proof_token_canary_degraded",
-                        candidate_id=branch.candidate_id,
-                        requested_tokens=12288,
-                        fallback_tokens=8192,
-                        failure_code=error.code,
-                    )
-                    try:
-                        turn = self._solver_executor.execute_autonomous_candidate(
-                            branch.solver,
-                            request,
-                            session.budget,
-                            temperature=0.0,
-                            max_tokens=8192,
-                            compact=True,
-                        )
-                        if turn.candidate is not None and not turn.partial:
-                            branch.candidate = turn.candidate
-                            branch.status = "candidate_published"
-                            candidates.append(turn.candidate)
-                            trace.add(
-                                "candidate_generated",
-                                **candidate_trace_payload(turn.candidate),
-                                autonomous=True,
-                                proof_token_degraded=True,
-                            )
-                            continue
-                    except Exception as retry_error:
-                        error = retry_error
-                reason = self._reasoning_failure_code(error)
+                return candidate, compact_recovery, proof_degradation
+
+            synthesis_tasks.append((branch.candidate_id, synthesize))
+
+        synthesis_outcomes = self._scheduler_flow.run_parallel(
+            synthesis_tasks,
+            timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+        )
+        branch_by_id = {branch.candidate_id: branch for branch in branches}
+        trace.add(
+            "parallel_solver_wave_completed",
+            task_ids=[outcome.task_id for outcome in synthesis_outcomes],
+            parallelism=min(
+                len(synthesis_outcomes),
+                2,
+                self._config.model_max_concurrency,
+            ),
+            elapsed_seconds=round(
+                max(
+                    (outcome.elapsed_seconds for outcome in synthesis_outcomes),
+                    default=0.0,
+                ),
+                6,
+            ),
+        )
+        for outcome in synthesis_outcomes:
+            branch = branch_by_id[outcome.task_id]
+            if outcome.error is not None:
+                reason = self._reasoning_failure_code(outcome.error)
                 failures.append(BranchFailure(branch.candidate_id, reason))
+                trace.add(
+                    "candidate_generation_failed",
+                    **candidate_failure_trace_payload(branch.candidate_id, reason),
+                    role=branch.role,
+                )
+                continue
+            candidate, compact_recovery, proof_degradation = outcome.value
+            compact_recoveries += int(compact_recovery)
+            proof_degradations += int(proof_degradation)
+            if candidate is None:
+                failures.append(
+                    BranchFailure(branch.candidate_id, "agent_abstained")
+                )
+                branch.status = "abstained"
                 trace.add(
                     "candidate_generation_failed",
                     **candidate_failure_trace_payload(
                         branch.candidate_id,
-                        reason,
+                        "agent_abstained",
                     ),
                     role=branch.role,
                 )
-            except Exception as error:
-                reason = self._reasoning_failure_code(error)
-                failures.append(BranchFailure(branch.candidate_id, reason))
-                trace.add(
-                    "candidate_generation_failed",
-                    **candidate_failure_trace_payload(
-                        branch.candidate_id,
-                        reason,
-                    ),
-                    role=branch.role,
-                )
+                continue
+            branch.candidate = candidate
+            branch.status = "candidate_published"
+            candidates.append(candidate)
+            trace.add(
+                "candidate_generated",
+                **candidate_trace_payload(candidate),
+                autonomous=True,
+                proof_token_degraded=bool(proof_degradation),
+            )
 
         if len(candidates) >= 2:
             self._run_initial_llm_lemma_curator(session, trace)
@@ -4220,6 +4412,8 @@ class MathForgeHarness:
             (second_entry, first_entry),
         )
         review_outcomes = []
+        review_tasks = []
+        review_context = {}
         for reviewer_entry, target_entry in pairs:
             reviewer = candidate_by_id[reviewer_entry.candidate_id]
             target = candidate_by_id[target_entry.candidate_id]
@@ -4234,29 +4428,73 @@ class MathForgeHarness:
                 candidate_artifact_id=target_entry.candidate_artifact_id,
                 independent_model_call=True,
             )
-            try:
-                outcome = self._peer_review_agent.review(
+            review_context[target.candidate_id] = (
+                reviewer_entry,
+                target_entry,
+                reviewer,
+                target,
+            )
+
+            def run_review(
+                active_reviewer_entry=reviewer_entry,
+                active_target_entry=target_entry,
+                active_reviewer=reviewer,
+                active_target=target,
+            ):
+                return self._peer_review_agent.review(
                     problem=session.problem_ir,
-                    candidate=target,
-                    candidate_artifact_id=target_entry.candidate_artifact_id,
-                    author_agent_id=target_entry.author_agent_id,
-                    reviewer_agent_id=reviewer_entry.author_agent_id,
-                    reviewer_role=reviewer.role,
-                    reviewer_candidate_id=reviewer.candidate_id,
+                    candidate=active_target,
+                    candidate_artifact_id=(
+                        active_target_entry.candidate_artifact_id
+                    ),
+                    author_agent_id=active_target_entry.author_agent_id,
+                    reviewer_agent_id=active_reviewer_entry.author_agent_id,
+                    reviewer_role=active_reviewer.role,
+                    reviewer_candidate_id=active_reviewer.candidate_id,
                     obligations=session.problem_obligations,
                     budget=session.budget,
                     max_tokens=self._config.primary_max_tokens,
                 )
-            except Exception as error:
+
+            review_tasks.append((target.candidate_id, run_review))
+
+        wave_outcomes = self._scheduler_flow.run_parallel(
+            review_tasks,
+            timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+        )
+        trace.add(
+            "parallel_review_wave_completed",
+            task_ids=[outcome.task_id for outcome in wave_outcomes],
+            parallelism=min(
+                len(wave_outcomes),
+                2,
+                self._config.model_max_concurrency,
+            ),
+            elapsed_seconds=round(
+                max(
+                    (outcome.elapsed_seconds for outcome in wave_outcomes),
+                    default=0.0,
+                ),
+                6,
+            ),
+        )
+        for wave_outcome in wave_outcomes:
+            reviewer_entry, target_entry, reviewer, target = review_context[
+                wave_outcome.task_id
+            ]
+            if wave_outcome.error is not None:
                 trace.add(
                     "peer_review_completed",
                     status="failed",
                     reviewer_role=reviewer.role,
                     candidate_id=target.candidate_id,
                     independent_model_call=True,
-                    failure_code=self._reasoning_failure_code(error),
+                    failure_code=self._reasoning_failure_code(
+                        wave_outcome.error
+                    ),
                 )
                 continue
+            outcome = wave_outcome.value
             session.peer_reviews.append(outcome.record)
             review_outcomes.append(outcome)
             pool.attach_review(

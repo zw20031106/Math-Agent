@@ -7,6 +7,7 @@ from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
 from mathforge.context.errors import ContextBudgetExceeded
+from mathforge.agent_runtime.resource_governor import ResourceGovernor
 from mathforge.harness.context_budget import ModelContextBudget
 from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.errors import ModelCallRejected
@@ -718,6 +719,10 @@ class OfficialClientProvider:
             "effective_output_tokens": allocation.max_output_tokens,
             "effective_max_output_tokens": allocation.max_output_tokens,
             "turn_kind": active_turn_kind,
+            "action_category": ResourceGovernor.action_category_for_turn(
+                stage,
+                active_turn_kind,
+            ),
             "stage_output_cap_tokens": stage_output_cap(
                 active_turn_kind,
                 self._stage_execution_policy,
@@ -740,6 +745,7 @@ class OfficialClientProvider:
             "agent_role": protocol_turn.role if protocol_turn else "",
             "agent_mode": protocol_turn.mode if protocol_turn else "",
             "task_id": protocol_turn.task_id if protocol_turn else "",
+            "scheduler_task_id": protocol_turn.task_id if protocol_turn else "",
             "turn_id": protocol_turn.turn_id if protocol_turn else "",
             "plan_id": protocol_turn.plan_id if protocol_turn else "",
             "subgoal_ids": (
