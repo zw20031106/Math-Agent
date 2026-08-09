@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 import json
 
+from mathforge.agent_runtime.router_protocol import (
+    ROUTER_INTENT_FIELDS,
+    ROUTER_INTENT_STRUCTURAL_SHAPE,
+)
 from mathforge.agents.registry import PromptContract, PromptContractLoader
 from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.harness.model_candidate_contract import (
     MODEL_CANDIDATE_PATCH_STRUCTURAL_SHAPE,
     MODEL_CANDIDATE_PAYLOAD_VERSION,
+    MODEL_CANDIDATE_PROFILE_FIELDS,
+    MODEL_CANDIDATE_PROFILE_SHAPES,
     MODEL_CANDIDATE_STRUCTURAL_SHAPE,
 )
 from mathforge.harness.model_policy import stage_output_cap
 from mathforge.harness.schemas import ProblemIR, RoutePlan
-from mathforge.tool_prompt_examples import claim_prompt_examples
-
-
 _ROLE_DIRECTORY_TO_STAGE = {
     "router_planner": "router",
     "primary_solver": "primary",
@@ -26,20 +30,20 @@ _ROLE_DIRECTORY_TO_STAGE = {
 }
 _SOLVER_OUTPUT_TOKENS = {
     "minimal": {
-        "primary_solver": 8192,
-        "alternative_solver": 8192,
+        "primary_solver": 2048,
+        "alternative_solver": 2048,
     },
     "standard": {
-        "primary_solver": 8192,
-        "alternative_solver": 8192,
+        "primary_solver": 4096,
+        "alternative_solver": 4096,
     },
     "tool": {
-        "primary_solver": 8192,
-        "alternative_solver": 8192,
+        "primary_solver": 4096,
+        "alternative_solver": 4096,
     },
     "proof": {
-        "primary_solver": 12288,
-        "alternative_solver": 12288,
+        "primary_solver": 8192,
+        "alternative_solver": 8192,
     },
 }
 _AGENT_TURN_ENVELOPE_PROTOCOL = (
@@ -89,6 +93,37 @@ _CANDIDATE_CORE_PROTOCOL = (
     "the Host renders its delimiters. Prioritize a "
     "complete valid object over verbosity."
 )
+
+
+def _candidate_profile_protocol(profile: str) -> str:
+    fields = MODEL_CANDIDATE_PROFILE_FIELDS[profile]
+    shape = MODEL_CANDIDATE_PROFILE_SHAPES[profile]
+    shared = (
+        "Return exactly one bare JSON object with no Markdown fence or prose. "
+        f"Use exactly these fields: {', '.join(sorted(fields))}. "
+        f"Use this structural shape: {shape}. The Host generates Candidate, "
+        "Claim, method-step, Artifact, Evidence, Task, Turn, Message, Thread, "
+        "budget, and plan identifiers. Do not emit those fields, tool calls, "
+        "private scratch work, or hidden chain-of-thought. Use standard LaTeX "
+        "inside JSON strings with every backslash JSON-escaped. Prefer a "
+        "complete compact object over repeated exposition. "
+    )
+    if profile == "simple":
+        return shared + (
+            "answer is the exact scorer-facing answer; check is one concise "
+            "public mathematical check."
+        )
+    if profile == "proof":
+        return shared + (
+            "proof_steps is the complete ordered public proof. Each depends_on "
+            "entry is a zero-based index of an earlier proof step; the Host "
+            "creates stable Claim IDs. open_conditions lists only genuinely "
+            "unresolved hypotheses."
+        )
+    return shared + (
+        "steps is one non-redundant ordered public derivation; uncertainties "
+        "lists only conditions that remain unresolved."
+    )
 _PROGRESS_DELTA_PROTOCOL = (
     "Public protocol mode is {mode}. Construct one ProgressDelta object with "
     "these nine fields and no others: public_summary, strategy, subgoals, "
@@ -195,9 +230,9 @@ _REPAIR_PATCH_PROTOCOL = (
 )
 _ROLE_PROTOCOLS = {
     "router_planner": (
-        "Return only RoutePlan JSON with primary_subject, auxiliary_subject, "
-        "risk_level, and exactly three controlled method_families. Do not solve "
-        "the problem and do not include a Candidate contract."
+        "Return only RouterIntent JSON. The Host owns subgoals, the task DAG, "
+        "Agent assignment, Candidate count, priorities, resources, and plan "
+        f"versions. Use exactly this shape: {ROUTER_INTENT_STRUCTURAL_SHAPE}."
     ),
     "lemma_curator": (
         _AGENT_TURN_ENVELOPE_PROTOCOL
@@ -240,6 +275,21 @@ class PromptCompilation:
     messages: list[dict[str, str]]
     max_output_tokens: int
     prompt_chars: int
+    output_schema_fields: tuple[str, ...] = ()
+    prompt_sha256: str = ""
+    contract_sha256: str = ""
+
+
+@dataclass(frozen=True)
+class PromptSpec:
+    role_directory: str
+    profile: str
+    contract: PromptContract
+    runtime_protocol: str
+    output_schema_fields: tuple[str, ...] = ()
+
+    def system_prompt(self) -> str:
+        return self.contract.render_system(self.runtime_protocol)
 
 
 class PromptCompiler:
@@ -265,8 +315,9 @@ class PromptCompiler:
         if role_directory not in {"primary_solver", "alternative_solver"}:
             raise ValueError("solver prompt role is invalid")
         profile = self.solver_profile(problem, route)
+        output_profile = self.candidate_output_profile(problem, route)
         instructions = [
-            _CANDIDATE_CORE_PROTOCOL,
+            _candidate_profile_protocol(output_profile),
             self._response_mode_protocol(problem),
             self._solver_profile_protocol(profile),
         ]
@@ -276,7 +327,7 @@ class PromptCompiler:
                 _AGENT_TURN_ENVELOPE_PROTOCOL
                 + "For a complete solution use task_result_type "
                 "CandidateArtifact and action publish_candidate; place the "
-                "entire ModelCandidatePayload inside result_payload, set "
+                f"entire {output_profile} Candidate object inside result_payload, set "
                 "public_state_delta to {}, and use outbound_intents []. If no "
                 "sound candidate can be produced, use action abstain, "
                 "task_result_type CheckpointArtifact, empty result_payload, "
@@ -292,7 +343,7 @@ class PromptCompiler:
             instructions.append(
                 "This is compact_synthesis recovery. Consume only the supplied "
                 "verified public Artifact summaries. Return the smallest complete "
-                "Candidate contract; do not repeat the discarded long response."
+                "Candidate object; do not repeat the discarded long response."
             )
         if role_directory == "alternative_solver":
             instructions.append(
@@ -300,20 +351,13 @@ class PromptCompiler:
                 "reconstruct or imitate a Primary solution."
             )
         if profile == "tool":
-            examples = claim_prompt_examples(
-                self._prioritized_tools(route.selected_tools),
-                limit=3,
-            )
-            if examples:
+            tools = self._prioritized_tools(route.selected_tools)
+            if tools:
                 instructions.append(
-                    "Use precise Claim statements that let the Host reconstruct safe "
-                    "tool inputs. These are input-shape examples only; never output "
-                    "host_arguments yourself:\n"
-                    + json.dumps(
-                        examples,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
+                    "Make the public steps explicit enough for the Host to derive "
+                    "safe deterministic checks for these authorized tools: "
+                    + ", ".join(tools[:3])
+                    + ". Do not emit tool arguments or calls."
                 )
         if runtime_instructions.strip():
             instructions.append(runtime_instructions.strip())
@@ -328,6 +372,9 @@ class PromptCompiler:
             user_content,
             "\n".join(instructions),
             output_tokens,
+            output_schema_fields=tuple(
+                sorted(MODEL_CANDIDATE_PROFILE_FIELDS[output_profile])
+            ),
         )
 
     def compile_solver_progress(
@@ -392,6 +439,17 @@ class PromptCompiler:
             user_content,
             "\n".join(instructions),
             4096,
+            output_schema_fields=(
+                "claims",
+                "closed_obligation_ids",
+                "contradictions",
+                "next_step",
+                "open_obligations",
+                "public_summary",
+                "stop_reason",
+                "strategy",
+                "subgoals",
+            ),
         )
 
     def compile_solver_collaboration(
@@ -457,7 +515,21 @@ class PromptCompiler:
             user_content,
             instructions,
             stage_output_cap(stage),
+            output_schema_fields=(
+                tuple(sorted(ROUTER_INTENT_FIELDS))
+                if role_directory == "router_planner"
+                else ()
+            ),
         )
+
+    @staticmethod
+    def candidate_output_profile(problem: ProblemIR, route: RoutePlan) -> str:
+        solver_profile = PromptCompiler.solver_profile(problem, route)
+        if solver_profile == "proof":
+            return "proof"
+        if solver_profile == "minimal":
+            return "simple"
+        return "standard"
 
     @staticmethod
     def solver_profile(problem: ProblemIR, route: RoutePlan) -> str:
@@ -490,50 +562,43 @@ class PromptCompiler:
     def _solver_profile_protocol(profile: str) -> str:
         if profile == "minimal":
             return (
-                "Use 1-3 public steps, Claims, and method steps. Keep optional lists "
-                "concise; finish JSON early."
+                "Use one direct check. Finish the compact JSON object before any "
+                "optional explanation."
             )
         if profile == "proof":
             return (
-                "Build a complete Claim dependency graph, state theorem conditions, "
-                "cover necessity/sufficiency as applicable, and list every unresolved "
-                "proof obligation explicitly."
+                "Give a complete ordered proof, state theorem conditions, cover "
+                "necessity and sufficiency when applicable, and list every genuinely "
+                "open condition explicitly."
             )
         if profile == "tool":
             return (
-                "Make every tool-checkable Claim atomic, explicit about expressions, "
-                "domains, assumptions, matrix data, intervals, or finite cases, and "
-                "choose the matching check_type."
+                "Make each step explicit about expressions, domains, assumptions, "
+                "matrix data, intervals, or finite cases so Host checks are safe."
             )
         return (
-            "Provide a complete public derivation with concise Claims and explicit "
-            "conditions; avoid repeated restatement of the contract."
+            "Provide one concise public derivation with explicit conditions; avoid "
+            "repeating the problem or protocol."
         )
 
     @staticmethod
     def _response_mode_protocol(problem: ProblemIR) -> str:
         if problem.response_mode == "proof_full":
             return (
-                "Host response mode is proof_full. solution_text must be a complete "
-                "proof suitable for the final response, including every essential "
-                "inference, theorem hypothesis, boundary case, and conclusion. "
-                "public_solution_steps must give the same proof as an ordered, "
-                "detailed public outline for trace[0]. Keep the complete exposition "
-                "within approximately 18,000 characters by compressing wording, not "
-                "by omitting proof steps."
+                "Host response mode is proof_full. proof_steps must contain the "
+                "complete public proof, including essential inferences, theorem "
+                "hypotheses, boundary cases, and the conclusion. Compress wording, "
+                "not mathematics."
             )
         if problem.response_mode == "worked_solution":
             return (
-                "Host response mode is worked_solution. solution_text must contain "
-                "the complete derivation requested by the problem, and "
-                "public_solution_steps must provide an ordered, independently "
-                "checkable derivation for trace[0]."
+                "Host response mode is worked_solution. steps must be an ordered, "
+                "independently checkable complete derivation."
             )
         return (
-            "Host response mode is answer_only. The Host will render final_response "
-            "as only the canonical final answer, but public_solution_steps must still "
-            "contain 1-4 concise, independently checkable steps for trace[0]. Do not "
-            "replace those steps with a bare answer or private analysis."
+            "Host response mode is answer_only. Give the exact canonical answer and "
+            "the shortest independently checkable public justification required by "
+            "the selected Candidate profile."
         )
 
     def _compile(
@@ -543,39 +608,44 @@ class PromptCompiler:
         user_content: str,
         instructions: str,
         output_tokens: int,
+        *,
+        output_schema_fields: tuple[str, ...] = (),
     ) -> PromptCompilation:
         contract = self._contracts.load(role_directory)
-        system = self._system_header(contract) + "\n" + instructions
+        spec = PromptSpec(
+            role_directory=role_directory,
+            profile=profile,
+            contract=contract,
+            runtime_protocol=instructions,
+            output_schema_fields=output_schema_fields,
+        )
+        system = spec.system_prompt()
         prompt_chars = len(system) + len(user_content)
         if prompt_chars > contract.max_context_chars:
             raise ContextBudgetExceeded(
                 f"{contract.fields['role']} messages require {prompt_chars} chars, "
                 f"budget is {contract.max_context_chars}"
             )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
+        ]
+        prompt_digest = sha256(
+            json.dumps(
+                messages,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         return PromptCompilation(
             profile=profile,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_content},
-            ],
+            messages=messages,
             max_output_tokens=output_tokens,
             prompt_chars=prompt_chars,
-        )
-
-    @staticmethod
-    def _system_header(contract: PromptContract) -> str:
-        fields = contract.fields
-        return "\n".join(
-            (
-                f"You are {fields['role']}. Follow prompt contract version "
-                f"{fields['version']}.",
-                f"Objective: {fields['objective']}.",
-                f"Visible context only: {fields['visible_memory']}.",
-                f"Forbidden context: {fields['forbidden_context']}.",
-                f"Allowed tools: {fields['allowed_tools']}.",
-                f"Failure policy: {fields['failure_policy']}.",
-                f"Stop condition: {fields['stop_condition']}.",
-            )
+            output_schema_fields=output_schema_fields,
+            prompt_sha256=prompt_digest,
+            contract_sha256=contract.source_sha256,
         )
 
     @staticmethod

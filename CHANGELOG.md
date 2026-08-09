@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Completed the 2026-08-09 remediation Phase 1 prompt and structured-output
+  protocol repair. Production prompts now compile from one contract-backed
+  source of truth, RouterPlanner emits only minimal routing intent while the
+  Host owns plans and task graphs, and Solver output uses bounded simple,
+  standard, or proof profiles. Added shared ordered JSON recovery, JSON/LaTeX
+  lexical validation, semantic AgentTurn salvage with assurance degradation,
+  and per-call protocol/truncation telemetry. Host-owned workflow fields are
+  rejected at the model boundary, and the model preflight now exercises the
+  2048-token simple protocol rather than requesting the former 8192-token
+  payload.
 - Completed the 2026-08-09 remediation Phase 0 evidence freeze. Added a
   final-corpus aggregator that keeps resumed attempt diagnostics separate from
   the authoritative one-record-per-case corpus, a causal failure taxonomy,

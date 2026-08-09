@@ -650,6 +650,11 @@ class MathForgeHarness:
                 record_prompt_chars=(
                     session.budget.record_prompt_chars if router_enabled else None
                 ),
+                record_protocol_telemetry=(
+                    session.budget.record_model_protocol_telemetry
+                    if router_enabled
+                    else None
+                ),
             )
             session.route_plan = router_outcome.route_plan
             session.agent_plan = router_outcome.authoritative_plan
@@ -826,6 +831,13 @@ class MathForgeHarness:
                 router_llm_attempted=router_outcome.llm_attempted,
                 router_source=router_outcome.source,
                 router_fallback_reason=router_outcome.fallback_reason,
+                protocol_parse_tier=router_outcome.protocol_parse_tier,
+                protocol_recovery_reason=(
+                    router_outcome.protocol_recovery_reason
+                ),
+                protocol_assurance_degradation=(
+                    router_outcome.protocol_assurance_degradation
+                ),
                 plan_id=session.agent_plan.plan_id,
                 plan_version=session.agent_plan.version,
                 parent_plan_id=session.agent_plan.parent_plan_id,
@@ -3660,7 +3672,7 @@ class MathForgeHarness:
                     ),
                     max_tokens=self._config.primary_max_tokens,
                 )
-                if turn.partial:
+                if turn.partial and turn.candidate is None:
                     compact_recoveries += 1
                     trace.add(
                         "candidate_partial_recovery_started",
@@ -4215,6 +4227,9 @@ class MathForgeHarness:
                     if is_semantic_hard_pass(record)
                 ),
                 record_prompt_chars=session.budget.record_prompt_chars,
+                record_protocol_telemetry=(
+                    session.budget.record_model_protocol_telemetry
+                ),
             )
             session.route_plan = outcome.route_plan
             session.agent_plan = outcome.authoritative_plan

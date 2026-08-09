@@ -7,9 +7,29 @@ import re
 from typing import Any
 
 from mathforge.harness.schemas import MethodFamily, ProblemIR, RoutePlan
+from mathforge.parsing.structured_output import StructuredOutputRecoveryLayer
 
 
 ROUTER_PROTOCOL_VERSION = "1.0"
+ROUTER_INTENT_VERSION = "1.0"
+ROUTER_INTENT_FIELDS = frozenset(
+    {
+        "primary_domain",
+        "secondary_domain",
+        "risk",
+        "patterns",
+        "preferred_methods",
+        "alternative_methods",
+        "needs_long_horizon",
+    }
+)
+ROUTER_INTENT_STRUCTURAL_SHAPE = (
+    '{"primary_domain":"general-math","secondary_domain":null,'
+    '"risk":"high","patterns":["<mathematical pattern>"],'
+    '"preferred_methods":["direct-deduction"],'
+    '"alternative_methods":["constructive-computation"],'
+    '"needs_long_horizon":true}'
+)
 _NODE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 _ROLE_TASKS = {
     "PrimarySolver": "solve_primary",
@@ -17,6 +37,101 @@ _ROLE_TASKS = {
     "LemmaCurator": "curate_lemmas",
     "VerifierSkeptic": "cross_exam_candidates",
 }
+
+
+@dataclass(frozen=True)
+class RouterIntent:
+    primary_domain: str
+    secondary_domain: str | None
+    risk: str
+    patterns: tuple[str, ...]
+    preferred_methods: tuple[str, ...]
+    alternative_methods: tuple[str, ...]
+    needs_long_horizon: bool
+    schema_version: str = ROUTER_INTENT_VERSION
+
+    def validate(self, *, allowed_domains: set[str]) -> None:
+        if self.schema_version != ROUTER_INTENT_VERSION:
+            raise ValueError("invalid RouterIntent schema version")
+        if self.primary_domain not in allowed_domains:
+            raise ValueError("Router selected an invalid subject")
+        if self.secondary_domain is not None and (
+            self.secondary_domain not in allowed_domains
+            or self.secondary_domain == self.primary_domain
+        ):
+            raise ValueError("Router selected an invalid auxiliary subject")
+        if self.risk not in {"low", "medium", "high"}:
+            raise ValueError("Router selected an invalid risk")
+        if len(self.patterns) > 6 or any(
+            not item.strip() or len(item) > 96 for item in self.patterns
+        ):
+            raise ValueError("Router patterns are invalid")
+        methods = (*self.preferred_methods, *self.alternative_methods)
+        if not self.preferred_methods or len(methods) > 3:
+            raise ValueError("Router method families are invalid")
+        allowed_methods = {item.value for item in MethodFamily}
+        if len(methods) != len(set(methods)) or not set(methods) <= allowed_methods:
+            raise ValueError("Router selected an invalid method family")
+        if type(self.needs_long_horizon) is not bool:
+            raise ValueError("Router long-horizon intent must be boolean")
+
+    @property
+    def method_families(self) -> list[str]:
+        return list((*self.preferred_methods, *self.alternative_methods))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "primary_domain": self.primary_domain,
+            "secondary_domain": self.secondary_domain,
+            "risk": self.risk,
+            "patterns": list(self.patterns),
+            "preferred_methods": list(self.preferred_methods),
+            "alternative_methods": list(self.alternative_methods),
+            "needs_long_horizon": self.needs_long_horizon,
+        }
+
+
+def parse_router_intent(
+    response: str,
+    *,
+    allowed_domains: set[str],
+) -> tuple[RouterIntent, str, str, str]:
+    recovered = StructuredOutputRecoveryLayer().parse_object(
+        response,
+        required_fields=ROUTER_INTENT_FIELDS,
+    )
+    payload = recovered.value
+    if set(payload) != ROUTER_INTENT_FIELDS:
+        raise ValueError("Router response schema is invalid")
+    secondary = payload["secondary_domain"]
+    if secondary is not None and not isinstance(secondary, str):
+        raise ValueError("Router selected an invalid auxiliary subject")
+    patterns = payload["patterns"]
+    preferred = payload["preferred_methods"]
+    alternative = payload["alternative_methods"]
+    for name, value in (
+        ("patterns", patterns),
+        ("preferred_methods", preferred),
+        ("alternative_methods", alternative),
+    ):
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            raise ValueError(f"Router {name} must be a string list")
+    intent = RouterIntent(
+        primary_domain=str(payload["primary_domain"]),
+        secondary_domain=secondary,
+        risk=str(payload["risk"]),
+        patterns=tuple(patterns),
+        preferred_methods=tuple(preferred),
+        alternative_methods=tuple(alternative),
+        needs_long_horizon=payload["needs_long_horizon"],
+    )
+    intent.validate(allowed_domains=allowed_domains)
+    return (
+        intent,
+        recovered.parse_tier,
+        recovered.recovery_reason,
+        recovered.assurance_degradation,
+    )
 
 
 @dataclass(frozen=True)
@@ -130,6 +245,9 @@ class RouterPlanningOutcome:
     llm_attempted: bool
     source: str
     fallback_reason: str = ""
+    protocol_parse_tier: str = "not_attempted"
+    protocol_recovery_reason: str = ""
+    protocol_assurance_degradation: str = "none"
 
 
 def build_authoritative_plan(

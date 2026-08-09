@@ -164,7 +164,7 @@ def test_frozen_prompt_baseline_is_preserved_while_current_review_can_advance():
         "expected_count"
     ]
     assert scopes["prompt-contracts"]["version"] == (
-        "prompt-contract-11-f6-verification-closure"
+        "prompt-contract-12-0809-protocol-v2"
     )
     assert content["prompt_contracts"]["sha256"] != scopes["prompt-contracts"][
         "sha256"

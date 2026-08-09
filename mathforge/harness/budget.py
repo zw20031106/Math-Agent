@@ -242,6 +242,10 @@ class CallBudget:
                 "transport_attempts": 0,
                 "failure_code": "",
                 "response_validation": "not_applicable",
+                "protocol_parse_tier": "not_attempted",
+                "protocol_recovery_reason": "",
+                "protocol_assurance_degradation": "none",
+                "candidate_parse_tier": "not_attempted",
                 "observed_output_tokens": 0,
                 "output_counting_mode": "",
                 "output_chars": 0,
@@ -381,6 +385,30 @@ class CallBudget:
             self.model_call_records[index]["response_validation"] = str(code)
             if rejected:
                 self.model_response_rejection_count += 1
+
+    def record_model_protocol_telemetry(
+        self,
+        index: int | None,
+        parse_tier: str,
+        recovery_reason: str = "",
+        assurance_degradation: str = "none",
+        *,
+        candidate_parse_tier: str = "",
+    ) -> None:
+        if index is None:
+            return
+        with self._lock:
+            self._ensure_mutable_locked()
+            update = {
+                "protocol_parse_tier": str(parse_tier),
+                "protocol_recovery_reason": str(recovery_reason),
+                "protocol_assurance_degradation": str(
+                    assurance_degradation
+                ),
+            }
+            if candidate_parse_tier:
+                update["candidate_parse_tier"] = str(candidate_parse_tier)
+            self._call_ledger.update(index, update)
 
     def record_background_tail(self, event: str, index: int | None = None) -> None:
         with self._lock:

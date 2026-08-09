@@ -3,8 +3,10 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
-import json
+import re
 from typing import Any
+
+from mathforge.parsing.structured_output import StructuredOutputRecoveryLayer
 
 
 PROTOCOL_SCHEMA_VERSION = "1.0"
@@ -144,6 +146,9 @@ class ParsedAgentTurn:
     response_sha256: str
     partial: bool = False
     truncation_reason: str = ""
+    parse_tier: str = "strict_json"
+    recovery_reason: str = ""
+    assurance_degradation: str = "none"
 
 
 _MODEL_TURN_FIELDS = frozenset(
@@ -184,12 +189,40 @@ class AgentTurnPayloadParser:
         truncated: bool = False,
         truncation_reason: str = "",
     ) -> ParsedAgentTurn:
+        recovery = StructuredOutputRecoveryLayer()
+        raw_response = str(response)
+        if any(
+            re.search(rf'"{re.escape(field)}"\s*:', raw_response)
+            for field in _HOST_OWNED_TURN_FIELDS
+        ):
+            raise ValueError("AgentTurnPayload contains Host-owned fields")
         try:
-            decoded = json.loads(str(response))
+            recovered = recovery.parse_object(
+                raw_response,
+                truncated=truncated,
+            )
+            decoded = recovered.value
         except (TypeError, ValueError) as error:
-            raise ValueError("AgentTurnPayload is not valid JSON") from error
+            decoded = None
+            decoded = self._semantic_salvage(recovery, raw_response)
+            if decoded is None:
+                raise ValueError("AgentTurnPayload is not valid JSON") from error
+            recovered_tier = "semantic_salvage"
+            recovered_reason = "complete_public_fields_from_truncated_turn"
+            recovered_degradation = "high"
+        else:
+            recovered_tier = recovered.parse_tier
+            recovered_reason = recovered.recovery_reason
+            recovered_degradation = recovered.assurance_degradation
         if not isinstance(decoded, dict) or set(decoded) != _MODEL_TURN_FIELDS:
-            raise ValueError("AgentTurnPayload fields do not match the public schema")
+            semantic = self._semantic_salvage(recovery, raw_response)
+            if semantic is not None:
+                decoded = semantic
+                recovered_tier = "semantic_salvage"
+                recovered_reason = "complete_public_fields_from_truncated_turn"
+                recovered_degradation = "high"
+            else:
+                raise ValueError("AgentTurnPayload fields do not match the public schema")
         self._reject_host_fields(decoded)
         outbound = decoded["outbound_intents"]
         if not isinstance(outbound, list):
@@ -209,10 +242,56 @@ class AgentTurnPayloadParser:
         reason = str(truncation_reason).strip()
         return ParsedAgentTurn(
             payload=payload,
-            response_sha256=sha256(str(response).encode("utf-8")).hexdigest(),
+            response_sha256=sha256(raw_response.encode("utf-8")).hexdigest(),
             partial=bool(truncated),
             truncation_reason=reason if truncated else "",
+            parse_tier=recovered_tier,
+            recovery_reason=recovered_reason,
+            assurance_degradation=recovered_degradation,
         )
+
+    @staticmethod
+    def _semantic_salvage(
+        recovery: StructuredOutputRecoveryLayer,
+        response: str,
+    ) -> dict[str, Any] | None:
+        fields = recovery.salvage_top_level_fields(response, _MODEL_TURN_FIELDS)
+        action = fields.get("action")
+        result_payload = fields.get("result_payload")
+        public_delta = fields.get("public_state_delta")
+        if not isinstance(action, str):
+            return None
+        if not isinstance(result_payload, dict) and not isinstance(
+            public_delta, dict
+        ):
+            return None
+        task_result_type = fields.get("task_result_type")
+        if not isinstance(task_result_type, str) or not task_result_type.strip():
+            return None
+        return {
+            "protocol_version": str(
+                fields.get("protocol_version", PROTOCOL_SCHEMA_VERSION)
+            ),
+            "task_result_type": task_result_type,
+            "action": action,
+            "public_state_delta": (
+                public_delta if isinstance(public_delta, dict) else {}
+            ),
+            "result_payload": (
+                result_payload if isinstance(result_payload, dict) else {}
+            ),
+            "outbound_intents": (
+                fields["outbound_intents"]
+                if isinstance(fields.get("outbound_intents"), list)
+                else []
+            ),
+            "progress_summary": str(
+                fields.get("progress_summary", "Recovered public Agent result")
+            ),
+            "stop_reason": str(
+                fields.get("stop_reason", "response_truncated_after_public_result")
+            ),
+        }
 
     def _reject_host_fields(self, value: Any) -> None:
         if isinstance(value, dict):

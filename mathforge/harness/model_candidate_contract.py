@@ -3,6 +3,31 @@ from __future__ import annotations
 
 MODEL_CANDIDATE_PAYLOAD_VERSION = "2.1"
 
+SIMPLE_CANDIDATE_FIELDS = frozenset({"answer", "check"})
+STANDARD_CANDIDATE_FIELDS = frozenset(
+    {"answer", "method", "steps", "uncertainties"}
+)
+PROOF_CANDIDATE_FIELDS = frozenset(
+    {"conclusion", "method", "proof_steps", "open_conditions"}
+)
+MODEL_CANDIDATE_PROFILE_FIELDS = {
+    "simple": SIMPLE_CANDIDATE_FIELDS,
+    "standard": STANDARD_CANDIDATE_FIELDS,
+    "proof": PROOF_CANDIDATE_FIELDS,
+}
+MODEL_CANDIDATE_PROFILE_SHAPES = {
+    "simple": '{"answer":"<exact answer>","check":"<one concise check>"}',
+    "standard": (
+        '{"answer":"<exact answer>","method":"<method>",'
+        '"steps":["<public step>"],"uncertainties":[]}'
+    ),
+    "proof": (
+        '{"conclusion":"<exact conclusion>","method":"<method>",'
+        '"proof_steps":[{"statement":"<public proof step>",'
+        '"depends_on":[]}],"open_conditions":[]}'
+    ),
+}
+
 MODEL_CANDIDATE_REQUIRED_FIELDS = frozenset(
     {
         "method",

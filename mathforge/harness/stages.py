@@ -177,6 +177,10 @@ class ContextRouteStage:
         max_tokens: int = 0,
         context_view: RoleContextView | None = None,
         record_prompt_chars: Callable[[int], None] | None = None,
+        record_protocol_telemetry: Callable[
+            [int | None, str, str, str], None
+        ]
+        | None = None,
     ) -> RoutePlan:
         return self._router.plan(
             problem,
@@ -185,6 +189,7 @@ class ContextRouteStage:
             max_tokens=max_tokens,
             context_view=context_view,
             record_prompt_chars=record_prompt_chars,
+            record_protocol_telemetry=record_protocol_telemetry,
         )
 
     def plan_authoritative(
@@ -196,6 +201,10 @@ class ContextRouteStage:
         max_tokens: int = 0,
         context_view: RoleContextView | None = None,
         record_prompt_chars: Callable[[int], None] | None = None,
+        record_protocol_telemetry: Callable[
+            [int | None, str, str, str], None
+        ]
+        | None = None,
         previous_plan: AuthoritativePlan | None = None,
         verified_fact_ids: tuple[str, ...] = (),
     ) -> RouterPlanningOutcome:
@@ -206,6 +215,7 @@ class ContextRouteStage:
             max_tokens=max_tokens,
             context_view=context_view,
             record_prompt_chars=record_prompt_chars,
+            record_protocol_telemetry=record_protocol_telemetry,
             previous_plan=previous_plan,
             verified_fact_ids=verified_fact_ids,
         )

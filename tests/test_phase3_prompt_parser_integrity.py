@@ -106,25 +106,26 @@ def test_simple_production_prompt_is_well_below_the_previous_fallback_size():
     assert compilation.profile == "minimal"
     assert fallback_tokens < 6000
     assert fallback_tokens < 9500 * 0.65
-    assert compilation.max_output_tokens == 8192
-    assert len(compilation.messages[0]["content"]) < static_system_chars * 0.97
+    assert compilation.max_output_tokens == 2048
+    assert len(compilation.messages[0]["content"]) < 4000
+    assert static_system_chars < len(compilation.messages[0]["content"])
 
 
 @pytest.mark.parametrize(
     ("problem_text", "expected_profile", "expected_tokens"),
     [
-        ("Compute 17+28.", "minimal", 8192),
-        ("Prove that x^2 >= 0 for every real x.", "proof", 12288),
+        ("Compute 17+28.", "minimal", 2048),
+        ("Prove that x^2 >= 0 for every real x.", "proof", 8192),
         (
             "Given a probability density f(x)=1/2 on [0,2], "
             "verify normalization and compute the probability.",
             "tool",
-            8192,
+            4096,
         ),
         (
             "Given matrix [[1,2],[3,4]], compute its determinant.",
             "tool",
-            8192,
+            4096,
         ),
     ],
 )
@@ -180,7 +181,7 @@ def test_representative_profiles_generate_complete_candidates_three_times(
     ]
 
 
-def test_compiler_puts_the_candidate_core_first_and_caps_non_solver_roles():
+def test_compiler_uses_minimal_candidate_schema_and_caps_non_solver_roles():
     problem = ProblemParser().parse("Compute 1+1.")
     route = RouterRuleEngine().plan(problem)
     compilation = PrimarySolver().compile_prompt(
@@ -194,28 +195,11 @@ def test_compiler_puts_the_candidate_core_first_and_caps_non_solver_roles():
     )
     system = compilation.messages[0]["content"]
 
-    positions = [
-        system.index("method, final_answer, public_solution_steps, claims"),
-        system.index("solution_text, assumptions"),
-    ]
-    positions.append(system.index("unresolved_obligations", positions[-1]))
-    assert positions == sorted(positions)
-    assert "method_steps" in system
-    assert "Host-owned fields" in system
-    assert (
-        "claim_id, statement, depends_on, check_type, and importance"
-        in system
-    )
-    assert "strings such as c1, never numbers" in system
-    assert "check_type must be reasoning, definition" in system
-    assert "include at least one theorem_preconditions Claim" in system
-    assert "Do not substitute id or dependencies" in system
-    assert '{"method":"<assigned>","final_answer":"<answer>"' in system
-    assert "Default check_type to reasoning" in system
-    assert (
-        "assumptions, theorems, and unresolved_obligations are string arrays"
-    ) in system
-    assert "depends_on is a string array" in system
+    assert set(compilation.output_schema_fields) == {"answer", "check"}
+    assert '{"answer":"<exact answer>","check":"<one concise check>"}' in system
+    assert "The Host generates Candidate, Claim, method-step" in system
+    assert "solution_text" not in system
+    assert "unresolved_obligations" not in system
 
     compiler = PromptCompiler()
     assert compiler.compile_role(
@@ -318,7 +302,7 @@ def test_every_tool_claim_example_is_precise_and_executable():
         assert result.status in {"pass", "fail", "unknown"}
 
 
-def test_tool_profile_includes_examples_but_forbids_model_tool_arguments():
+def test_tool_profile_names_authorized_checks_but_keeps_arguments_host_owned():
     problem = ProblemParser().parse(
         "Given matrix [[1,2],[3,4]], compute its determinant."
     )
@@ -335,6 +319,6 @@ def test_tool_profile_includes_examples_but_forbids_model_tool_arguments():
     system = compilation.messages[0]["content"]
 
     assert compilation.profile == "tool"
-    assert '"tool":"matrix_shape_check"' in system
-    assert '"host_arguments"' in system
-    assert "never output host_arguments yourself" in system
+    assert "matrix_shape_check" in system
+    assert '"host_arguments"' not in system
+    assert "Do not emit tool arguments or calls" in system

@@ -44,6 +44,15 @@ def build_transport_summary(
                 "response_validation": str(
                     record.get("response_validation", "not_applicable")
                 ),
+                "protocol_parse_tier": str(
+                    record.get("protocol_parse_tier", "not_attempted")
+                ),
+                "protocol_recovery_reason": str(
+                    record.get("protocol_recovery_reason", "")
+                ),
+                "protocol_assurance_degradation": str(
+                    record.get("protocol_assurance_degradation", "none")
+                ),
                 "elapsed_seconds": _nonnegative_float(
                     record.get("elapsed_seconds", 0.0)
                 ),

@@ -334,6 +334,7 @@ class SolverExecutor:
                     candidate_id=request.candidate_id,
                     role=solver.role,
                     answer_type=request.problem.answer_type,
+                    planned_method_family=request.method_family,
                 )
             except SchemaValidationError:
                 validation_code = "candidate_schema_invalid"
@@ -349,6 +350,14 @@ class SolverExecutor:
                 )
                 continue
             validation_code, rejected = candidate_response_validation(candidate)
+            budget.record_model_protocol_telemetry(
+                getattr(response, "model_call_index", None),
+                candidate.parse_status,
+                assurance_degradation=(
+                    "none" if candidate.parse_tier == "strict" else "medium"
+                ),
+                candidate_parse_tier=candidate.parse_tier,
+            )
             if (
                 not rejected
                 and candidate.method.strip().lower()
@@ -588,14 +597,6 @@ class SolverExecutor:
             truncated=_response_was_truncated(response),
             truncation_reason=_response_truncation_reason(response),
         )
-        if parsed.partial:
-            budget.record_model_response_validation(
-                getattr(response, "model_call_index", None),
-                "candidate_partial_needs_compaction",
-                rejected=True,
-            )
-            self._complete_agent_turn(response, budget)
-            return AutonomousSolverTurn(parsed=parsed)
         if parsed.payload.action == "abstain":
             if parsed.payload.task_result_type != "CheckpointArtifact":
                 self._fail_agent_turn(response, budget, "agent_turn_result_type_invalid")
@@ -611,6 +612,7 @@ class SolverExecutor:
                 candidate_id=request.candidate_id,
                 role=solver.role,
                 answer_type=request.problem.answer_type,
+                planned_method_family=request.method_family,
             )
         except SchemaValidationError as error:
             self._fail_agent_turn(response, budget, "candidate_schema_invalid")
@@ -621,6 +623,13 @@ class SolverExecutor:
             )
             raise ModelResponseError("candidate_schema_invalid") from error
         validation_code, rejected = candidate_response_validation(candidate)
+        budget.record_model_protocol_telemetry(
+            getattr(response, "model_call_index", None),
+            parsed.parse_tier,
+            parsed.recovery_reason,
+            parsed.assurance_degradation,
+            candidate_parse_tier=candidate.parse_tier,
+        )
         if rejected:
             self._fail_agent_turn(response, budget, validation_code)
             budget.record_model_response_validation(
@@ -658,12 +667,19 @@ class SolverExecutor:
         truncation_reason: str,
     ) -> ParsedAgentTurn:
         try:
-            return AgentTurnPayloadParser().parse(
+            parsed = AgentTurnPayloadParser().parse(
                 response,
                 allowed_actions=allowed_actions,
                 truncated=truncated,
                 truncation_reason=truncation_reason,
             )
+            budget.record_model_protocol_telemetry(
+                getattr(response, "model_call_index", None),
+                parsed.parse_tier,
+                parsed.recovery_reason,
+                parsed.assurance_degradation,
+            )
+            return parsed
         except (TypeError, ValueError) as error:
             SolverExecutor._fail_agent_turn(
                 response,

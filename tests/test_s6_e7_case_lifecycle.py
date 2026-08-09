@@ -239,7 +239,7 @@ def test_model_availability_preflight_requires_all_three_levels():
     assert report["status"] == "passed"
     assert [level["level"] for level in report["levels"]] == ["L0", "L1", "L2"]
     assert client.calls[0]["max_tokens"] == MODEL_PREFLIGHT_L1_MAX_TOKENS == 4096
-    assert client.calls[1]["max_tokens"] == MODEL_PREFLIGHT_MAX_TOKENS == 8192
+    assert client.calls[1]["max_tokens"] == MODEL_PREFLIGHT_MAX_TOKENS == 2048
 
 
 def test_model_http_timeout_uses_the_transport_delivery_window():

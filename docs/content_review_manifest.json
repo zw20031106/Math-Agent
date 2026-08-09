@@ -33,20 +33,20 @@
       "path": "prompts",
       "pattern": "contract.md",
       "expected_count": 7,
-        "version": "prompt-contract-11-f6-verification-closure",
-        "engineering_reviewer": "codex-phase-f6-verification-audit",
-        "review_date": "2026-08-08",
-        "sha256": "b0b652de8599c0064f220585d54668e976e14c0e1e6cc38d3faa596aeaf6ab88"
+        "version": "prompt-contract-12-0809-protocol-v2",
+        "engineering_reviewer": "codex-0809-phase1-protocol-audit",
+        "review_date": "2026-08-09",
+        "sha256": "06c2d4d2e9564eeebb7f4b645cf052a29a67ceaaef8eba9e8658698359c319ec"
     },
     {
       "id": "prompt-compiler",
       "kind": "file",
       "path": "mathforge/agents/prompt_compiler.py",
       "expected_count": 1,
-      "version": "prompt-compiler-12-f6-cross-exam-final-audit",
-      "engineering_reviewer": "codex-phase-f6-verification-audit",
-      "review_date": "2026-08-08",
-      "sha256": "55fd046aff610a319829350140fcc8199f8da97c928b3ebbab51990cf94bd5da"
+      "version": "prompt-compiler-13-0809-prompt-spec",
+      "engineering_reviewer": "codex-0809-phase1-protocol-audit",
+      "review_date": "2026-08-09",
+      "sha256": "694adad513909fda358a0a1f66e60b5f1ae32f57012653bca75bec5e5538657e"
     },
     {
       "id": "model-candidate-boundary",
@@ -61,10 +61,10 @@
         "mathforge/parsing/solution_parser.py"
       ],
       "expected_count": 7,
-      "version": "model-candidate-boundary-2.1-f6-critique-repair-lineage",
-      "engineering_reviewer": "codex-phase-f6-verification-audit",
-      "review_date": "2026-08-08",
-      "sha256": "8969a4053eda84cd352a391b3a7959b83d7110b4221c45f8a0dfb19b9fb47844"
+      "version": "model-candidate-boundary-3.0-0809-profile-recovery",
+      "engineering_reviewer": "codex-0809-phase1-protocol-audit",
+      "review_date": "2026-08-09",
+      "sha256": "b50d2e5bc628bd31b4be512d8234c2e1f0de25fd7ee4618616fb2e3025c0ce07"
     },
     {
       "id": "reasoning-state",
@@ -155,10 +155,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 19,
-      "version": "verification-closure-phase-f7-proof-status",
-      "engineering_reviewer": "codex-phase-f7-runtime-proof-audit",
-        "review_date": "2026-08-08",
-      "sha256": "8cc764a728d44a3aaa6f139a1211b36ef0d46337bb31e0630e0f2159d9c84f80"
+      "version": "verification-closure-phase1-0809-protocol-telemetry",
+      "engineering_reviewer": "codex-0809-phase1-protocol-audit",
+        "review_date": "2026-08-09",
+      "sha256": "340eeec954dd7b5db06f0d2a9becdd1d4aef70c7b9cf23c645b9d49e83183bcf"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -185,10 +185,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 19,
-      "version": "phase-f7-agent-event-projection-1",
-      "engineering_reviewer": "codex-phase-f7-runtime-proof-audit",
-      "review_date": "2026-08-08",
-      "sha256": "3df69c88689a65e93c7832325bd764ae9297caa4845d66014bcd46bf6c0655f4"
+      "version": "phase-f6-agent-protocol-phase1-0809-recovery",
+      "engineering_reviewer": "codex-0809-phase1-protocol-audit",
+      "review_date": "2026-08-09",
+      "sha256": "072f2e0c82fb68628f3cd7d9c752ae01a744ce74792df6dcac61f888f1203248"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -208,10 +208,10 @@
         "mathforge/output/loop_health.py"
       ],
       "expected_count": 12,
-      "version": "phase-f7-runtime-proof-trace-cleanup-1",
-      "engineering_reviewer": "codex-phase-f7-runtime-proof-audit",
-      "review_date": "2026-08-08",
-      "sha256": "086070e44f0989fa95c98c6b0e88896c454946719e050fa8da23a03b3102a73b"
+      "version": "phase-f7-runtime-phase1-0809-protocol-telemetry",
+      "engineering_reviewer": "codex-0809-phase1-protocol-audit",
+      "review_date": "2026-08-09",
+      "sha256": "e51c710e0f691b4f75c0f86622bb72dbd3f978cb06f738951bf6bbe4178efb42"
     },
     {
       "id": "reviewed-method-cards",
@@ -269,10 +269,10 @@
         "scripts/propose_competition_config.py"
       ],
       "expected_count": 4,
-      "version": "phase-f7-adaptive-only-runtime-cleanup",
-      "engineering_reviewer": "codex-phase-f7-runtime-proof-audit",
-      "review_date": "2026-08-08",
-      "sha256": "ebd1071c6916153989a795037b6eba196ebc92f769b926104940c74e12a57f65"
+      "version": "phase7-live-calibration-phase1-0809-simple-preflight",
+      "engineering_reviewer": "codex-0809-phase1-protocol-audit",
+      "review_date": "2026-08-09",
+      "sha256": "0a66fcfae9402d0091e05c6d2008bb0df79bd4434f229efc8e0c971c2307fc34"
     },
     {
       "id": "router-calibration",

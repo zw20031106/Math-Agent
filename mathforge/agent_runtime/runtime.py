@@ -490,6 +490,17 @@ class SessionAgentRuntime:
                             str(truncation_reason) if response_truncated else ""
                         ),
                         "response_sha256": digest,
+                        "parse_tier": (
+                            parsed.parse_tier if parsed is not None else "host_wrapped"
+                        ),
+                        "recovery_reason": (
+                            parsed.recovery_reason if parsed is not None else ""
+                        ),
+                        "assurance_degradation": (
+                            parsed.assurance_degradation
+                            if parsed is not None
+                            else "none"
+                        ),
                     },
                 },
                 parent_artifact_ids=(

@@ -279,38 +279,13 @@ def test_llm_router_override_has_an_explicit_trace_reason():
         problem,
         llm_chat=lambda **_: json.dumps(
             {
-                "primary_subject": "topology",
-                "auxiliary_subject": None,
-                "risk_level": "medium",
-                "method_families": [
-                    "structural-transform",
-                    "contradiction",
-                ],
-                "subgoals": [
-                    {
-                        "subgoal_id": "sg-1",
-                        "objective": "identify the invariant structure",
-                        "depends_on": [],
-                    }
-                ],
-                "task_proposals": [
-                    {
-                        "proposal_id": "p-primary",
-                        "agent_role": "PrimarySolver",
-                        "task_type": "solve_primary",
-                        "subgoal_ids": ["sg-1"],
-                        "method_family": "structural-transform",
-                        "priority": 100,
-                    },
-                    {
-                        "proposal_id": "p-alt",
-                        "agent_role": "AlternativeSolver",
-                        "task_type": "solve_alternative",
-                        "subgoal_ids": ["sg-1"],
-                        "method_family": "contradiction",
-                        "priority": 80,
-                    },
-                ],
+                "primary_domain": "topology",
+                "secondary_domain": None,
+                "risk": "medium",
+                "patterns": ["topological-invariant"],
+                "preferred_methods": ["structural-transform"],
+                "alternative_methods": ["contradiction"],
+                "needs_long_horizon": False,
             }
         ),
         consume_call=lambda: None,

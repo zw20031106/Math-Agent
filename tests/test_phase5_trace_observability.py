@@ -62,6 +62,9 @@ def test_runtime_trace_exposes_transport_proof_graph_and_case_summary():
             "attempts": 1,
             "failure_code": "",
             "response_validation": "strict_candidate_json",
+            "protocol_parse_tier": "strict_json",
+            "protocol_recovery_reason": "",
+            "protocol_assurance_degradation": "none",
             "elapsed_seconds": transport["calls"][0]["elapsed_seconds"],
             "queue_elapsed_seconds": transport["calls"][0][
                 "queue_elapsed_seconds"

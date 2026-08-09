@@ -2042,6 +2042,18 @@ def _model_activity(
                 "response_validation": str(
                     record.get("response_validation", "not_applicable")
                 ),
+                "protocol_parse_tier": str(
+                    record.get("protocol_parse_tier", "not_attempted")
+                ),
+                "protocol_recovery_reason": str(
+                    record.get("protocol_recovery_reason", "")
+                ),
+                "protocol_assurance_degradation": str(
+                    record.get("protocol_assurance_degradation", "none")
+                ),
+                "candidate_parse_tier": str(
+                    record.get("candidate_parse_tier", "not_attempted")
+                ),
                 "transport_attempts": _nonnegative_int(
                     record.get("transport_attempts", 0)
                 ),
@@ -2161,6 +2173,10 @@ def _model_activity(
         "status",
         "failure_code",
         "response_validation",
+        "protocol_parse_tier",
+        "protocol_recovery_reason",
+        "protocol_assurance_degradation",
+        "candidate_parse_tier",
         "prompt_tokens",
         "configured_output_tokens",
         "requested_max_output_tokens",

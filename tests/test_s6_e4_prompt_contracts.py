@@ -67,13 +67,13 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
         "finalizer",
     )
     expected_versions = {
-        "router_planner": "3",
-        "primary_solver": "9",
-        "alternative_solver": "7",
-        "lemma_curator": "3",
-        "repair": "5",
-        "verifier_skeptic": "5",
-        "finalizer": "3",
+        "router_planner": "4",
+        "primary_solver": "10",
+        "alternative_solver": "8",
+        "lemma_curator": "4",
+        "repair": "6",
+        "verifier_skeptic": "6",
+        "finalizer": "4",
     }
     for role in roles:
         contract = loader.load(role)
@@ -83,20 +83,16 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
 
     for role in ("primary_solver", "alternative_solver"):
         body = loader.load(role).body
-        assert "public_solution_steps" in body
-        assert "method_steps" in body
-        assert "unresolved_obligations" in body
-        assert "candidate_id" in body
-        assert "no native tool-calling interface" in body
-        assert '"answer_type":' not in body
-        assert "Host constructs" in body
-        assert "`source`" in body
-        assert "`parse_tier`" in body
+        assert "The compiler supplies exactly one" in body
+        assert "Host owns" in body
+        assert "private" in body
+        assert "solution_text" not in body
+        assert "public_solution_steps" not in body
 
     repair = loader.load("repair").body
-    assert "replacement_claims" in repair
-    assert "Do not rewrite" in repair
-    assert "local-patch output example" in repair
+    assert "rewrite unrelated Claims" in repair
+    assert "patch schema compiled" in repair
+    assert "local-patch output example" not in repair
 
 
 def test_solver_runtime_prompt_uses_method_as_a_diversity_signal():
@@ -115,8 +111,8 @@ def test_solver_runtime_prompt_uses_method_as_a_diversity_signal():
     assert "Required core method family: direct-deduction." in rendered
     assert "diversity signal" in rendered
     assert "when possible" not in rendered.lower()
-    assert "Host-owned fields" in rendered
-    assert "public_solution_steps" in rendered
+    assert "The Host generates Candidate, Claim, method-step" in rendered
+    assert "answer, check" in rendered
 
 
 def test_solution_parser_classifies_json_failure_and_contract_incompleteness():

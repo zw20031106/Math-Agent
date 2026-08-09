@@ -500,10 +500,9 @@ def test_both_solver_agents_may_abstain_without_invalid_public_output():
     ]
 
 
-def test_length_candidate_is_partial_then_compact_synthesis_recovers():
+def test_length_candidate_with_complete_payload_is_salvaged_without_recall():
     client = AutonomousClient(truncate_primary_candidate=True)
     result = MathForgeHarness(client, _config()).solve("Compute 2+2.", {})
-    recovery = _event(result, "candidate_partial_recovery_started")
     protocol = _event(result, "agent_protocol")
     partial = [
         item
@@ -513,10 +512,19 @@ def test_length_candidate_is_partial_then_compact_synthesis_recovers():
     ]
     records = _event(result, "budget_summary")["model_call_records"]
 
-    assert recovery["raw_response_reused"] is False
     assert partial
-    assert any(
+    assert not any(
+        item["event"] == "candidate_partial_recovery_started"
+        for item in result["trace"]
+    )
+    assert not any(
         item["turn_kind"] == "solver_compact_synthesis" for item in records
+    )
+    assert any(
+        item["protocol_parse_tier"] == "strict_json"
+        and item["finish_reason"] == "length"
+        for item in records
+        if item["turn_kind"] == "solver_candidate_standard"
     )
     assert all(
         "Published a complete candidate." not in item["user"]
@@ -526,7 +534,7 @@ def test_length_candidate_is_partial_then_compact_synthesis_recovers():
     assert result["final_response"].strip()
 
 
-def test_standard_candidate_turns_use_8192_tokens():
+def test_simple_candidate_turns_use_2048_tokens():
     result = MathForgeHarness(AutonomousClient(), _config()).solve(
         "Compute 2+2.",
         {},
@@ -536,10 +544,10 @@ def test_standard_candidate_turns_use_8192_tokens():
         item for item in records if item["turn_kind"] == "solver_candidate_standard"
     ]
     assert len(standard) == 2
-    assert all(item["effective_output_tokens"] == 8192 for item in standard)
+    assert all(item["effective_output_tokens"] == 2048 for item in standard)
 
 
-def test_proof_12288_canary_degrades_to_8192_compact_turn():
+def test_proof_turns_use_8192_without_oversized_canary_degradation():
     client = AutonomousClient(reject_proof_tokens=True)
     result = MathForgeHarness(client, _config()).solve(
         "Prove that 2+2=4.",
@@ -552,10 +560,9 @@ def test_proof_12288_canary_degrades_to_8192_compact_turn():
     ]
     records = _event(result, "budget_summary")["model_call_records"]
 
-    assert degradations
-    assert all(item["fallback_tokens"] == 8192 for item in degradations)
+    assert degradations == []
     assert any(
-        item["turn_kind"] == "solver_compact_synthesis"
+        item["turn_kind"] == "solver_candidate_proof"
         and item["effective_output_tokens"] == 8192
         for item in records
     )

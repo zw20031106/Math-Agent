@@ -84,47 +84,16 @@ def test_final_risk_recomputes_every_derived_route_field():
         problem,
         llm_chat=lambda **_: json.dumps(
             {
-                "primary_subject": "general-math",
-                "auxiliary_subject": None,
-                "risk_level": "high",
-                "method_families": [
-                    "direct-deduction",
+                "primary_domain": "general-math",
+                "secondary_domain": None,
+                "risk": "high",
+                "patterns": ["general-proof-or-calculation"],
+                "preferred_methods": ["direct-deduction"],
+                "alternative_methods": [
                     "constructive-computation",
                     "contradiction-extremal",
                 ],
-                "subgoals": [
-                    {
-                        "subgoal_id": "sg-1",
-                        "objective": "solve",
-                        "depends_on": [],
-                    }
-                ],
-                "task_proposals": [
-                    {
-                        "proposal_id": "p-primary",
-                        "agent_role": "PrimarySolver",
-                        "task_type": "solve_primary",
-                        "subgoal_ids": ["sg-1"],
-                        "method_family": "direct-deduction",
-                        "priority": 100,
-                    },
-                    {
-                        "proposal_id": "p-alt-1",
-                        "agent_role": "AlternativeSolver",
-                        "task_type": "solve_alternative",
-                        "subgoal_ids": ["sg-1"],
-                        "method_family": "constructive-computation",
-                        "priority": 80,
-                    },
-                    {
-                        "proposal_id": "p-alt-2",
-                        "agent_role": "AlternativeSolver",
-                        "task_type": "solve_alternative",
-                        "subgoal_ids": ["sg-1"],
-                        "method_family": "contradiction-extremal",
-                        "priority": 70,
-                    },
-                ],
+                "needs_long_horizon": True,
             }
         ),
         consume_call=lambda: None,

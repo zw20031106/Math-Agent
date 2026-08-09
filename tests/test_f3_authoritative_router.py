@@ -19,7 +19,6 @@ from tests.test_phase2_concurrency_lifecycle import _minimal_config
 def _router_payload(
     *,
     method: str = "structural-transform",
-    subgoals: list[dict] | None = None,
 ) -> dict:
     alternative_method = (
         "constructive-computation"
@@ -27,36 +26,13 @@ def _router_payload(
         else "direct-deduction"
     )
     return {
-        "primary_subject": "general-math",
-        "auxiliary_subject": None,
-        "risk_level": "medium",
-        "method_families": [method, alternative_method],
-        "subgoals": subgoals
-        or [
-            {
-                "subgoal_id": "sg-1",
-                "objective": "Reduce the problem to its decisive relation",
-                "depends_on": [],
-            }
-        ],
-        "task_proposals": [
-            {
-                "proposal_id": "proposal-primary",
-                "agent_role": "PrimarySolver",
-                "task_type": "solve_primary",
-                "subgoal_ids": ["sg-1"],
-                "method_family": method,
-                "priority": 100,
-            },
-            {
-                "proposal_id": "proposal-alternative-1",
-                "agent_role": "AlternativeSolver",
-                "task_type": "solve_alternative",
-                "subgoal_ids": ["sg-1"],
-                "method_family": alternative_method,
-                "priority": 80,
-            },
-        ],
+        "primary_domain": "general-math",
+        "secondary_domain": None,
+        "risk": "medium",
+        "patterns": ["decisive-relation"],
+        "preferred_methods": [method],
+        "alternative_methods": [alternative_method],
+        "needs_long_horizon": False,
     }
 
 
@@ -134,7 +110,7 @@ def test_router_is_first_model_call_and_has_distinct_agent_identity():
     assert records[1]["agent_role"] == "PrimarySolver"
 
 
-def test_router_plan_method_and_task_proposal_causally_configure_solver():
+def test_router_intent_causally_configures_host_plan_and_solver():
     client = RouterAwareClient([_router_payload(method="spectral")])
     result = MathForgeHarness(client, _router_config()).solve("Compute 2+2.", {})
     route = next(
@@ -192,25 +168,12 @@ def test_router_transport_failure_uses_real_rule_fallback_then_runs_solver():
             "router_method_invalid",
         ),
         (
-            _router_payload(
-                subgoals=[
-                    {
-                        "subgoal_id": "sg-1",
-                        "objective": "first",
-                        "depends_on": ["sg-2"],
-                    },
-                    {
-                        "subgoal_id": "sg-2",
-                        "objective": "second",
-                        "depends_on": ["sg-1"],
-                    },
-                ]
-            ),
-            "router_subgoal_cycle",
+            {**_router_payload(), "task_proposals": []},
+            "router_schema_invalid",
         ),
     ],
 )
-def test_invalid_router_method_or_cyclic_dag_uses_explicit_rule_fallback(
+def test_invalid_router_intent_uses_explicit_rule_fallback(
     payload,
     failure_code,
 ):

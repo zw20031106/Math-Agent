@@ -233,6 +233,7 @@ class SkillRegistry:
 class PromptContract:
     fields: dict[str, str]
     body: str
+    source_sha256: str = ""
 
     @property
     def max_context_chars(self) -> int:
@@ -314,7 +315,11 @@ class PromptContractLoader:
         if missing:
             raise ValueError(f"prompt contract missing: {', '.join(missing)}")
         int(fields["max_context_chars"])
-        return PromptContract(fields=fields, body=body)
+        return PromptContract(
+            fields=fields,
+            body=body,
+            source_sha256=_normalized_file_hash(path),
+        )
 
     def system_prompt(self, role_directory: str, runtime_instructions: str = "") -> str:
         return self.load(role_directory).render_system(runtime_instructions)

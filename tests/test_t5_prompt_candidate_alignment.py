@@ -41,17 +41,17 @@ def _compiled_prompt(problem_text: str) -> tuple[str, str]:
         (
             "Compute 2+2.",
             "answer_only",
-            "1-4 concise, independently checkable steps for trace[0]",
+            "shortest independently checkable public justification",
         ),
         (
             "Show all steps to derive the value of 2+2.",
             "worked_solution",
-            "complete derivation requested by the problem",
+            "independently checkable complete derivation",
         ),
         (
             "Prove that the square of every real number is nonnegative.",
             "proof_full",
-            "complete proof suitable for the final response",
+            "proof_steps must contain the complete public proof",
         ),
     ],
 )
@@ -66,9 +66,9 @@ def test_solver_prompt_explicitly_aligns_public_exposition_to_response_mode(
     assert required_instruction in system
     assert f"- Response mode: {response_mode}" in user
     assert "- Answer type:" in user
-    assert "delimit every mathematical formula with $...$" in system
-    assert "final_answer as LaTeX source without $ delimiters" in system
-    assert "private reasoning, scratchpads, or hidden chain-of-thought" in system
+    assert "standard LaTeX" in system
+    assert "JSON-escaped" in system
+    assert "hidden chain-of-thought" in system
 
 
 def test_model_candidate_payload_has_one_shared_executable_boundary():
@@ -113,6 +113,6 @@ def test_finalizer_contract_does_not_ask_model_for_host_method_steps():
 
     contract = PromptContractLoader().load("finalizer")
 
-    assert contract.fields["output_schema"] == "ModelCandidatePayloadV2.1"
-    assert "`method_steps`" in contract.body
+    assert contract.fields["output_schema"] == "CompiledFinalizerCandidateProtocol"
+    assert "method-step" not in contract.body
     assert '"method_steps":' not in contract.body

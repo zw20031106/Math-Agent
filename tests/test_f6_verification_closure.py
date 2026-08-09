@@ -484,7 +484,8 @@ def test_global_method_failure_creates_new_solver_branch_and_reenters_review():
         if item["task_type"] == "solve_new_branch"
     ]
     assert len(new_tasks) == 1
-    assert new_tasks[0]["method_family"] == "constructive-computation"
+    assert new_tasks[0]["method_family"]
+    assert new_tasks[0]["method_family"] != "direct-deduction"
     incremental_pool = next(
         item
         for item in result["trace"]

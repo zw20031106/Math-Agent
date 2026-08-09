@@ -10,9 +10,13 @@ from mathforge.harness.model_candidate_contract import (
     MODEL_CANDIDATE_HOST_FIELDS,
     MODEL_CANDIDATE_NONEMPTY_FIELDS,
     MODEL_CANDIDATE_REQUIRED_FIELDS,
+    PROOF_CANDIDATE_FIELDS,
+    SIMPLE_CANDIDATE_FIELDS,
+    STANDARD_CANDIDATE_FIELDS,
     MODEL_CLAIM_FIELDS,
     MODEL_CLAIM_HOST_FIELDS,
 )
+from mathforge.parsing.structured_output import StructuredOutputRecoveryLayer
 from mathforge.harness.schemas import (
     MAX_CLAIMS,
     MAX_METHOD_STEPS,
@@ -79,10 +83,15 @@ class SolutionParser:
         candidate_id: str,
         role: str,
         answer_type: str,
+        planned_method_family: str = "",
     ) -> CandidateSolution:
         text = response.strip()
         payload, status = self._payload(text)
         if payload is not None:
+            payload, profile_deviations = self._normalize_profile_payload(
+                payload,
+                planned_method_family=planned_method_family,
+            )
             payload, alias_deviations = self._normalize_aliases(payload)
             return self._from_payload(
                 payload,
@@ -91,7 +100,7 @@ class SolutionParser:
                 role,
                 answer_type,
                 status,
-                alias_deviations,
+                [*profile_deviations, *alias_deviations],
             )
         answer = self._extract_answer(text)
         parse_status = status or ("regex_answer" if answer != text else "raw_text")
@@ -118,50 +127,195 @@ class SolutionParser:
     @staticmethod
     def _payload(text: str) -> tuple[dict[str, Any] | None, str]:
         try:
-            value = json.loads(text)
-            return (value, "strict_json") if isinstance(value, dict) else (None, "")
-        except (json.JSONDecodeError, TypeError):
-            pass
-        fenced = re.fullmatch(
-            r"\s*```(?:json)?\s*(.*?)\s*```\s*",
-            text,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if fenced is not None:
-            cleaned = fenced.group(1).strip()
-            try:
-                value = json.loads(cleaned)
-                return (value, "fenced_json") if isinstance(value, dict) else (None, "")
-            except (json.JSONDecodeError, TypeError):
-                pass
-        else:
-            cleaned = re.sub(
-                r"^\s*```(?:json)?\s*",
-                "",
+            recovered = StructuredOutputRecoveryLayer().parse_object(
                 text,
-                count=1,
-                flags=re.IGNORECASE,
-            ).strip()
-        decoder = json.JSONDecoder()
-        for match in reversed(list(re.finditer(r"\{", cleaned))):
-            try:
-                value, _ = decoder.raw_decode(cleaned[match.start() :])
-                if (
-                    isinstance(value, dict)
-                    and (
-                        "final_answer" in value
-                        or len(_REQUIRED_MODEL_FIELDS.intersection(value)) >= 3
-                    )
-                ):
+                truncated=SolutionParser._json_failure_status(text) == "truncated_json",
+            )
+            if recovered.parse_tier == "truncated_prefix":
+                fields = set(recovered.value)
+                complete_profile = fields in {
+                    SIMPLE_CANDIDATE_FIELDS,
+                    STANDARD_CANDIDATE_FIELDS,
+                    PROOF_CANDIDATE_FIELDS,
+                }
+                if not complete_profile and not _REQUIRED_MODEL_FIELDS <= fields:
+                    return None, "truncated_json"
+            status = {
+                "strict_json": "strict_json",
+                "fenced_json": "fenced_json",
+                "outer_object": "outer_json",
+                "trailing_repair": "repaired_json",
+                "truncated_prefix": "truncated_recovered_json",
+            }[recovered.parse_tier]
+            return recovered.value, status
+        except ValueError:
+            decoder = json.JSONDecoder()
+            for match in reversed(list(re.finditer(r"\{", text))):
+                try:
+                    value, _ = decoder.raw_decode(text[match.start() :])
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(value, dict):
+                    continue
+                fields = set(value)
+                complete_profile = fields in {
+                    SIMPLE_CANDIDATE_FIELDS,
+                    STANDARD_CANDIDATE_FIELDS,
+                    PROOF_CANDIDATE_FIELDS,
+                }
+                if complete_profile or _REQUIRED_MODEL_FIELDS <= fields:
                     return value, "outer_json"
-            except json.JSONDecodeError:
-                continue
-        repaired = re.sub(r",\s*([}\]])", r"\1", cleaned)
-        try:
-            value = ast.literal_eval(repaired)
-            return (value, "repaired_json") if isinstance(value, dict) else (None, "")
-        except (ValueError, SyntaxError):
-            return None, SolutionParser._json_failure_status(cleaned)
+            repaired = re.sub(r",\s*([}\]])", r"\1", text)
+            try:
+                value = ast.literal_eval(repaired)
+                return (
+                    (value, "repaired_json")
+                    if isinstance(value, dict)
+                    else (None, "")
+                )
+            except (ValueError, SyntaxError):
+                return None, SolutionParser._json_failure_status(text)
+
+    @staticmethod
+    def _normalize_profile_payload(
+        payload: dict[str, Any],
+        *,
+        planned_method_family: str,
+    ) -> tuple[dict[str, Any], list[str]]:
+        fields = set(payload)
+        if fields == SIMPLE_CANDIDATE_FIELDS:
+            answer = payload.get("answer")
+            check = payload.get("check")
+            if not isinstance(answer, str) or not isinstance(check, str):
+                return payload, []
+            statement = check.strip() or f"The stated answer is {answer.strip()}."
+            return (
+                {
+                    "method": planned_method_family or "direct-deduction",
+                    "final_answer": answer,
+                    "public_solution_steps": [statement],
+                    "claims": [
+                        {
+                            "claim_id": "host-c1",
+                            "statement": statement,
+                            "depends_on": [],
+                            "check_type": "reasoning",
+                            "importance": "critical",
+                        }
+                    ],
+                    "solution_text": statement,
+                    "assumptions": [],
+                    "theorems": [],
+                    "unresolved_obligations": [],
+                },
+                ["model_profile:simple:host_normalized"],
+            )
+        if fields == STANDARD_CANDIDATE_FIELDS:
+            answer = payload.get("answer")
+            method = payload.get("method")
+            steps = payload.get("steps")
+            uncertainties = payload.get("uncertainties")
+            if not (
+                isinstance(answer, str)
+                and isinstance(method, str)
+                and isinstance(steps, list)
+                and all(isinstance(item, str) for item in steps)
+                and isinstance(uncertainties, list)
+                and all(isinstance(item, str) for item in uncertainties)
+            ):
+                return payload, []
+            public_steps = [item.strip() for item in steps if item.strip()]
+            claims = [
+                {
+                    "claim_id": f"host-c{index}",
+                    "statement": statement,
+                    "depends_on": ([f"host-c{index - 1}"] if index > 1 else []),
+                    "check_type": "reasoning",
+                    "importance": (
+                        "critical" if index == len(public_steps) else "supporting"
+                    ),
+                }
+                for index, statement in enumerate(public_steps, start=1)
+            ]
+            return (
+                {
+                    "method": method,
+                    "final_answer": answer,
+                    "public_solution_steps": public_steps,
+                    "claims": claims,
+                    "solution_text": "\n".join(public_steps),
+                    "assumptions": [],
+                    "theorems": [],
+                    "unresolved_obligations": list(uncertainties),
+                },
+                ["model_profile:standard:host_normalized"],
+            )
+        if fields == PROOF_CANDIDATE_FIELDS:
+            conclusion = payload.get("conclusion")
+            method = payload.get("method")
+            proof_steps = payload.get("proof_steps")
+            open_conditions = payload.get("open_conditions")
+            if not (
+                isinstance(conclusion, str)
+                and isinstance(method, str)
+                and isinstance(proof_steps, list)
+                and isinstance(open_conditions, list)
+                and all(isinstance(item, str) for item in open_conditions)
+            ):
+                return payload, []
+            statements: list[str] = []
+            dependencies: list[list[str]] = []
+            for index, item in enumerate(proof_steps):
+                if not isinstance(item, dict) or set(item) != {
+                    "statement",
+                    "depends_on",
+                }:
+                    return payload, []
+                statement = item.get("statement")
+                raw_dependencies = item.get("depends_on")
+                if not isinstance(statement, str) or not isinstance(
+                    raw_dependencies, list
+                ):
+                    return payload, []
+                normalized_dependencies: list[str] = []
+                for dependency in raw_dependencies:
+                    if type(dependency) is int and 0 <= dependency < index:
+                        normalized_dependencies.append(f"host-p{dependency + 1}")
+                    elif (
+                        isinstance(dependency, str)
+                        and re.fullmatch(r"(?:host-)?p\d+", dependency)
+                    ):
+                        number = int(re.search(r"\d+", dependency).group(0))
+                        if 1 <= number <= index:
+                            normalized_dependencies.append(f"host-p{number}")
+                statements.append(statement.strip())
+                dependencies.append(normalized_dependencies)
+            claims = [
+                {
+                    "claim_id": f"host-p{index}",
+                    "statement": statement,
+                    "depends_on": dependencies[index - 1],
+                    "check_type": "reasoning",
+                    "importance": (
+                        "critical" if index == len(statements) else "supporting"
+                    ),
+                }
+                for index, statement in enumerate(statements, start=1)
+            ]
+            return (
+                {
+                    "method": method,
+                    "final_answer": conclusion,
+                    "public_solution_steps": statements,
+                    "claims": claims,
+                    "solution_text": "\n".join(statements),
+                    "assumptions": [],
+                    "theorems": [],
+                    "unresolved_obligations": list(open_conditions),
+                },
+                ["model_profile:proof:host_normalized"],
+            )
+        return payload, []
 
     @staticmethod
     def _json_failure_status(text: str) -> str:

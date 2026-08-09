@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, replace
 from typing import Callable
 
@@ -9,14 +8,15 @@ from mathforge.agents.prompt_compiler import PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.agent_runtime.router_protocol import (
     AuthoritativePlan,
+    ROUTER_INTENT_FIELDS,
     RouterPlanningOutcome,
     build_authoritative_plan,
-    valid_method_families,
+    parse_router_intent,
 )
 from mathforge.context.snapshots import RoleContextView
 from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.harness.errors import BudgetExceeded, ModelTransportError
-from mathforge.harness.schemas import ProblemIR, RoutePlan
+from mathforge.harness.schemas import MethodFamily, ProblemIR, RoutePlan
 
 
 _SUBJECT_SIGNALS: dict[str, tuple[tuple[str, float], ...]] = {
@@ -770,6 +770,10 @@ class RouterPlanner:
         max_tokens: int = 0,
         context_view: RoleContextView | None = None,
         record_prompt_chars: Callable[[int], None] | None = None,
+        record_protocol_telemetry: Callable[
+            [int | None, str, str, str], None
+        ]
+        | None = None,
     ) -> RoutePlan:
         return self.plan_authoritative(
             problem,
@@ -778,6 +782,7 @@ class RouterPlanner:
             max_tokens=max_tokens,
             context_view=context_view,
             record_prompt_chars=record_prompt_chars,
+            record_protocol_telemetry=record_protocol_telemetry,
         ).route_plan
 
     def plan_authoritative(
@@ -789,6 +794,10 @@ class RouterPlanner:
         max_tokens: int = 0,
         context_view: RoleContextView | None = None,
         record_prompt_chars: Callable[[int], None] | None = None,
+        record_protocol_telemetry: Callable[
+            [int | None, str, str, str], None
+        ]
+        | None = None,
         previous_plan: AuthoritativePlan | None = None,
         verified_fact_ids: tuple[str, ...] = (),
     ) -> RouterPlanningOutcome:
@@ -833,13 +842,22 @@ class RouterPlanner:
             )
             user = (
                 f"Problem:\n{problem.normalized_problem}\n\n"
-                "Return a route, an acyclic subgoal DAG, and concrete Agent task "
-                f"proposals using the exact contract schema.{prior_context}{context}"
+                "Return only the mathematical routing intent using the exact "
+                "RouterIntent schema. The Host owns subgoals, tasks, Agent "
+                f"assignments, the DAG, budgets, and plan IDs.{prior_context}{context}"
             )
             compilation = self._compiler.compile_role(
                 "router_planner",
                 user_content=user,
-                runtime_instructions="Classify the math domain and return JSON only.",
+                runtime_instructions=(
+                    "Classify the mathematical intent and return JSON only. "
+                    f"Required fields: {', '.join(sorted(ROUTER_INTENT_FIELDS))}. "
+                    "Allowed domains: "
+                    + ", ".join(sorted({*_SUBJECT_SIGNALS, "general-math"}))
+                    + ". Allowed methods: "
+                    + ", ".join(item.value for item in MethodFamily)
+                    + "."
+                ),
             )
             messages = compilation.messages
             if record_prompt_chars is not None:
@@ -854,34 +872,31 @@ class RouterPlanner:
                     compilation.max_output_tokens,
                 ),
             )
-            match = re.search(r"\{.*\}", response, re.DOTALL)
-            payload = json.loads(match.group(0)) if match else {}
-            required = {
-                "primary_subject",
-                "auxiliary_subject",
-                "risk_level",
-                "method_families",
-                "subgoals",
-                "task_proposals",
-            }
-            if set(payload) != required:
-                raise ValueError("Router response schema is invalid")
-            primary = str(payload["primary_subject"])
-            if primary not in {*_SUBJECT_SIGNALS, "general-math"}:
-                raise ValueError("Router selected an invalid subject")
-            auxiliary = payload.get("auxiliary_subject")
-            if auxiliary is not None and (
-                auxiliary not in _SUBJECT_SIGNALS or auxiliary == primary
-            ):
-                raise ValueError("Router selected an invalid auxiliary subject")
-            risk = str(payload["risk_level"])
-            if risk not in {"low", "medium", "high"}:
-                raise ValueError("Router selected an invalid risk")
+            intent, parse_tier, recovery_reason, degradation = parse_router_intent(
+                response,
+                allowed_domains={*_SUBJECT_SIGNALS, "general-math"},
+            )
+            if record_protocol_telemetry is not None:
+                record_protocol_telemetry(
+                    getattr(response, "model_call_index", None),
+                    parse_tier,
+                    recovery_reason,
+                    degradation,
+                )
+            primary = intent.primary_domain
+            auxiliary = intent.secondary_domain
+            risk = intent.risk
             risk_order = {"low": 0, "medium": 1, "high": 2}
             if risk_order[risk] < risk_order[rule_plan.risk_level]:
                 risk = rule_plan.risk_level
-            methods = valid_method_families(payload["method_families"])
+            if intent.needs_long_horizon and risk_order[risk] < risk_order["medium"]:
+                risk = "medium"
             policy = derive_route_policy(risk, problem.problem_type)
+            methods = list(
+                dict.fromkeys(
+                    [*intent.method_families, *rule_plan.method_families]
+                )
+            )[: max(1, policy.candidate_count)]
             selected = selected_skills_for(
                 problem,
                 primary_subject=primary,
@@ -906,12 +921,24 @@ class RouterPlanner:
                 use_lemma_loop=policy.use_lemma_loop,
                 use_llm_finalizer=policy.use_llm_finalizer,
                 method_families=methods,
+                complexity_flags=list(
+                    dict.fromkeys(
+                        [
+                            *rule_plan.complexity_flags,
+                            *(("router_long_horizon",) if intent.needs_long_horizon else ()),
+                            *(
+                                f"router_pattern:{pattern}"
+                                for pattern in intent.patterns
+                            ),
+                        ]
+                    )
+                ),
             )
             planned.validate()
             authoritative = build_authoritative_plan(
                 problem,
                 planned,
-                payload,
+                None,
                 source="llm_router",
                 previous=previous_plan,
                 verified_fact_ids=verified_fact_ids,
@@ -921,6 +948,9 @@ class RouterPlanner:
                 authoritative,
                 True,
                 "llm_router",
+                protocol_parse_tier=parse_tier,
+                protocol_recovery_reason=recovery_reason,
+                protocol_assurance_degradation=degradation,
             )
         except (
             BudgetExceeded,
@@ -931,6 +961,13 @@ class RouterPlanner:
             json.JSONDecodeError,
             RuntimeError,
         ) as error:
+            if record_protocol_telemetry is not None:
+                record_protocol_telemetry(
+                    getattr(locals().get("response", ""), "model_call_index", None),
+                    "rejected",
+                    _router_failure_reason(error),
+                    "unusable",
+                )
             failure_reason = _router_failure_reason(error)
             fallback = build_authoritative_plan(
                 problem,
