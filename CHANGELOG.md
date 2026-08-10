@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Completed the 2026-08-09 remediation Phase 10 Production Preflight and
+  Release Governance work. The batch runner now reports distinct L0 Client,
+  L1 raw JSON, L2 AgentTurn, L3 authoritative Router, L4 Solver Candidate,
+  and L5 optional Verifier checks; a failure is attributed to the first exact
+  layer and reports only a safe code. Added a release-governance manifest with
+  Competition, Prompt, Skill, evidence-registry, content-review, and test-
+  attestation identities. `validate_submission` remains the development/
+  package check, while `validate_release --strict` additionally requires an
+  active fingerprint-verified baseline from the clean release commit, all
+  tests, human review, and a frozen Competition config. The current profile
+  truthfully remains `candidate-unvalidated`, so strict release is expected
+  to stay blocked until Phase 11/12 evidence and signatures exist.
 - Completed the 2026-08-09 remediation Phase 9 Scheduler / Runtime
   modularization work. Added a validated TaskNode DAG with dependency and
   cycle checks, critical-path p95 calculation, bounded Solver and Review

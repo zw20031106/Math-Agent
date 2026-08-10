@@ -24,3 +24,6 @@ __all__ = [
     "run_live_prompt_contract_probe",
     "score_response",
 ]
+from mathforge.evaluation.production_preflight import run_production_preflight
+
+__all__ = ["run_production_preflight"]

@@ -18,6 +18,9 @@ from mathforge.evaluation.evidence_registry import (  # noqa: E402
     validate_evidence_registry,
 )
 from mathforge.governance.reviews import validate_review_manifest  # noqa: E402
+from mathforge.governance.release import (  # noqa: E402
+    validate_release_governance_manifest,
+)
 from scripts.formal_smoke_fixture import (  # noqa: E402
     FormalSmokeClient,
     assert_formal_smoke_result,
@@ -49,6 +52,7 @@ def validate(max_file_mb: float = 5.0) -> list[str]:
             require_human=False,
         )
     )
+    errors.extend(validate_release_governance_manifest(ROOT))
     try:
         result = ReasoningAgent(client=FormalSmokeClient()).solve(
             "Calculate the integer 1+1",

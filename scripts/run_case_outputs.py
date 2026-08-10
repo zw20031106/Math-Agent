@@ -22,12 +22,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from llm_client import InternChatClient  # noqa: E402
-from mathforge.agents.router_planner import RouterRuleEngine  # noqa: E402
-from mathforge.agents.solver import (  # noqa: E402
-    PrimarySolver,
-    SolverExecutor,
-    SolverRequest,
-)
 from mathforge.benchmark import (  # noqa: E402
     BenchmarkRecord,
     load_jsonl,
@@ -36,20 +30,19 @@ from mathforge.benchmark import (  # noqa: E402
     summarize,
 )
 from mathforge.evaluation.scoring import score_response  # noqa: E402
-from mathforge.harness.orchestration import candidate_trace_payload  # noqa: E402
-from mathforge.harness.budget import CallBudget  # noqa: E402
+from mathforge.evaluation.production_preflight import (  # noqa: E402
+    PREFLIGHT_L1_MAX_TOKENS,
+    PREFLIGHT_STAGE_MAX_TOKENS,
+    PRODUCTION_PREFLIGHT_SCHEMA_VERSION,
+    run_production_preflight,
+)
 from mathforge.harness.errors import (  # noqa: E402
-    ModelResponseError,
     ModelTransportError,
 )
 from mathforge.harness.fingerprints import request_fingerprint  # noqa: E402
 from mathforge.harness.metrics import RunMetrics  # noqa: E402
 from mathforge.harness.model_policy import (  # noqa: E402
     PROVIDER_HTTP_TIMEOUT_SECONDS,
-)
-from mathforge.harness.provider import (  # noqa: E402
-    ModelCallGate,
-    OfficialClientProvider,
 )
 from mathforge.harness.trace import TraceBuilder  # noqa: E402
 from mathforge.harness.cancellation import CancellationToken  # noqa: E402
@@ -58,7 +51,6 @@ from mathforge.harness.transport import (  # noqa: E402
     ObservedModelResponse,
     RETRYABLE_TRANSPORT_FAILURE_CODES,
     classify_transport_failure,
-    transport_attempts,
 )
 from mathforge.model_identity import (  # noqa: E402
     EXACT_INTERN_MODEL,
@@ -68,11 +60,7 @@ from mathforge.output.public_result import build_public_result  # noqa: E402
 from mathforge.output.judge_trace import (  # noqa: E402
     JUDGE_TRACE_SCHEMA_VERSION,
 )
-from mathforge.output.deterministic_formatter import (  # noqa: E402
-    DeterministicFormatter,
-)
 from mathforge.parsing.problem_parser import ProblemParser  # noqa: E402
-from mathforge.parsing.solution_parser import SolutionParser  # noqa: E402
 from mathforge.runtime import MathForgeHarness  # noqa: E402
 from scripts.run_benchmark import load_benchmark_config  # noqa: E402
 
@@ -82,9 +70,9 @@ RESULT_SERIALIZATION_RESERVE_SECONDS = 50.0
 RUN_MANIFEST_SCHEMA_VERSION = "1.3"
 COMPATIBLE_RUN_MANIFEST_SCHEMA_VERSIONS = frozenset({"1.1", "1.2", "1.3"})
 RUN_MANIFEST_FILENAME = "run_manifest.json"
-MODEL_PREFLIGHT_SCHEMA_VERSION = "1.0"
-MODEL_PREFLIGHT_L1_MAX_TOKENS = 4096
-MODEL_PREFLIGHT_MAX_TOKENS = 2048
+MODEL_PREFLIGHT_SCHEMA_VERSION = PRODUCTION_PREFLIGHT_SCHEMA_VERSION
+MODEL_PREFLIGHT_L1_MAX_TOKENS = PREFLIGHT_L1_MAX_TOKENS
+MODEL_PREFLIGHT_MAX_TOKENS = PREFLIGHT_STAGE_MAX_TOKENS
 MODEL_FAST_FAILURE_ATTEMPTS = 1
 MODEL_FAST_FAILURE_SECONDS = 10.0
 MODEL_FAST_FAILURE_BACKOFF_SECONDS = 1.0
@@ -954,7 +942,7 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError(
                 f"model preflight failed at {preflight_report['failed_level']}"
             )
-        _safe_print("MODEL_PREFLIGHT_L0_L1_L2_OK")
+        _safe_print("MODEL_PREFLIGHT_L0_L1_L2_L3_L4_L5_OK")
         manifest.mark_running()
         harness = MathForgeHarness(
             client,
@@ -1167,143 +1155,13 @@ def run_model_preflight(
     client: Any,
     *,
     requested_model: str = EXACT_INTERN_MODEL,
+    include_optional_verification: bool = True,
 ) -> dict[str, Any]:
-    report: dict[str, Any] = {
-        "schema_version": MODEL_PREFLIGHT_SCHEMA_VERSION,
-        "status": "running",
-        "failed_level": "",
-        "levels": [],
-    }
-    l0_error = ""
-    if requested_model != EXACT_INTERN_MODEL:
-        l0_error = "model_identity_invalid"
-    elif not callable(getattr(client, "chat", None)):
-        l0_error = "model_client_unavailable"
-    if l0_error:
-        report["levels"].append(
-            {
-                "level": "L0",
-                "status": "failed",
-                "error_code": l0_error,
-                "elapsed_seconds": 0.0,
-                "max_tokens": 0,
-                "transport_attempts": 0,
-            }
-        )
-        report["status"] = "failed"
-        report["failed_level"] = "L0"
-        return report
-    report["levels"].append(
-        {
-            "level": "L0",
-            "status": "passed",
-            "error_code": "",
-            "elapsed_seconds": 0.0,
-            "max_tokens": 0,
-            "transport_attempts": 0,
-        }
+    return run_production_preflight(
+        client,
+        requested_model=requested_model,
+        include_optional_verification=include_optional_verification,
     )
-
-    l1_started = perf_counter()
-    try:
-        l1_response = client.chat(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Return only the exact JSON object requested by the user.",
-                },
-                {
-                    "role": "user",
-                    "content": 'Return exactly {"status":"ok"}.',
-                },
-            ],
-            temperature=0.0,
-            max_tokens=MODEL_PREFLIGHT_L1_MAX_TOKENS,
-        )
-        if not isinstance(l1_response, str):
-            raise ModelTransportError("response_shape_invalid")
-        if not l1_response.strip():
-            raise ModelTransportError(
-                "empty_response",
-                attempts=transport_attempts(l1_response),
-            )
-        l1_payload = json.loads(l1_response)
-        if l1_payload != {"status": "ok"}:
-            raise ModelTransportError(
-                "response_shape_invalid",
-                attempts=transport_attempts(l1_response),
-            )
-    except Exception as error:
-        _record_preflight_failure(
-            report,
-            "L1",
-            error,
-            l1_started,
-            MODEL_PREFLIGHT_L1_MAX_TOKENS,
-        )
-        return report
-    report["levels"].append(
-        _passed_preflight_level(
-            "L1",
-            l1_started,
-            MODEL_PREFLIGHT_L1_MAX_TOKENS,
-            transport_attempts(l1_response),
-        )
-    )
-
-    l2_started = perf_counter()
-    l2_budget = CallBudget(2)
-    try:
-        l2_problem = ProblemParser().parse("Compute 1+1.")
-        l2_route = RouterRuleEngine().plan(l2_problem)
-        l2_method_family = l2_route.method_families[0]
-        l2_request = SolverRequest(
-            candidate_id="preflight-l2",
-            problem=l2_problem,
-            route=l2_route,
-            skill_context="",
-            method_family=l2_method_family,
-        )
-        candidate = SolverExecutor(
-            OfficialClientProvider(client, ModelCallGate(1)),
-            SolutionParser(),
-        ).execute(
-            PrimarySolver(),
-            l2_request,
-            l2_budget,
-            temperature=0.0,
-            max_tokens=MODEL_PREFLIGHT_MAX_TOKENS,
-        )
-        if (
-            candidate.final_answer.strip() != "2"
-            or not candidate.claims
-            or not candidate.method_steps
-        ):
-            raise ModelResponseError(
-                "candidate_schema_invalid",
-                details=tuple(candidate.contract_deviations),
-            )
-        _validate_l2_pipeline(candidate)
-    except Exception as error:
-        _record_preflight_failure(
-            report,
-            "L2",
-            error,
-            l2_started,
-            MODEL_PREFLIGHT_MAX_TOKENS,
-            transport_attempt_count=l2_budget.transport_attempts,
-        )
-        return report
-    report["levels"].append(
-        _passed_preflight_level(
-            "L2",
-            l2_started,
-            MODEL_PREFLIGHT_MAX_TOKENS,
-            l2_budget.transport_attempts,
-        )
-    )
-    report["status"] = "passed"
-    return report
 
 
 def verify_model_availability(client: Any) -> dict[str, Any]:
@@ -1321,130 +1179,6 @@ def model_http_timeout_seconds(config: Any) -> int:
     if available < 1:
         raise ValueError("model HTTP timeout window is not positive")
     return max(1, int(min(available, PROVIDER_HTTP_TIMEOUT_SECONDS)))
-
-
-def _validate_l2_pipeline(candidate: Any) -> None:
-    problem = ProblemParser().parse("Compute 1+1.")
-    final_response = DeterministicFormatter().format(candidate, problem)
-    if not final_response.strip():
-        raise ModelResponseError("candidate_formatter_invalid")
-
-    events: list[dict[str, Any]] = []
-    trace = TraceBuilder(events, max_chars=0, max_events=0)
-    candidate_id = str(candidate.candidate_id)
-    trace.add("session_started", session_id="preflight-l2")
-    trace.add("problem_parsed")
-    trace.add("route_planned")
-    trace.add("skills_selected", skills=[])
-    trace.add("resource_plan_created", stage_quotas_enforced=False)
-    trace.add(
-        "candidate_generation_started",
-        candidate_id=candidate_id,
-        role=candidate.role,
-    )
-    trace.add("candidate_generated", **candidate_trace_payload(candidate))
-    trace.add(
-        "candidate_evidence_completed",
-        candidate_id=candidate_id,
-        status="passed",
-        claim_results=[],
-    )
-    trace.add("hard_evidence_gate", accepted=[candidate_id], rejected=[])
-    trace.add(
-        "proof_completion_gate",
-        accepted=[candidate_id],
-        rejected=[],
-        mode="preflight",
-        verifier_reason="preflight_contract_validated",
-        decisions=[
-            {
-                "candidate_id": candidate_id,
-                "status": "complete_hard",
-                "unresolved_obligation_ids": [],
-                "failed_obligation_ids": [],
-                "failed_claim_ids": [],
-            }
-        ],
-    )
-    trace.add(
-        "candidate_arbitrated",
-        selected=candidate_id,
-        viable_candidates=[candidate_id],
-    )
-    trace.add(
-        "final_answer_selected",
-        candidate_id=candidate_id,
-        public_solution={
-            "public_solution_steps": list(candidate.public_solution_steps),
-            "final_answer": candidate.final_answer,
-            "final_response": final_response,
-        },
-    )
-    trace.add("budget_summary")
-    trace.add(
-        "run_completed",
-        outcome="primary",
-        final_phase="completed",
-        error_code="",
-    )
-    internal_trace = trace.build(final_response=final_response)
-    public = build_public_result(
-        "preflight-l2",
-        {
-            "final_response": final_response,
-            "trace": internal_trace,
-            "run_metrics": {"outcome": "primary"},
-        },
-    )
-    if (
-        set(public) != {"id", "status", "final_response", "trace"}
-        or public["status"] != "success"
-    ):
-        raise ModelResponseError("candidate_public_contract_invalid")
-
-
-def _passed_preflight_level(
-    level: str,
-    started: float,
-    max_tokens: int,
-    attempts: int,
-) -> dict[str, Any]:
-    return {
-        "level": level,
-        "status": "passed",
-        "error_code": "",
-        "elapsed_seconds": round(max(0.0, perf_counter() - started), 6),
-        "max_tokens": max_tokens,
-        "transport_attempts": max(1, int(attempts)),
-    }
-
-
-def _record_preflight_failure(
-    report: dict[str, Any],
-    level: str,
-    error: Exception,
-    started: float,
-    max_tokens: int,
-    *,
-    transport_attempt_count: int | None = None,
-) -> None:
-    code = getattr(error, "code", None) or classify_transport_failure(error)
-    report["levels"].append(
-        {
-            "level": level,
-            "status": "failed",
-            "error_code": str(code),
-            "elapsed_seconds": round(max(0.0, perf_counter() - started), 6),
-            "max_tokens": max_tokens,
-            "transport_attempts": (
-                transport_attempts(error)
-                if transport_attempt_count is None
-                else max(1, int(transport_attempt_count))
-            ),
-        }
-    )
-    report["status"] = "failed"
-    report["failed_level"] = level
 
 
 def _provider_failure_reasons(record: BenchmarkRecord) -> list[str]:

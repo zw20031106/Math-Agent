@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "status": "candidate-unvalidated",
+  "competition_config_sha256": "22cad6043818868780124fda74e7f9c04e472c5185add7720ca3bf2f4456b9ac",
+  "prompt_tree_sha256": "06c2d4d2e9564eeebb7f4b645cf052a29a67ceaaef8eba9e8658698359c319ec",
+  "skill_tree_sha256": "03b54aeaa1cad14412b329a7029b57df244774c40a67068df074956c48dc0224",
+  "evidence_registry_sha256": "1aa21bc8bc77342b11b05bcc962fcbeddb4ffed2c1e820676cdc050c43314dc6",
+  "content_review_manifest_sha256": "03d2b33a3669c150ce85f575823eaca30c41694195492d5a8a452ff53a3a4727",
+  "test_attestation": {
+    "status": "pending-phase11",
+    "source_sha256": ""
+  }
+}

@@ -93,12 +93,13 @@ python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs
 ```
 
 Files are named `<id>.json` and contain exactly `id`, `status`,
-`final_response`, and `trace`, without a `result` wrapper. An L0/L1/L2
-preflight must succeed before any case starts: exact model and client
-readiness, a short exact JSON response, then a compact mathematical Candidate
-that passes the production parser, deterministic formatter, Trace, and public
-output contract. A non-empty but malformed response cannot pass. Each level
-and its safe failure code are stored in `run_manifest.json`. Each terminal
+`final_response`, and `trace`, without a `result` wrapper. An L0-L5
+production preflight must succeed before any case starts: exact client/model
+identity, raw JSON, AgentTurn, authoritative Router, Solver Candidate, and
+optional Verifier readiness are checked as separate levels. A non-empty but
+malformed response cannot pass, and a later component cannot hide an earlier
+protocol failure. Each level and its safe failure code are stored in
+`run_manifest.json`. Each terminal
 success, failure, or timeout is atomically persisted before `CASE_COMPLETED`
 is printed.
 
@@ -202,6 +203,16 @@ python scripts/validate_submission.py
 pip check
 git diff --check
 ```
+
+`validate_submission.py` checks the package/public contract and permits the
+truthful `candidate-unvalidated` development state. A release is a different
+contract: `python scripts/validate_release.py --strict --results-root <root>`
+also requires one active fingerprint-verified baseline that is an ancestor-
+compatible release input, a passing full test attestation bound to the
+release source fingerprint, valid
+Prompt/Skill/config/content hashes, completed human review, and a frozen
+Competition profile. The strict command intentionally fails before Phase 11
+and Phase 12 evidence exists.
 
 Rebuild the reviewed offline FTS5 database atomically with
 `python scripts/build_rag.py`. Retrieval distinguishes matched, no-match,

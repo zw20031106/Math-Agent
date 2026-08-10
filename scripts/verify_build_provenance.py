@@ -27,6 +27,11 @@ def verify() -> list[str]:
             payload.get("component_decisions", {}).get("manifest_sha256"),
             "component decisions",
         ),
+        (
+            ROOT / "data" / "release_governance_manifest.json",
+            payload.get("release_governance", {}).get("manifest_sha256"),
+            "release governance manifest",
+        ),
     )
     errors: list[str] = []
     if payload.get("schema_version") != "1.0":

@@ -216,7 +216,7 @@ def _preflight_candidate() -> str:
     )
 
 
-def test_model_availability_preflight_requires_all_three_levels():
+def test_model_availability_preflight_requires_all_six_levels():
     class EmptyClient:
         def chat(self, **_):
             return ""
@@ -230,14 +230,65 @@ def test_model_availability_preflight_requires_all_three_levels():
 
         def chat(self, **kwargs):
             self.calls.append(kwargs)
-            if len(self.calls) == 1:
+            index = len(self.calls)
+            if index == 1:
                 return '{"status":"ok"}'
-            return _preflight_candidate()
+            if index == 2:
+                return json.dumps(
+                    {
+                        "protocol_version": "1.0",
+                        "task_result_type": "PreflightArtifact",
+                        "action": "complete",
+                        "public_state_delta": {},
+                        "result_payload": {"status": "ok"},
+                        "outbound_intents": [],
+                        "progress_summary": "preflight ok",
+                        "stop_reason": "preflight complete",
+                    }
+                )
+            if index == 3:
+                return json.dumps(
+                    {
+                        "primary_domain": "general-math",
+                        "secondary_domain": None,
+                        "risk": "medium",
+                        "patterns": ["decisive-relation"],
+                        "preferred_methods": ["direct-deduction"],
+                        "alternative_methods": ["constructive-computation"],
+                        "needs_long_horizon": False,
+                    }
+                )
+            if index == 4:
+                return _preflight_candidate()
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "candidate_id": "preflight-l4",
+                            "claim_id": "c1",
+                            "obligation_ids": ["preflight-l4:sufficiency"],
+                            "review_target_ids": [],
+                            "review_level": "obligation",
+                            "status": "pass",
+                            "public_rationale": "The final claim supports 2.",
+                            "missing_condition": "",
+                            "counterexample_summary": "",
+                        }
+                    ]
+                }
+            )
 
     client = AvailableClient()
     report = verify_model_availability(client)
     assert report["status"] == "passed"
-    assert [level["level"] for level in report["levels"]] == ["L0", "L1", "L2"]
+    assert [level["level"] for level in report["levels"]] == [
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+    ]
     assert client.calls[0]["max_tokens"] == MODEL_PREFLIGHT_L1_MAX_TOKENS == 4096
     assert client.calls[1]["max_tokens"] == MODEL_PREFLIGHT_MAX_TOKENS == 2048
 

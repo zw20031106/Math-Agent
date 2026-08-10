@@ -4,11 +4,16 @@
   "content_reviews": {
     "schema_version": "1.0",
     "status": "pending-human",
-    "manifest_sha256": "6f846387a80b201e78f6da9f908917f5ea0c73a7e0142d4c1827b4c78c7cebee"
+    "manifest_sha256": "03d2b33a3669c150ce85f575823eaca30c41694195492d5a8a452ff53a3a4727"
   },
   "component_decisions": {
     "schema_version": "1.0",
     "status": "pre-ablation-safe-defaults",
     "manifest_sha256": "67127cd8c9bd1c92a5c5d58029faf7559cd7a63e2bcab90788a92b2320ceb112"
+  },
+  "release_governance": {
+    "schema_version": "1.0",
+    "status": "candidate-unvalidated",
+    "manifest_sha256": "3dae540640e314549f1b79452d6a467cb2eaadd13b337b842fae0ae88bc05b78"
   }
 }

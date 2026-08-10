@@ -531,7 +531,7 @@ def test_preflight_failure_report_never_contains_raw_exception_text():
     assert "private-provider-detail" not in serialized
 
 
-def test_l2_preflight_uses_the_production_contract_retry():
+def test_l0_to_l5_preflight_uses_the_production_candidate_contract_retry():
     valid = json.dumps(
         {
             "method": "direct-deduction",
@@ -565,8 +565,50 @@ def test_l2_preflight_uses_the_production_contract_retry():
         def __init__(self):
             self.responses = [
                 '{"status":"ok"}',
+                json.dumps(
+                    {
+                        "protocol_version": "1.0",
+                        "task_result_type": "PreflightArtifact",
+                        "action": "complete",
+                        "public_state_delta": {},
+                        "result_payload": {"status": "ok"},
+                        "outbound_intents": [],
+                        "progress_summary": "preflight ok",
+                        "stop_reason": "preflight complete",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "primary_domain": "general-math",
+                        "secondary_domain": None,
+                        "risk": "medium",
+                        "patterns": ["decisive-relation"],
+                        "preferred_methods": ["direct-deduction"],
+                        "alternative_methods": ["constructive-computation"],
+                        "needs_long_horizon": False,
+                    }
+                ),
                 '{"final_answer":"2"}',
                 valid,
+                json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "candidate_id": "preflight-l4",
+                                "claim_id": "c1",
+                                "obligation_ids": [
+                                    "preflight-l4:sufficiency"
+                                ],
+                                "review_target_ids": [],
+                                "review_level": "obligation",
+                                "status": "pass",
+                                "public_rationale": "The final claim supports 2.",
+                                "missing_condition": "",
+                                "counterexample_summary": "",
+                            }
+                        ]
+                    }
+                ),
             ]
 
         def chat(self, **_kwargs):
@@ -575,5 +617,12 @@ def test_l2_preflight_uses_the_production_contract_retry():
     report = run_model_preflight(PreflightClient())
 
     assert report["status"] == "passed"
-    assert report["levels"][-1]["level"] == "L2"
-    assert report["levels"][-1]["transport_attempts"] == 2
+    assert [item["level"] for item in report["levels"]] == [
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+    ]
+    assert report["levels"][4]["transport_attempts"] == 2

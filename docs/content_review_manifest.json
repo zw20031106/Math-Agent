@@ -345,7 +345,7 @@
       "version": "provider-controls-3-phase8-communication",
       "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "e405eebdf041aa2efc838361b980d8d683960a1f106fe276a679bfdf2d5440dc"
+      "sha256": "3a406bf13d2a9b7fc9b898e99f6cbfe48a0238af2e75ef5b17f90ddfaab34cf7"
     },
     {
       "id": "phase7-live-calibration",
@@ -360,7 +360,7 @@
       "version": "phase7-live-calibration-3-phase3",
       "engineering_reviewer": "codex-0809-phase3-provider-audit",
       "review_date": "2026-08-09",
-      "sha256": "5b5e9aa4282c9c259e5a7bd5a7fd911a8ea2b940754d5d8cef66875648e2953c"
+      "sha256": "0bc9cba8acfa8b69dbd63f4600f4d5a480fc582373adb8ccd40516c688cc156e"
     },
     {
       "id": "router-calibration",
@@ -416,7 +416,32 @@
       "version": "scheduler-runtime-2.0-phase9",
       "engineering_reviewer": "codex-0809-phase9-scheduler-audit",
       "review_date": "2026-08-09",
-      "sha256": "8203d32da8cf6c999d1cd42f2383c9fff1bb788481a2d85b7e68d5bafadfa259"
+      "sha256": "77089cf1a2f644520624e335d0ab814b9f3fe8c0227f0813d567ba233df9d4f7"
+    },
+    {
+      "id": "phase10-production-preflight-release-governance",
+      "kind": "file_set",
+      "paths": [
+        "CHANGELOG.md",
+        "README.md",
+        "docs/PHASE_10_PRODUCTION_PREFLIGHT_RELEASE_GOVERNANCE_EXECUTION_REPORT_2026-08-10.md",
+        "mathforge/evaluation/__init__.py",
+        "mathforge/evaluation/production_preflight.py",
+        "mathforge/governance/__init__.py",
+        "mathforge/governance/release.py",
+        "scripts/run_case_outputs.py",
+        "scripts/validate_release.py",
+        "scripts/validate_submission.py",
+        "scripts/verify_build_provenance.py",
+        "tests/test_phase10_preflight_release_governance.py",
+        "tests/test_phase1_model_call_loop.py",
+        "tests/test_s6_e7_case_lifecycle.py"
+      ],
+      "expected_count": 14,
+      "version": "production-preflight-release-governance-1.0-phase10",
+      "engineering_reviewer": "codex-0810-phase10-release-audit",
+      "review_date": "2026-08-10",
+      "sha256": "30c37a74e626d54c29e7b4ef90ff5d1590f249ab3c2a3e33f27fbffc5676b757"
     },
     {
       "id": "router-e5-gold",
