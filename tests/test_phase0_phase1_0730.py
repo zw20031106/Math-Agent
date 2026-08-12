@@ -217,7 +217,7 @@ def test_phase1_ordinary_provider_failures_update_health_without_secrets():
     assert health["consecutive_failures"] == 2
 
 
-def test_phase1_degraded_provider_changes_optional_stage_selection():
+def test_phase1_degraded_unbound_provider_state_does_not_leak_into_case():
     harness = MathForgeHarness(_ValidClient(), _minimal_config(max_model_calls=3))
     for _ in range(3):
         harness._model_gate.record_provider_result(
@@ -233,8 +233,8 @@ def test_phase1_degraded_provider_changes_optional_stage_selection():
         if event.get("event") == "resource_plan_updated"
         and event.get("reason") == "provider_degraded"
     ]
-    assert policy_events
-    assert any("verifier" in event.get("disabled", []) for event in policy_events)
+    assert policy_events == []
+    assert result["final_response"].strip()
     assert harness._model_gate.health_snapshot()["state"] == "degraded"
 
 

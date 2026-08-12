@@ -16,29 +16,29 @@ _METADATA_FIELDS = frozenset({"schema_version", "profile", "status"})
 
 def _default_stage_execution_policy() -> dict[str, dict[str, int | float]]:
     return {
-        "router": {"max_tokens": 8192, "timeout_seconds": 180.0, "minimum_start_window_seconds": 60.0},
-        "replan": {"max_tokens": 12288, "timeout_seconds": 240.0, "minimum_start_window_seconds": 60.0},
-        "solver_progress": {"max_tokens": 12288, "timeout_seconds": 300.0, "minimum_start_window_seconds": 90.0},
+        "router": {"max_tokens": 8192, "timeout_seconds": 180.0, "minimum_start_window_seconds": 30.0},
+        "replan": {"max_tokens": 12288, "timeout_seconds": 240.0, "minimum_start_window_seconds": 30.0},
+        "solver_progress": {"max_tokens": 12288, "timeout_seconds": 300.0, "minimum_start_window_seconds": 30.0},
         "solver_candidate_standard": {
             "max_tokens": 32768,
             "timeout_seconds": 420.0,
-            "minimum_start_window_seconds": 120.0,
+            "minimum_start_window_seconds": 30.0,
         },
         "solver_compact_synthesis": {
             "max_tokens": 16384,
             "timeout_seconds": 300.0,
-            "minimum_start_window_seconds": 120.0,
+            "minimum_start_window_seconds": 30.0,
         },
         "solver_candidate_proof": {
             "max_tokens": 40960,
             "timeout_seconds": 420.0,
-            "minimum_start_window_seconds": 180.0,
+            "minimum_start_window_seconds": 30.0,
         },
-        "lemma_curator": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 120.0},
-        "peer_review": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 90.0},
-        "verifier": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 90.0},
-        "repair": {"max_tokens": 24576, "timeout_seconds": 360.0, "minimum_start_window_seconds": 120.0},
-        "finalizer": {"max_tokens": 8192, "timeout_seconds": 180.0, "minimum_start_window_seconds": 60.0},
+        "lemma_curator": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 30.0},
+        "peer_review": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 30.0},
+        "verifier": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 30.0},
+        "repair": {"max_tokens": 24576, "timeout_seconds": 360.0, "minimum_start_window_seconds": 30.0},
+        "finalizer": {"max_tokens": 8192, "timeout_seconds": 180.0, "minimum_start_window_seconds": 30.0},
     }
 
 

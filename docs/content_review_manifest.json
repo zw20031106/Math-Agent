@@ -71,10 +71,10 @@
         "mathforge/runtime.py"
       ],
       "expected_count": 8,
-        "version": "effective-agent-governance-1-phase5-phase8-closure",
-        "engineering_reviewer": "codex-0809-phase7-verification-audit",
-      "review_date": "2026-08-09",
-      "sha256": "b8c0afa1babf7b0713395bafe03efc587df7c933bc4b64251bf4ae0984cd3f23"
+        "version": "effective-agent-governance-1-phase5-phase8-closure-0812-p3",
+        "engineering_reviewer": "codex-0812-phase-p3-provider-audit",
+      "review_date": "2026-08-12",
+      "sha256": "ea48cd862dbf3e05277433b10904913037a4fd0d691efcc4186160c85bea6bea"
     },
     {
       "id": "prompt-contracts",
@@ -218,10 +218,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 19,
-      "version": "verification-closure-17-phase8",
-      "engineering_reviewer": "codex-0809-phase7-verification-audit",
-        "review_date": "2026-08-09",
-      "sha256": "0790c8d3dffebb5722f6c0fb86802c62ad974055e715ef4f97b405bcb4c4e137"
+      "version": "verification-closure-17-phase8-0812-p3",
+      "engineering_reviewer": "codex-0812-phase-p3-provider-audit",
+        "review_date": "2026-08-12",
+      "sha256": "2d56d833e619d6aca4a4f582748bc4cda8df91f725a02b7e2a404e895bfc3b01"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -248,10 +248,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 19,
-      "version": "phase-f6-agent-protocol-8-phase8",
-      "engineering_reviewer": "codex-0809-phase7-verification-audit",
-      "review_date": "2026-08-09",
-      "sha256": "8ddcb9bc01286fb5dcc9eac69d9bec2632d2d73a3c4850d3610f2e6ba37950bb"
+      "version": "phase-f6-agent-protocol-8-phase8-0812-p3",
+      "engineering_reviewer": "codex-0812-phase-p3-provider-audit",
+      "review_date": "2026-08-12",
+      "sha256": "5a0d1de0deb64505bd19049f114b055127c78ec440010f76d42e5f15e4c53d96"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -271,10 +271,10 @@
         "mathforge/output/loop_health.py"
       ],
       "expected_count": 12,
-      "version": "phase-f7-runtime-7-phase8-closure",
-      "engineering_reviewer": "codex-0809-phase7-verification-audit",
-      "review_date": "2026-08-09",
-      "sha256": "b6caee651880df22fc6e3d12874d5cd91ff45cb8f62f7958c92a99ae11e0d01d"
+      "version": "phase-f7-runtime-7-phase8-closure-0812-p3",
+      "engineering_reviewer": "codex-0812-phase-p3-provider-audit",
+      "review_date": "2026-08-12",
+      "sha256": "7c94a541e54d3076327de841c7097b44cc2c48f1ea4d2b4dd226175286bbbae2"
     },
     {
       "id": "reviewed-method-cards",
@@ -342,10 +342,10 @@
         "scripts/run_case_outputs.py"
       ],
       "expected_count": 13,
-      "version": "provider-controls-3-phase8-communication",
-      "engineering_reviewer": "codex-0809-phase7-verification-audit",
-      "review_date": "2026-08-09",
-      "sha256": "df930541e58fd3c54a5ca3f6c93097b9639c6582b915e9e559986d7cd3ea1aec"
+      "version": "provider-controls-4-0812-p3-per-case-circuit",
+      "engineering_reviewer": "codex-0812-phase-p3-provider-audit",
+      "review_date": "2026-08-12",
+      "sha256": "67567137e623bf68caaca094aeedda28a2f8cebdb96c37488852eab1cc9ab69b"
     },
     {
       "id": "phase7-live-calibration",
@@ -357,10 +357,10 @@
         "scripts/propose_competition_config.py"
       ],
       "expected_count": 4,
-      "version": "phase7-live-calibration-3-phase3",
-      "engineering_reviewer": "codex-0809-phase3-provider-audit",
-      "review_date": "2026-08-09",
-      "sha256": "335a1a202a5d6d660fecdc1c06dd2d94fb08037c2bceb4eecd2d5dcf9d76615a"
+      "version": "phase7-live-calibration-4-0812-p3",
+      "engineering_reviewer": "codex-0812-phase-p3-provider-audit",
+      "review_date": "2026-08-12",
+      "sha256": "259f9e1712ea7856705dafcf48001267f091fd17c03abd90ec634aa76432a6b6"
     },
     {
       "id": "router-calibration",
@@ -392,10 +392,10 @@
         "mathforge/verification/verification_v2.py"
       ],
       "expected_count": 14,
-      "version": "review-repair-communication-audit-2.0-phase8",
-      "engineering_reviewer": "codex-0809-phase8-closure-audit",
-      "review_date": "2026-08-09",
-      "sha256": "dcf0710969a35ba575f01a9bc4f585bad61d29f50fca3bd9e54e9f0970bb9319"
+      "version": "review-repair-communication-audit-2.0-phase8-0812-p3",
+      "engineering_reviewer": "codex-0812-phase-p3-provider-audit",
+      "review_date": "2026-08-12",
+      "sha256": "c5d09421db4a88b2cc72ade2973f6982e8279f383851b057502ffbeb7985d1e1"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -413,10 +413,10 @@
         "tests/test_phase9_scheduler_runtime.py"
       ],
       "expected_count": 10,
-      "version": "scheduler-runtime-2.0-phase9",
-      "engineering_reviewer": "codex-0809-phase9-scheduler-audit",
-      "review_date": "2026-08-09",
-      "sha256": "75a09524e5ae28e9e125c402594281409de21777d25573c5804e4547ffb9d550"
+      "version": "scheduler-runtime-2.0-phase9-0812-p3",
+      "engineering_reviewer": "codex-0812-phase-p3-provider-audit",
+      "review_date": "2026-08-12",
+      "sha256": "2feb7487278b9241cdc53a0796f43ad2e79bf5bf4d2c33cf95e5df3c8cb055ca"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -438,10 +438,10 @@
         "tests/test_s6_e7_case_lifecycle.py"
       ],
       "expected_count": 14,
-      "version": "production-preflight-release-governance-1.0-phase10",
-      "engineering_reviewer": "codex-0810-phase10-release-audit",
-      "review_date": "2026-08-10",
-      "sha256": "88ceb62135a13c13e455811d972becadb4bb63d9b29624056634c3ade97f133d"
+      "version": "production-preflight-release-governance-1.0-phase10-0812-p3",
+      "engineering_reviewer": "codex-0812-phase-p3-provider-audit",
+      "review_date": "2026-08-12",
+      "sha256": "9711a83d545899bd0c1a90b5c0547c59ec67aaaf5f367e0d93fceed8f42e084d"
     },
     {
       "id": "router-e5-gold",

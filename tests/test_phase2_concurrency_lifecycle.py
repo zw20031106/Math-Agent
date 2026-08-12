@@ -128,7 +128,7 @@ def test_queue_budget_fails_fast_records_wait_and_reuses_released_slot():
     )
 
 
-def test_stage_timeout_begins_after_separate_queue_admission():
+def test_stage_timeout_reuses_response_that_arrives_before_case_deadline():
     entered = Event()
     release = Event()
     gate = ModelCallGate(1, max_background_tails=1)
@@ -150,22 +150,22 @@ def test_stage_timeout_begins_after_separate_queue_admission():
     Thread(target=release_later).start()
     timings: list[dict[str, float]] = []
     started = perf_counter()
-    with pytest.raises(ModelCallRejected) as captured:
-        gate.call(
-            lambda: (sleep(0.08), "late")[1],
-            deadline=_deadline(0.5),
-            queue_budget_seconds=0.1,
-            stage_timeout_seconds=0.06,
-            timing_callback=timings.append,
-        )
+    result = gate.call(
+        lambda: (sleep(0.08), "late")[1],
+        deadline=_deadline(0.5),
+        queue_budget_seconds=0.1,
+        stage_timeout_seconds=0.06,
+        timing_callback=timings.append,
+    )
     elapsed = perf_counter() - started
     holder.join(0.5)
 
-    assert captured.value.code == "model_response_deadline_exceeded"
-    assert 0.045 <= elapsed < 0.13
+    assert result == "late"
+    assert 0.07 <= elapsed < 0.16
     assert timings[0]["queue_elapsed_seconds"] >= 0.02
-    assert timings[0]["execution_elapsed_seconds"] >= 0.055
-    assert timings[0]["total_elapsed_seconds"] < 0.13
+    assert timings[0]["execution_elapsed_seconds"] >= 0.075
+    assert timings[0]["total_elapsed_seconds"] < 0.16
+    assert gate.health_snapshot()["active_tails"] == 0
 
 
 def test_timed_out_tail_opens_circuit_fast_fails_and_resets_after_completion():
@@ -448,7 +448,7 @@ def test_competition_deadline_profile_is_explicit_and_preserves_terminal_reserve
     assert config.deterministic_finalize_reserve_seconds == 50.0
     assert config.model_queue_budget_seconds > 0
     assert config.model_max_concurrency == 6
-    assert config.max_background_model_tails == 6
+    assert config.max_background_model_tails == 24
     assert config.hard_deadline_seconds < config.outer_platform_limit_seconds
 
     now = [0.0]

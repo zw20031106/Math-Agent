@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Completed the 2026-08-11 audit remediation Phase P3 concurrency and circuit-
+  breaker work without changing the global physical limit of six concurrent
+  model calls or the 200 RPM ceiling. Provider transport health, background
+  tails, circuit state, and protocol counters are now isolated per case and
+  released at terminal cleanup. Four consecutive transport failures open only
+  that case's circuit; after a 60-second cooldown exactly one half-open probe
+  is admitted. Tail degradation now requires more than half of physical model
+  concurrency, while the Competition tail threshold is 24. All Competition
+  stage start windows are 30 seconds and tight-deadline queueing receives a
+  bounded positive budget above that reserve. A response arriving after its
+  stage timeout but before the case model deadline is retained instead of
+  discarded, and a completed response beyond the estimated context window is
+  returned with warning telemetry. Added focused isolation, recovery, tail,
+  queue, late-result, and context-warning regression gates.
 - Completed the 2026-08-11 audit remediation Phase P2 contract and answer-
   extraction work without removing or bypassing the LLM Router. Model candidate
   output now requires only `final_answer` and `solution_text`; optional method,

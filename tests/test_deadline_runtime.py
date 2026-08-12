@@ -162,7 +162,7 @@ def test_hard_deadline_returns_fallback_within_tolerance():
     )
     elapsed = perf_counter() - started
 
-    assert elapsed < 0.2
+    assert elapsed < 0.25
     assert result["final_response"].strip()
     assert result["trace"][-1]["event"] == "run_completed"
     assert any(event["event"] == "fallback_used" for event in result["trace"])

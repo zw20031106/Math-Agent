@@ -12,29 +12,29 @@ PROVIDER_CALL_TIMEOUT_SECONDS = (
 )
 
 _DEFAULT_STAGE_EXECUTION_POLICY = {
-    "router": {"max_tokens": 8192, "timeout_seconds": 180.0, "minimum_start_window_seconds": 60.0},
-    "replan": {"max_tokens": 12288, "timeout_seconds": 240.0, "minimum_start_window_seconds": 60.0},
-    "solver_progress": {"max_tokens": 12288, "timeout_seconds": 300.0, "minimum_start_window_seconds": 90.0},
+    "router": {"max_tokens": 8192, "timeout_seconds": 180.0, "minimum_start_window_seconds": 30.0},
+    "replan": {"max_tokens": 12288, "timeout_seconds": 240.0, "minimum_start_window_seconds": 30.0},
+    "solver_progress": {"max_tokens": 12288, "timeout_seconds": 300.0, "minimum_start_window_seconds": 30.0},
     "solver_candidate_standard": {
         "max_tokens": 32768,
         "timeout_seconds": 420.0,
-        "minimum_start_window_seconds": 120.0,
+        "minimum_start_window_seconds": 30.0,
     },
     "solver_compact_synthesis": {
         "max_tokens": 16384,
         "timeout_seconds": 300.0,
-        "minimum_start_window_seconds": 120.0,
+        "minimum_start_window_seconds": 30.0,
     },
     "solver_candidate_proof": {
         "max_tokens": 40960,
         "timeout_seconds": 420.0,
-        "minimum_start_window_seconds": 180.0,
+        "minimum_start_window_seconds": 30.0,
     },
-    "lemma_curator": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 120.0},
-    "peer_review": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 90.0},
-    "verifier": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 90.0},
-    "repair": {"max_tokens": 24576, "timeout_seconds": 360.0, "minimum_start_window_seconds": 120.0},
-    "finalizer": {"max_tokens": 8192, "timeout_seconds": 180.0, "minimum_start_window_seconds": 60.0},
+    "lemma_curator": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 30.0},
+    "peer_review": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 30.0},
+    "verifier": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 30.0},
+    "repair": {"max_tokens": 24576, "timeout_seconds": 360.0, "minimum_start_window_seconds": 30.0},
+    "finalizer": {"max_tokens": 8192, "timeout_seconds": 180.0, "minimum_start_window_seconds": 30.0},
 }
 _TURN_KIND_ALIASES = {
     "primary": "solver_candidate_standard",
@@ -148,7 +148,11 @@ def feasible_queue_budget(
     p95 = stage_p95_seconds(stage)
     execution_slack = max(0.0, remaining - p95)
     stage_target = min(maximum, p95 * 0.4)
-    return max(0.0, min(execution_slack, stage_target))
+    if execution_slack > 0:
+        return min(execution_slack, stage_target)
+    if remaining > 30.0:
+        return min(maximum, 5.0, remaining - 30.0)
+    return 0.0
 
 
 def stage_sequence_reserve_seconds(

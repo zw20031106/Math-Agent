@@ -800,7 +800,7 @@ class MathForgeHarness:
             pre_allocation_budget = session.budget.snapshot()
             autonomous_agents_enabled = bool(
                 self._config.enable_long_horizon
-                and self._provider_allows_optional_model_work()
+                and self._provider_allows_optional_model_work(session.session_id)
             )
             allocation = _build_resource_plan(
                 session.budget,
@@ -1487,13 +1487,13 @@ class MathForgeHarness:
                 active_candidates,
             )
             optional_model_work_allowed = (
-                self._provider_allows_optional_model_work()
+                self._provider_allows_optional_model_work(session.session_id)
             )
             if not optional_model_work_allowed:
                 trace.add(
                     "resource_plan_updated",
                     reason="provider_degraded",
-                    provider_health=self._provider_health_state(),
+                    provider_health=self._provider_health_state(session.session_id),
                     disabled=["repair", "lemma", "verifier", "finalizer"],
                 )
             allocation = _build_resource_plan(
@@ -1571,7 +1571,7 @@ class MathForgeHarness:
             if (
                 self._config.enable_repair
                 and self._config.enable_evidence
-                and self._provider_allows_optional_model_work()
+                and self._provider_allows_optional_model_work(session.session_id)
                 and allocation.repair_reserve > 0
                 and session.budget.deadline.exploration_allowed()
             ):
@@ -1997,13 +1997,13 @@ class MathForgeHarness:
             verifier_required = (
                 self._config.enable_verifier
                 and self._config.enable_evidence
-                and self._provider_allows_optional_model_work()
+                and self._provider_allows_optional_model_work(session.session_id)
                 and reviewable_work
             )
             post_verifier_repair_requested = (
                 self._config.enable_repair
                 and self._config.enable_evidence
-                and self._provider_allows_optional_model_work()
+                and self._provider_allows_optional_model_work(session.session_id)
                 and verifier_required
                 and not repair_attempted
                 and session.budget.deadline.exploration_allowed()
@@ -2034,7 +2034,7 @@ class MathForgeHarness:
             if (
                 self._config.enable_verifier
                 and self._config.enable_evidence
-                and self._provider_allows_optional_model_work()
+                and self._provider_allows_optional_model_work(session.session_id)
                 and verifier_required
                 and reviewable_work
                 and session.budget.deadline.exploration_allowed()
@@ -2941,7 +2941,7 @@ class MathForgeHarness:
             if (
                 self._config.enable_finalizer
                 and session.route_plan.use_llm_finalizer
-                and self._provider_allows_optional_model_work()
+                and self._provider_allows_optional_model_work(session.session_id)
                 and session.budget.deadline.optional_work_allowed()
             ):
                 try:
@@ -3001,7 +3001,7 @@ class MathForgeHarness:
                     used_llm=False,
                     reason=(
                         "provider_degraded"
-                        if not self._provider_allows_optional_model_work()
+                        if not self._provider_allows_optional_model_work(session.session_id)
                         else "soft_deadline"
                     ),
                 )
@@ -3566,6 +3566,11 @@ class MathForgeHarness:
             ),
         }
         active_cancellation.cancel("session_completed")
+        terminalizer.safe(
+            "provider_case_health_release",
+            lambda: self._model_gate.release_case(session.session_id),
+            None,
+        )
         terminalizer.safe(
             "agent_runtime_release",
             session.agent_runtime.release,
@@ -5027,13 +5032,19 @@ class MathForgeHarness:
             return "reasoning_budget_or_deadline_exceeded"
         return "reasoning_state_transition_invalid"
 
-    def _provider_health_state(self) -> str:
-        state = str(self._model_gate.health_snapshot().get("state", "healthy"))
-        return state if state in {"healthy", "degraded", "circuit_open"} else "healthy"
+    def _provider_health_state(self, case_id: str = "") -> str:
+        state = str(
+            self._model_gate.health_snapshot(case_id).get("state", "healthy")
+        )
+        return (
+            state
+            if state in {"healthy", "degraded", "half_open", "circuit_open"}
+            else "healthy"
+        )
 
-    def _provider_allows_optional_model_work(self) -> bool:
+    def _provider_allows_optional_model_work(self, case_id: str = "") -> bool:
         """Keep a degraded shared provider focused on answer formation."""
-        return self._provider_health_state() == "healthy"
+        return self._provider_health_state(case_id) == "healthy"
 
     def _run_shadow_probe(self, problem_ir) -> ShadowOutcome:
         executor = self._shadow_executor
