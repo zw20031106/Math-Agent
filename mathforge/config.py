@@ -85,6 +85,8 @@ class HarnessConfig:
     model_queue_budget_seconds: float = 15.0
     max_background_model_tails: int = 16
     late_result_registry_max_entries: int = 64
+    # Zero defers eviction to TraceBuilder's hard safety ceiling and the
+    # separately bounded judge-trace projection; it never means unbounded I/O.
     trace_max_chars: int = 0
     trace_max_events: int = 0
     final_response_max_chars: int = 20000

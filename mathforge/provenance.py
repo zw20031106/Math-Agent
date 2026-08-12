@@ -6,18 +6,20 @@ from functools import lru_cache
 import json
 from pathlib import Path
 import subprocess
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.config import HarnessConfig
 from mathforge.harness.context_budget import tokenizer_provenance
 from mathforge.harness.fingerprints import semantic_fingerprint
 from mathforge.model_identity import ModelIdentity, unreported_model_identity
-from mathforge.retrieval.retriever import Retriever
 from mathforge.retrieval.schemas import RAG_SCHEMA_VERSION
 from mathforge.resources import resource_path
 from mathforge.skills.registry import SkillRegistry
 from mathforge.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from mathforge.retrieval.retriever import Retriever
 
 
 PROVENANCE_SCHEMA_VERSION = "1.2"

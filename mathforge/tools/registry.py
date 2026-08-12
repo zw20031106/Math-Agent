@@ -11,12 +11,18 @@ from mathforge.harness.fingerprints import (
 from mathforge.tools.formatting import answer_type_check, latex_syntax_check
 from mathforge.tools.linear_algebra import matrix_shape_check
 from mathforge.tools.numerical import density_normalization, numerical_residual, small_case_enumeration
-from mathforge.tools.shadow_solver import run_shadow_probe
 from mathforge.tools.symbolic import safe_parse_expression, simplify_expression, symbolic_equivalence
 from mathforge.verification.capabilities import (
     ClaimVerificationState,
     VerificationCapability,
 )
+
+
+def _run_shadow_probe(**arguments: Any) -> dict[str, Any]:
+    """Load the optional shadow implementation only when explicitly invoked."""
+    from mathforge.tools.shadow_solver import run_shadow_probe
+
+    return run_shadow_probe(**arguments)
 
 
 def _json_value(value: Any) -> Any:
@@ -69,7 +75,7 @@ class ToolDefinition:
 _DEFINITIONS = (
     ToolDefinition(
         "deterministic_shadow_probe",
-        run_shadow_probe,
+        _run_shadow_probe,
         True,
         "an exact answer for an allowlisted deterministic problem shape",
         "unsupported shapes return unknown and never form a candidate",

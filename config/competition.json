@@ -78,7 +78,7 @@
   "enable_repair": true,
   "enable_finalizer": false,
   "enable_final_audit": true,
-  "enable_shadow": true,
+  "enable_shadow": false,
   "enable_frozen_lemma_store": false,
   "enable_long_horizon": true
 }

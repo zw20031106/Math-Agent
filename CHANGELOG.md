@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Completed the 2026-08-11 audit remediation Phase P4 runtime-slimming work
+  while retaining the required LLM Router. Competition no longer runs the
+  optional deterministic shadow path, and disabled RAG, frozen-lemma, MCP, and
+  shadow implementations are lazily loaded instead of entering startup. The
+  judge-trace module is now a small stable public facade over its private,
+  behavior-compatible projection implementation. Critical provider exception
+  handling was narrowed to expected protocol failures, while the sole broad
+  online transport boundary remains classified and attributed; response-
+  observer failure is also captured in model-call lineage. Documented and
+  tested that zero internal trace limits defer to a 4,096-event hard safety
+  ceiling plus the separately bounded judge projection rather than enabling
+  unbounded output.
 - Completed the 2026-08-11 audit remediation Phase P3 concurrency and circuit-
   breaker work without changing the global physical limit of six concurrent
   model calls or the 200 RPM ceiling. Provider transport health, background

@@ -79,6 +79,8 @@ class TraceBuilder:
         event_sink: Callable[[dict[str, Any]], None] | None = None,
         internal_max_events: int = _DEFAULT_INTERNAL_MAX_EVENTS,
     ) -> None:
+        if max_chars < 0 or max_events < 0:
+            raise ValueError("trace limits must be nonnegative")
         self._events = events
         self._internal_events: list[dict[str, Any]] = []
         self._max_chars = max_chars

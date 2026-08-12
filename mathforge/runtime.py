@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 from dataclasses import dataclass, replace
 from collections import OrderedDict
 import json
@@ -22,6 +22,7 @@ from mathforge.harness.cancellation import CancellationToken
 from mathforge.harness.debug import DebugSink, sanitized_failure_record
 from mathforge.harness.errors import (
     BudgetExceeded,
+    ModelCallRejected,
     ModelTransportError,
     classify_failure,
 )
@@ -109,12 +110,9 @@ from mathforge.verification.arbitration import ArbitrationPolicy
 from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.context.role_views import RoleContextFactory
 from mathforge.memory.blackboard import MemoryBlackboard
-from mathforge.memory.frozen_lemma_store import FrozenLemmaStore
 from mathforge.memory.problem_memo import ProblemMemo
 from mathforge.harness.lemma_loop import VerifiedLemmaLoop
 from mathforge.model_identity import ModelIdentity
-from mathforge.retrieval.retriever import Retriever
-from mathforge.resources import resource_path
 from mathforge.provenance import build_run_provenance
 from mathforge.agents.repair import RepairAgent
 from mathforge.harness.repair import ClaimRepairService
@@ -135,7 +133,6 @@ from mathforge.verification.cross_review import (
     has_reviewable_work,
 )
 from mathforge.verification.candidate_pool import CandidatePool
-from mathforge.tools.shadow_solver import ShadowOutcome
 from mathforge.verification.answer_normalization import canonical_answer
 from mathforge.verification.review_repair_audit_v2 import (
     build_audit_requirements,
@@ -149,6 +146,16 @@ from mathforge.runtime_flows import (
     TaskGraph,
     TaskNode,
 )
+
+if TYPE_CHECKING:
+    from mathforge.tools.shadow_solver import ShadowOutcome
+
+
+def Retriever(*args, **kwargs):
+    """Compatibility factory that keeps the optional retriever lazy."""
+    from mathforge.retrieval.retriever import Retriever as implementation
+
+    return implementation(*args, **kwargs)
 
 
 @dataclass
@@ -311,7 +318,10 @@ class MathForgeHarness:
             self._provider,
             self._contracts,
         )
-        self._retriever = Retriever() if self._config.enable_rag else None
+        if self._config.enable_rag:
+            self._retriever = Retriever()
+        else:
+            self._retriever = None
         self._evidence_stage = EvidenceStage(self._tool_executor)
         self._proof_stage = ProofStage()
         self._repair_agent = RepairAgent(
@@ -346,14 +356,15 @@ class MathForgeHarness:
             if self._config.enable_shadow
             else None
         )
-        frozen_lemma_store = (
-            FrozenLemmaStore(
+        frozen_lemma_store = None
+        if self._config.enable_frozen_lemma_store:
+            from mathforge.memory.frozen_lemma_store import FrozenLemmaStore
+            from mathforge.resources import resource_path
+
+            frozen_lemma_store = FrozenLemmaStore(
                 resource_path("data", "frozen_lemmas.jsonl"),
                 resource_path("data", "frozen_lemmas_manifest.json"),
             )
-            if self._config.enable_frozen_lemma_store
-            else None
-        )
         frozen_lemma_disabled_reason = (
             "config_disabled"
             if frozen_lemma_store is None
@@ -545,7 +556,7 @@ class MathForgeHarness:
                     session.session_id,
                     safe_metadata,
                 )
-            except Exception:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 trace_sink = None
         trace = TraceBuilder(
             session.trace_events,
@@ -5047,6 +5058,8 @@ class MathForgeHarness:
         return self._provider_health_state(case_id) == "healthy"
 
     def _run_shadow_probe(self, problem_ir) -> ShadowOutcome:
+        from mathforge.tools.shadow_solver import ShadowOutcome
+
         executor = self._shadow_executor
         if executor is None:
             return ShadowOutcome("unsupported", "", "")
@@ -6091,7 +6104,7 @@ class MathForgeHarness:
                 max_tokens=self._config.primary_max_tokens,
                 optional=True,
             )
-        except Exception:
+        except (BudgetExceeded, ContextBudgetExceeded, ModelCallRejected, RuntimeError, ValueError):
             trace.add(
                 "candidate_generation_failed",
                 **candidate_failure_trace_payload(

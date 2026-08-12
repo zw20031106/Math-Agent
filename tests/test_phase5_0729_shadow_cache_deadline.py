@@ -318,5 +318,5 @@ def test_competition_uses_the_900_second_candidate_boundary_and_unbounded_trace(
     assert config.final_response_max_chars == 20000
     assert config.trace_max_chars == 0
     assert config.trace_max_events == 0
-    assert config.enable_shadow
+    assert not config.enable_shadow
     assert not config.enable_frozen_lemma_store

@@ -105,7 +105,7 @@ def _record_protocol_dispatch(budget, call_index, runtime, turn) -> None:
                     "max_calls": budget.max_calls,
                 },
             )
-        except Exception:
+        except (KeyError, RuntimeError, TypeError, ValueError):
             budget.record_model_call_lineage(
                 call_index,
                 {"agent_protocol_status": "shadow_dispatch_failed"},
@@ -117,7 +117,7 @@ def _fail_protocol_turn(runtime, turn, failure_code: str) -> None:
         return
     try:
         runtime.fail_model_turn(turn.turn_id, failure_code)
-    except Exception:
+    except (KeyError, RuntimeError, TypeError, ValueError):
         return
 
 
@@ -142,7 +142,7 @@ def _complete_protocol_turn(
             response_truncated=response_truncated,
             truncation_reason=truncation_reason,
         )
-    except Exception:
+    except (KeyError, RuntimeError, TypeError, ValueError):
         return {"agent_protocol_status": "shadow_publish_failed"}
 
 
@@ -361,12 +361,14 @@ class ModelCallGate:
             self._abandon_half_open_probe(case_key, half_open_probe)
             raise
         if dispatch_callback is not None:
+            dispatch_completed = False
             try:
                 dispatch_callback()
-            except Exception:
-                self._admission.release(lease, dispatched=False)
-                self._abandon_half_open_probe(case_key, half_open_probe)
-                raise
+                dispatch_completed = True
+            finally:
+                if not dispatch_completed:
+                    self._admission.release(lease, dispatched=False)
+                    self._abandon_half_open_probe(case_key, half_open_probe)
         self._admission.commit(lease)
 
         def invoke() -> None:
@@ -407,7 +409,7 @@ class ModelCallGate:
                     if background_tail_callback is not None:
                         try:
                             background_tail_callback("completed")
-                        except Exception:
+                        except (KeyError, RuntimeError, TypeError, ValueError):
                             pass
                 elif cancelled:
                     with self._health_lock:
@@ -923,7 +925,7 @@ class OfficialClientProvider:
                 if protocol_runtime is not None
                 else None
             )
-        except Exception:
+        except (KeyError, RuntimeError, TypeError, ValueError):
             protocol_turn = None
         allocation_payload = {
             **allocation.to_dict(),
@@ -1136,8 +1138,15 @@ class OfficialClientProvider:
                     budget.scheduler_case_id if budget is not None else "",
                     response,
                 )
-            except Exception:
-                pass
+            except (KeyError, RuntimeError, TypeError, ValueError) as error:
+                if budget is not None and call_index is not None:
+                    budget.record_model_call_lineage(
+                        call_index,
+                        {
+                            "response_observer_status": "failed",
+                            "response_observer_failure": type(error).__name__,
+                        },
+                    )
         self._gate.record_provider_result(success=True, case_id=active_case_id)
         if budget is not None:
             budget.record_provider_health(
