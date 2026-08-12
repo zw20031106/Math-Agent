@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Completed the 2026-08-11 audit remediation Phase P2 contract and answer-
+  extraction work without removing or bypassing the LLM Router. Model candidate
+  output now requires only `final_answer` and `solution_text`; optional method,
+  step, Claim, theorem, assumption, and obligation data receives deterministic
+  Host defaults. Candidate prompts use a compact two-field JSON protocol and
+  put a JSON-escaped `\boxed{...}` answer first. Removed ineffective reasoning-
+  suppression instructions while keeping non-answering roles free of answer
+  directives. Added one parsing-entry `<think>` policy: closed blocks are
+  removed and unclosed blocks are marked truncated with answer-only salvage.
+  Parsing, evaluation, and verification now share an arbitrary-depth boxed-
+  answer scanner, and unknown Claim check suggestions normalize to `reasoning`.
+  Added focused gates for nested LaTeX, Router JSON after closed thinking,
+  truncated-think salvage, minimal candidate defaults, and check normalization.
 - Completed the 2026-08-11 audit remediation Phase P1 truncation work without
   removing the LLM Router. Competition stage ceilings now range from 8,192
   Router tokens through 40,960 proof tokens, with solver timeouts raised to

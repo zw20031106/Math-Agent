@@ -4,8 +4,12 @@ import json
 import re
 from collections.abc import Iterable
 
+from mathforge.parsing.answer_extraction import (
+    extract_last_boxed,
+    prepare_model_text,
+    unwrap_boxed,
+)
 
-_BOXED = re.compile(r"\\boxed\s*\{((?:[^{}]|\{[^{}]*\})*)\}")
 _FINAL_ANSWER_JSON = re.compile(
     r'"final_answer"\s*:\s*"((?:[^"\\]|\\.)*)"'
 )
@@ -13,8 +17,6 @@ _LABELED_ANSWER = re.compile(
     r"(?:最终答案|答案|final\s+answer|answer)\s*[:：]\s*([^\r\n]+)",
     re.IGNORECASE,
 )
-_CLOSED_THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
-_OPEN_THINK = re.compile(r"</?think>", re.IGNORECASE)
 
 
 def salvage_any_answer(raw_texts: Iterable[object] | None) -> str | None:
@@ -24,9 +26,14 @@ def salvage_any_answer(raw_texts: Iterable[object] | None) -> str | None:
     for raw_text in reversed(texts):
         if not isinstance(raw_text, str) or not raw_text.strip():
             continue
-        body = _strip_think(raw_text)
-        for source in (body, raw_text):
-            boxed = _last_match(_BOXED, source)
+        model_text = prepare_model_text(raw_text)
+        sources = (
+            [model_text.salvage_text, model_text.public_text]
+            if model_text.think_truncated
+            else [model_text.public_text]
+        )
+        for source in sources:
+            boxed = extract_last_boxed(source)
             if boxed:
                 return rf"\boxed{{{boxed}}}"
             encoded = _last_match(_FINAL_ANSWER_JSON, source)
@@ -38,11 +45,6 @@ def salvage_any_answer(raw_texts: Iterable[object] | None) -> str | None:
             if labeled:
                 return _boxed(labeled)
     return None
-
-
-def _strip_think(text: str) -> str:
-    without_closed = _CLOSED_THINK.sub("", text)
-    return _OPEN_THINK.sub("", without_closed)
 
 
 def _last_match(pattern: re.Pattern[str], text: str) -> str:
@@ -60,5 +62,4 @@ def _decode_json_string(value: str) -> str:
 
 def _boxed(value: str) -> str:
     normalized = value.strip()
-    boxed = _last_match(_BOXED, normalized)
-    return rf"\boxed{{{boxed or normalized}}}"
+    return rf"\boxed{{{unwrap_boxed(normalized)}}}"

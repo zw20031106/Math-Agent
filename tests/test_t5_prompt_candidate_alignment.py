@@ -11,7 +11,6 @@ from mathforge.harness.model_candidate_contract import (
     MODEL_CANDIDATE_PAYLOAD_VERSION,
     MODEL_CANDIDATE_REQUIRED_FIELDS,
     MODEL_CANDIDATE_STRUCTURAL_SHAPE,
-    MODEL_CLAIM_FIELDS,
 )
 from mathforge.parsing.problem_parser import ProblemParser
 from mathforge.parsing.solution_parser import SolutionParser
@@ -51,7 +50,7 @@ def _compiled_prompt(problem_text: str) -> tuple[str, str]:
         (
             "Prove that the square of every real number is nonnegative.",
             "proof_full",
-            "proof_steps must contain the complete public proof",
+            "solution_text must contain the complete public proof",
         ),
     ],
 )
@@ -68,15 +67,17 @@ def test_solver_prompt_explicitly_aligns_public_exposition_to_response_mode(
     assert "- Answer type:" in user
     assert "standard LaTeX" in system
     assert "JSON-escaped" in system
-    assert "hidden chain-of-thought" in system
+    assert "hidden chain-of-thought" not in system
+    assert system.rstrip().endswith(
+        "Encode the exact final answer as \\boxed{...}."
+    )
 
 
 def test_model_candidate_payload_has_one_shared_executable_boundary():
     shape = json.loads(MODEL_CANDIDATE_STRUCTURAL_SHAPE)
 
-    assert MODEL_CANDIDATE_PAYLOAD_VERSION == "2.1"
+    assert MODEL_CANDIDATE_PAYLOAD_VERSION == "2.2"
     assert set(shape) == MODEL_CANDIDATE_REQUIRED_FIELDS
-    assert set(shape["claims"][0]) == MODEL_CLAIM_FIELDS
     assert MODEL_CANDIDATE_COMPATIBILITY_FIELDS == {"method_steps"}
 
     candidate = SolutionParser().parse(

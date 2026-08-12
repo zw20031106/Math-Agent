@@ -36,7 +36,8 @@ def test_solution_parser_degradation_chain():
         role="PrimarySolver",
         answer_type="fraction",
     )
-    assert strict.parse_status == "incomplete_json"
+    assert strict.parse_status == "strict_json"
+    assert strict.contract_deviations == []
     assert strict.final_answer == "1/2"
     outer = parser.parse(
         'Result follows. {"final_answer":"4","solution_text":"work"} done',
@@ -44,7 +45,7 @@ def test_solution_parser_degradation_chain():
         role="PrimarySolver",
         answer_type="integer",
     )
-    assert outer.parse_status == "outer_json:incomplete_candidate"
+    assert outer.parse_status == "outer_json"
     regex = parser.parse(
         "Reasoning here.\nFinal answer: 7",
         candidate_id="c3",

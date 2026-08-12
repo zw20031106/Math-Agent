@@ -5,6 +5,8 @@ import json
 import re
 from typing import Any, Iterable
 
+from mathforge.parsing.answer_extraction import prepare_model_text
+
 
 @dataclass(frozen=True)
 class StructuredObjectResult:
@@ -24,7 +26,9 @@ class StructuredOutputRecoveryLayer:
         truncated: bool = False,
         required_fields: Iterable[str] = (),
     ) -> StructuredObjectResult:
-        text = str(response).strip()
+        model_text = prepare_model_text(response)
+        text = model_text.public_text
+        truncated = truncated or model_text.think_truncated
         required = frozenset(required_fields)
         if not text:
             raise ValueError("structured response is empty")
@@ -81,7 +85,13 @@ class StructuredOutputRecoveryLayer:
         field_names: Iterable[str],
     ) -> dict[str, Any]:
         """Decode complete top-level values from an otherwise truncated object."""
-        text, _ = _safe_lexical_repair(str(response))
+        model_text = prepare_model_text(response)
+        source = (
+            model_text.salvage_text
+            if model_text.think_truncated
+            else model_text.public_text
+        )
+        text, _ = _safe_lexical_repair(source)
         decoder = json.JSONDecoder()
         result: dict[str, Any] = {}
         for name in field_names:

@@ -9,12 +9,18 @@ from mathforge.harness.model_candidate_contract import (
     MODEL_CANDIDATE_COMPATIBILITY_FIELDS,
     MODEL_CANDIDATE_HOST_FIELDS,
     MODEL_CANDIDATE_NONEMPTY_FIELDS,
+    MODEL_CANDIDATE_OPTIONAL_FIELDS,
     MODEL_CANDIDATE_REQUIRED_FIELDS,
     PROOF_CANDIDATE_FIELDS,
     SIMPLE_CANDIDATE_FIELDS,
     STANDARD_CANDIDATE_FIELDS,
     MODEL_CLAIM_FIELDS,
     MODEL_CLAIM_HOST_FIELDS,
+)
+from mathforge.parsing.answer_extraction import (
+    extract_final_answer_text,
+    prepare_model_text,
+    unwrap_boxed,
 )
 from mathforge.parsing.structured_output import StructuredOutputRecoveryLayer
 from mathforge.harness.schemas import (
@@ -31,11 +37,6 @@ from mathforge.harness.schemas import (
 from mathforge.verification.capabilities import derive_claim_kind
 
 
-_ANSWER_PATTERNS = (
-    re.compile(r"(?:final\s*answer|answer)\s*[:：]\s*(.+)$", re.IGNORECASE | re.MULTILINE),
-    re.compile(r"(?:最终答案|答案)\s*[:：]\s*(.+)$", re.MULTILINE),
-    re.compile(r"\\boxed\{([^{}]+)\}"),
-)
 _REQUIRED_MODEL_FIELDS = MODEL_CANDIDATE_REQUIRED_FIELDS
 _NONEMPTY_MODEL_FIELDS = MODEL_CANDIDATE_NONEMPTY_FIELDS
 _TOP_LEVEL_ALIASES = {
@@ -87,7 +88,12 @@ class SolutionParser:
     ) -> CandidateSolution | None:
         """Recover only a complete public answer from a damaged envelope."""
 
-        text = str(response).strip()
+        model_text = prepare_model_text(response)
+        text = (
+            model_text.salvage_text
+            if model_text.think_truncated
+            else model_text.public_text
+        )
         fields = StructuredOutputRecoveryLayer().salvage_top_level_fields(
             text,
             ("final_answer", "answer", "conclusion", "check"),
@@ -101,9 +107,8 @@ class SolutionParser:
             "",
         )
         if not answer:
-            extracted = self._extract_answer(text)
-            if extracted != text:
-                answer = extracted
+            answer = self._extract_answer(text)
+        answer = unwrap_boxed(answer)
         if not answer or len(answer) > 4096:
             return None
         check = fields.get("check")
@@ -146,7 +151,20 @@ class SolutionParser:
         answer_type: str,
         planned_method_family: str = "",
     ) -> CandidateSolution:
-        text = response.strip()
+        model_text = prepare_model_text(response)
+        text = model_text.public_text
+        if model_text.think_truncated:
+            recovered = self.recover_answer_candidate(
+                model_text.salvage_text,
+                candidate_id=candidate_id,
+                role=role,
+                answer_type=answer_type,
+                planned_method_family=planned_method_family,
+            )
+            if recovered is not None:
+                recovered.parse_status = "truncated_think_answer_salvage"
+                recovered.degraded = True
+                return recovered
         payload, status = self._payload(text)
         if payload is not None:
             payload, profile_deviations = self._normalize_profile_payload(
@@ -162,6 +180,7 @@ class SolutionParser:
                 answer_type,
                 status,
                 [*profile_deviations, *alias_deviations],
+                planned_method_family,
             )
         answer = self._extract_answer(text)
         parse_status = status or ("regex_answer" if answer != text else "raw_text")
@@ -489,6 +508,7 @@ class SolutionParser:
         answer_type: str,
         status: str,
         initial_deviations: list[str] | None = None,
+        planned_method_family: str = "",
     ) -> CandidateSolution:
         deviations = list(initial_deviations or [])
         missing_fields = sorted(_REQUIRED_MODEL_FIELDS - set(payload))
@@ -512,6 +532,7 @@ class SolutionParser:
         allowed_fields = (
             host_fields
             | MODEL_CANDIDATE_REQUIRED_FIELDS
+            | MODEL_CANDIDATE_OPTIONAL_FIELDS
             | MODEL_CANDIDATE_COMPATIBILITY_FIELDS
         )
         deviations.extend(
@@ -548,6 +569,7 @@ class SolutionParser:
             )
             if check_suggestion not in _ALLOWED_CHECK_TYPES:
                 deviations.append(f"{prefix}.check_type:value")
+                check_suggestion = "reasoning"
             importance = SolutionParser._model_string(
                 item,
                 "importance",
@@ -671,6 +693,7 @@ class SolutionParser:
             "",
             deviations,
         ).strip()
+        final_answer = unwrap_boxed(final_answer)
         solution_text = SolutionParser._model_string(
             payload,
             "solution_text",
@@ -692,13 +715,43 @@ class SolutionParser:
                 final_answer,
                 claims=claims,
             )
+        if not claims:
+            claims = [
+                Claim(
+                    claim_id=f"host-c{index}",
+                    statement=statement,
+                    depends_on=([f"host-c{index - 1}"] if index > 1 else []),
+                    check_type="reasoning",
+                    importance=(
+                        "critical"
+                        if index == len(public_solution_steps)
+                        else "supporting"
+                    ),
+                    claim_kind=derive_claim_kind("reasoning"),
+                )
+                for index, statement in enumerate(public_solution_steps, start=1)
+            ]
+        if not method_steps and claims:
+            method_steps = [
+                MethodStep(
+                    step_id=f"host-s{index}",
+                    kind=(
+                        MethodStepKind.CONCLUSION.value
+                        if claim.importance == "critical"
+                        else MethodStepKind.OTHER.value
+                    ),
+                    claim_ids=[claim.claim_id],
+                    theorem="",
+                )
+                for index, claim in enumerate(claims, start=1)
+            ]
         candidate = CandidateSolution(
             candidate_id=candidate_id,
             role=role,
             method=SolutionParser._model_string(
                 payload,
                 "method",
-                "unspecified",
+                planned_method_family or "unspecified",
                 deviations,
             ),
             final_answer=final_answer,
@@ -722,6 +775,7 @@ class SolutionParser:
                 deviations,
             ),
             parse_status=status,
+            planned_method_family=planned_method_family,
             contract_deviations=sorted(set(deviations)),
             method_steps=method_steps,
             source=SolutionParser._candidate_source(candidate_id, role),
@@ -807,11 +861,7 @@ class SolutionParser:
 
     @staticmethod
     def _extract_answer(text: str) -> str:
-        for pattern in _ANSWER_PATTERNS:
-            matches = pattern.findall(text)
-            if matches:
-                return str(matches[-1]).strip()
-        return text.strip()
+        return extract_final_answer_text(text, fallback_last_line=False)
 
     @staticmethod
     def _is_json_object_text(text: str) -> bool:

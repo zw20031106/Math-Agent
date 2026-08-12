@@ -6,6 +6,7 @@ from hashlib import sha256
 import re
 from typing import Any
 
+from mathforge.parsing.answer_extraction import prepare_model_text
 from mathforge.parsing.structured_output import StructuredOutputRecoveryLayer
 
 
@@ -190,7 +191,9 @@ class AgentTurnPayloadParser:
         truncation_reason: str = "",
     ) -> ParsedAgentTurn:
         recovery = StructuredOutputRecoveryLayer()
-        raw_response = str(response)
+        model_text = prepare_model_text(response)
+        raw_response = model_text.public_text
+        truncated = truncated or model_text.think_truncated
         if any(
             re.search(rf'"{re.escape(field)}"\s*:', raw_response)
             for field in _HOST_OWNED_TURN_FIELDS

@@ -74,7 +74,7 @@
         "version": "effective-agent-governance-1-phase5-phase8-closure",
         "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "399888a9bd5063b789ae29226a3960b9f4a597264d3f8300ee66f664f622910c"
+      "sha256": "b8c0afa1babf7b0713395bafe03efc587df7c933bc4b64251bf4ae0984cd3f23"
     },
     {
       "id": "prompt-contracts",
@@ -82,20 +82,20 @@
       "path": "prompts",
       "pattern": "contract.md",
       "expected_count": 7,
-        "version": "prompt-contract-12-0809-protocol-v2",
-        "engineering_reviewer": "codex-0809-phase1-protocol-audit",
-        "review_date": "2026-08-09",
-        "sha256": "06c2d4d2e9564eeebb7f4b645cf052a29a67ceaaef8eba9e8658698359c319ec"
+        "version": "prompt-contract-13-0812-p2-compact",
+        "engineering_reviewer": "codex-0812-phase-p2-contract-audit",
+        "review_date": "2026-08-12",
+        "sha256": "a161ce8990ed57a770607b50580eb74ce977f119685348c1bfb9c2e4ef3925a1"
     },
     {
       "id": "prompt-compiler",
       "kind": "file",
       "path": "mathforge/agents/prompt_compiler.py",
       "expected_count": 1,
-      "version": "prompt-compiler-15-0809-phase8-audit",
-      "engineering_reviewer": "codex-0809-phase2-availability-audit",
-      "review_date": "2026-08-09",
-      "sha256": "71ecbf6e849715cbe1dfc1f77a330aefcbe1b91baeaae642ee6109ad79f448ca"
+      "version": "prompt-compiler-16-0812-p2-compact",
+      "engineering_reviewer": "codex-0812-phase-p2-contract-audit",
+      "review_date": "2026-08-12",
+      "sha256": "c72e037351172fa1214c0aac60676756bac88b46ea9e17c6f784dd935d0e69fd"
     },
     {
       "id": "model-candidate-boundary",
@@ -110,10 +110,10 @@
         "mathforge/parsing/solution_parser.py"
       ],
       "expected_count": 7,
-      "version": "model-candidate-boundary-3.2-0809-phase8-audit",
-      "engineering_reviewer": "codex-0809-phase7-verification-audit",
-      "review_date": "2026-08-09",
-      "sha256": "986b54dafb900b237e9b690656e27f7e31d253f1cde7ea87acf6dc3694c47948"
+      "version": "model-candidate-boundary-3.3-0812-p2",
+      "engineering_reviewer": "codex-0812-phase-p2-contract-audit",
+      "review_date": "2026-08-12",
+      "sha256": "5330c02062da4c9b622ff7ae6ce7e95ae26a47c541d0a76ab67b32eace3f3d35"
     },
     {
       "id": "reasoning-state",
@@ -251,7 +251,7 @@
       "version": "phase-f6-agent-protocol-8-phase8",
       "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "8225af6e7a3ce26bdc1992f3cddf913a502a8f41845d068fa210548076d98b42"
+      "sha256": "8ddcb9bc01286fb5dcc9eac69d9bec2632d2d73a3c4850d3610f2e6ba37950bb"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -318,10 +318,10 @@
         "mathforge/output/gradeability.py"
       ],
       "expected_count": 7,
-      "version": "answer-normalization-4-0809-scorer-round-trip",
-      "engineering_reviewer": "codex-0809-phase2-availability-audit",
-      "review_date": "2026-08-09",
-      "sha256": "2639fef276409862107393cbfa07136b6fb239e531803bd74d0b764dc8bf42a8"
+      "version": "answer-normalization-5-0812-shared-boxed-parser",
+      "engineering_reviewer": "codex-0812-phase-p2-contract-audit",
+      "review_date": "2026-08-12",
+      "sha256": "c8c61a238367c0af0feb38a5eef9048cfbba1aa4a08927ebb18d4e4587aae3ce"
     },
     {
       "id": "phase3-provider-cancellation-controls",
@@ -395,7 +395,7 @@
       "version": "review-repair-communication-audit-2.0-phase8",
       "engineering_reviewer": "codex-0809-phase8-closure-audit",
       "review_date": "2026-08-09",
-      "sha256": "68aef65df35fd176be99d6ae03fd6c09190dcbbf191d9dd1883ae5d09be7eeda"
+      "sha256": "dcf0710969a35ba575f01a9bc4f585bad61d29f50fca3bd9e54e9f0970bb9319"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -416,7 +416,7 @@
       "version": "scheduler-runtime-2.0-phase9",
       "engineering_reviewer": "codex-0809-phase9-scheduler-audit",
       "review_date": "2026-08-09",
-      "sha256": "8798e915e2a18c3289932e6a1a7164905dc8c4f6523ccb2d0ee16ec5f68c61f4"
+      "sha256": "75a09524e5ae28e9e125c402594281409de21777d25573c5804e4547ffb9d550"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -441,7 +441,7 @@
       "version": "production-preflight-release-governance-1.0-phase10",
       "engineering_reviewer": "codex-0810-phase10-release-audit",
       "review_date": "2026-08-10",
-      "sha256": "489458624c42066a2519d63bfd8379a5770b51ecf97788d47729dd4c0cd9ab2a"
+      "sha256": "88ceb62135a13c13e455811d972becadb4bb63d9b29624056634c3ade97f133d"
     },
     {
       "id": "router-e5-gold",

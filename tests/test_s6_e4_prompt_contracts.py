@@ -67,13 +67,13 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
         "finalizer",
     )
     expected_versions = {
-        "router_planner": "4",
-        "primary_solver": "10",
-        "alternative_solver": "8",
-        "lemma_curator": "4",
-        "repair": "6",
-        "verifier_skeptic": "6",
-        "finalizer": "4",
+        "router_planner": "5",
+        "primary_solver": "11",
+        "alternative_solver": "9",
+        "lemma_curator": "5",
+        "repair": "7",
+        "verifier_skeptic": "7",
+        "finalizer": "5",
     }
     for role in roles:
         contract = loader.load(role)
@@ -85,7 +85,8 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
         body = loader.load(role).body
         assert "The compiler supplies exactly one" in body
         assert "Host owns" in body
-        assert "private" in body
+        assert "hidden chain-of-thought" not in body
+        assert "The final answer must" in body
         assert "solution_text" not in body
         assert "public_solution_steps" not in body
 
@@ -111,8 +112,10 @@ def test_solver_runtime_prompt_uses_method_as_a_diversity_signal():
     assert "Required core method family: direct-deduction." in rendered
     assert "diversity signal" in rendered
     assert "when possible" not in rendered.lower()
-    assert "The Host generates Candidate, Claim, method-step" in rendered
-    assert "answer, check" in rendered
+    assert "Only those two fields are required" in rendered
+    assert "Encode the exact final answer as \\boxed{...}." in rendered
+    assert "final_answer" in rendered
+    assert "solution_text" in rendered
 
 
 def test_solution_parser_classifies_json_failure_and_contract_incompleteness():
@@ -146,7 +149,7 @@ def test_solution_parser_classifies_json_failure_and_contract_incompleteness():
     assert truncated.degraded is True
     assert malformed.parse_status == "malformed_json"
     assert incomplete.parse_status == "incomplete_json"
-    assert "claims:missing" in incomplete.contract_deviations
+    assert "solution_text:missing" in incomplete.contract_deviations
     assert fenced.parse_status == "fenced_json"
 
 

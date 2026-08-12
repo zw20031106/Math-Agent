@@ -341,7 +341,7 @@ def test_primary_retries_one_contract_rejection_at_zero_temperature():
     assert candidate.final_answer == "2"
     assert [call["temperature"] for call in client.calls] == [0.2, 0.0]
     retry_message = client.calls[1]["messages"][-1]["content"]
-    assert "claims:missing" in retry_message
+    assert "solution_text:missing" in retry_message
     assert "method_steps:missing" not in retry_message
     assert "Regenerate it from scratch" in retry_message
     assert budget.used_calls == 2
@@ -485,7 +485,7 @@ def test_primary_preserves_schema_details_when_retry_transport_fails():
         )
 
     assert captured.value.code == "candidate_schema_invalid"
-    assert "claims:missing" in captured.value.details
+    assert "solution_text:missing" in captured.value.details
     assert "retry_transport:provider_5xx" in captured.value.details
     assert "private provider detail" not in str(captured.value)
 

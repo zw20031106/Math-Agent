@@ -195,10 +195,10 @@ def test_compiler_uses_minimal_candidate_schema_and_caps_non_solver_roles():
     )
     system = compilation.messages[0]["content"]
 
-    assert set(compilation.output_schema_fields) == {"answer", "check"}
-    assert '{"answer":"<exact answer>","check":"<one concise check>"}' in system
-    assert "The Host generates Candidate, Claim, method-step" in system
-    assert "solution_text" not in system
+    assert set(compilation.output_schema_fields) == {"final_answer", "solution_text"}
+    assert '"final_answer":"\\\\boxed{<answer>}"' in system
+    assert "Only those two fields are required" in system
+    assert "solution_text" in system
     assert "unresolved_obligations" not in system
 
     compiler = PromptCompiler()

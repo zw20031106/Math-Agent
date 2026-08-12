@@ -3,6 +3,7 @@ from __future__ import annotations
 from fractions import Fraction
 import re
 
+from mathforge.parsing.answer_extraction import unwrap_boxed
 
 _ANSWER_PREFIX = re.compile(
     r"^\s*(?:final\s*answer|answer|最终答案|答案)\s*[:：]\s*",
@@ -15,10 +16,7 @@ _LATEX_FRACTION = re.compile(
 
 def unwrap_answer(value: str) -> str:
     normalized = _ANSWER_PREFIX.sub("", str(value or "").strip())
-    normalized = normalized.strip().strip("$").strip()
-    boxed = re.fullmatch(r"\\boxed\s*\{(.*)\}", normalized, re.DOTALL)
-    if boxed is not None:
-        normalized = boxed.group(1).strip()
+    normalized = unwrap_boxed(normalized)
     text_wrapper = re.fullmatch(
         r"\\(?:text|mathrm)\s*\{(.*)\}",
         normalized,

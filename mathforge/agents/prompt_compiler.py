@@ -14,7 +14,6 @@ from mathforge.harness.model_candidate_contract import (
     MODEL_CANDIDATE_PATCH_STRUCTURAL_SHAPE,
     MODEL_CANDIDATE_PAYLOAD_VERSION,
     MODEL_CANDIDATE_PROFILE_FIELDS,
-    MODEL_CANDIDATE_PROFILE_SHAPES,
     MODEL_CANDIDATE_STRUCTURAL_SHAPE,
 )
 from mathforge.harness.model_policy import stage_output_cap
@@ -46,6 +45,10 @@ _SOLVER_OUTPUT_TOKENS = {
         "alternative_solver": 40960,
     },
 }
+_ANSWER_FIRST_PROTOCOL = (
+    "Give the final answer first, then the public derivation. Encode the exact "
+    "final answer as \\boxed{...}."
+)
 _AGENT_TURN_ENVELOPE_PROTOCOL = (
     "Wrap the public result in AgentTurnPayload 1.0 with exactly these fields "
     "in this order: protocol_version, task_result_type, action, "
@@ -55,81 +58,33 @@ _AGENT_TURN_ENVELOPE_PROTOCOL = (
     "timeouts; the Host owns them. Return one bare JSON object only. "
 )
 _CANDIDATE_CORE_PROTOCOL = (
-    f"Construct ModelCandidatePayload {MODEL_CANDIDATE_PAYLOAD_VERSION}. "
-    "Put the durable core fields first in this order: method, final_answer, "
-    "public_solution_steps, claims. Then include solution_text, assumptions, "
-    "theorems, and unresolved_obligations. All eight fields are required; list "
-    "fields may be empty. State the intended method family concisely. "
-    "method, final_answer, and solution_text are strings. "
-    "public_solution_steps, assumptions, theorems, and unresolved_obligations "
-    "are string arrays, never object arrays. "
-    "Each claims item must contain exactly claim_id, statement, depends_on, "
-    "check_type, and importance; depends_on is a string array, and "
-    "importance must be critical or supporting. "
-    "All claim_id values and references must be strings such as c1, never "
-    "numbers. check_type must be reasoning, definition, "
-    "theorem_preconditions, necessity, sufficiency, existence, uniqueness, "
-    "boundary, interchange, safe_parse_expression, symbolic_equivalence, "
-    "simplify_expression, numerical_residual, matrix_shape_check, "
-    "latex_syntax_check, density_normalization, small_case_enumeration, or "
-    "answer_type_check. "
-    "If theorems is nonempty, include at least one theorem_preconditions Claim "
-    "that explicitly checks the hypotheses of every invoked theorem. "
-    "Do not substitute id or dependencies inside Claim objects. Do not emit "
-    "Host-owned fields "
-    "(candidate_id, role, answer_type, planned_method_family, version, "
-    "schema_version, parse_status, parse_tier, source, method_steps, "
-    "is_method_duplicate, contract_deviations, Claim check_spec, or Claim "
-    "verification state). "
-    "Do not emit tool calls, tool arguments, private "
-    "reasoning, scratchpads, or hidden chain-of-thought. Use this exact structural "
-    f"shape: {MODEL_CANDIDATE_STRUCTURAL_SHAPE}. Default check_type to "
-    "reasoning. Use a "
-    "tool-named check_type only when that check is selected in the authorized "
-    "context and the Claim states its exact mathematical inputs. In "
-    "solution_text, public_solution_steps, and Claim statements, delimit every "
-    "mathematical formula with $...$ and use standard LaTeX rather than Unicode "
-    "math glyphs. Keep final_answer as LaTeX source without $ delimiters because "
-    "the Host renders its delimiters. Prioritize a "
-    "complete valid object over verbosity."
+    f"Return one bare ModelCandidatePayload {MODEL_CANDIDATE_PAYLOAD_VERSION} "
+    "JSON object. Put final_answer first as a string containing "
+    "\\boxed{...}; solution_text is the complete public derivation string. "
+    "Only those two fields are required. Optional structured fields may be "
+    "omitted. JSON-escape every LaTeX backslash. Return no Markdown fence or "
+    f"surrounding prose. Shape: {MODEL_CANDIDATE_STRUCTURAL_SHAPE}."
 )
 
 
 def _candidate_profile_protocol(profile: str) -> str:
-    fields = MODEL_CANDIDATE_PROFILE_FIELDS[profile]
-    shape = MODEL_CANDIDATE_PROFILE_SHAPES[profile]
-    shared = (
-        "Return exactly one bare JSON object with no Markdown fence or prose. "
-        f"Use exactly these fields: {', '.join(sorted(fields))}. "
-        f"Use this structural shape: {shape}. The Host generates Candidate, "
-        "Claim, method-step, Artifact, Evidence, Task, Turn, Message, Thread, "
-        "budget, and plan identifiers. Do not emit those fields, tool calls, "
-        "private scratch work, or hidden chain-of-thought. Use standard LaTeX "
-        "inside JSON strings with every backslash JSON-escaped. Prefer a "
-        "complete compact object over repeated exposition. "
-    )
+    shared = _CANDIDATE_CORE_PROTOCOL + " "
     if profile == "simple":
-        return shared + (
-            "answer is the exact scorer-facing answer; check is one concise "
-            "public mathematical check."
-        )
+        return shared + "Keep solution_text to one concise public check."
     if profile == "proof":
         return shared + (
-            "proof_steps is the complete ordered public proof. Each depends_on "
-            "entry is a zero-based index of an earlier proof step; the Host "
-            "creates stable Claim IDs. open_conditions lists only genuinely "
-            "unresolved hypotheses."
+            "solution_text must contain the complete ordered public proof and "
+            "every genuinely unresolved hypothesis."
         )
     return shared + (
-        "steps is one non-redundant ordered public derivation; uncertainties "
-        "lists only conditions that remain unresolved."
+        "solution_text must contain one non-redundant ordered public derivation."
     )
 _PROGRESS_DELTA_PROTOCOL = (
     "Public protocol mode is {mode}. Construct one ProgressDelta object with "
     "these nine fields and no others: public_summary, strategy, subgoals, "
     "claims, open_obligations, closed_obligation_ids, contradictions, "
     "next_step, stop_reason. This is a public, auditable ProgressDelta, not a "
-    "private scratchpad or chain-of-thought. public_summary, strategy, "
+    "final Candidate response. public_summary, strategy, "
     "next_step, and stop_reason are strings. subgoals is an array of objects "
     "with exactly subgoal_id, statement, depends_on, exit_condition, status; "
     "status is open, active, closed, or blocked. claims is an array of objects "
@@ -141,8 +96,8 @@ _PROGRESS_DELTA_PROTOCOL = (
     "depends_on references public Claim ids. closed_obligation_ids and "
     "contradictions are string arrays. Reuse existing ids without rewriting "
     "their content. Add only atomic, publicly checkable mathematical claims. "
-    "Do not emit a final answer, CandidateSolution, tool call, hidden analysis, "
-    "private reasoning, raw model response, or Host-owned state/version fields. "
+    "Do not emit a final answer, CandidateSolution, tool call, raw model "
+    "response, or Host-owned state/version fields. "
     'Use this exact shape: {"public_summary":"<public progress>",'
     '"strategy":"<current method>","subgoals":[{"subgoal_id":"g1",'
     '"statement":"<public target>","depends_on":[],"exit_condition":'
@@ -167,8 +122,7 @@ _PEER_REVIEW_PROTOCOL = (
     "Cite the exact supplied candidate_id and a real supplied claim_id. status "
     "is pass, fail, or unknown; severity is info, warning, error, or critical. "
     "Use public_state_delta {} and outbound_intents []. Review the Candidate; "
-    "do not rewrite it, generate a replacement answer, or reveal private "
-    "reasoning."
+    "do not rewrite it or generate a replacement answer."
 )
 _REBUTTAL_PROTOCOL = (
     _AGENT_TURN_ENVELOPE_PROTOCOL
@@ -179,8 +133,8 @@ _REBUTTAL_PROTOCOL = (
     "requested_followup. Cite only supplied Finding and Claim ids. action is "
     "defend, clarify, or concede. A concession must be explicit; do not silently "
     "repair or rewrite the Candidate in F5. Use public_state_delta {} and "
-    "outbound_intents []. Add only public content that responds to the Finding, "
-    "not private reasoning or a repeated debate."
+    "outbound_intents []. Add only public content that responds to the Finding "
+    "without repeating the debate."
 )
 _CROSS_EXAM_PROTOCOL = (
     _AGENT_TURN_ENVELOPE_PROTOCOL
@@ -199,7 +153,7 @@ _CROSS_EXAM_PROTOCOL = (
     "the supplied finding_ref (which is qualified when raw Finding ids collide). "
     "Use peer_finding_ids to cite those same supplied finding_ref values. "
     "Use public_state_delta {} and outbound_intents []. Do not repair, solve, "
-    "arbitrate, or emit private reasoning."
+    "or arbitrate."
 )
 _FINAL_AUDIT_PROTOCOL = (
     _AGENT_TURN_ENVELOPE_PROTOCOL
@@ -257,7 +211,7 @@ _ROLE_PROTOCOLS = {
         "obligation pass must cite a real Claim and supported obligation. An "
         "answer- or claim-level pass must cite a real Claim and supplied review "
         "target. Review only supplied Claim-linked public segments; unknown is "
-        "not pass. Do not reconstruct full solutions or emit private reasoning."
+            "not pass. Do not reconstruct full solutions."
     ),
     "repair": (
         f"{_REPAIR_PATCH_PROTOCOL} Change only the supplied failed Claim "
@@ -369,6 +323,7 @@ class PromptCompiler:
             f"This Candidate Turn has a {output_tokens:,}-token output ceiling; "
             "this is a per-Turn ceiling, not a per-problem reasoning budget."
         )
+        instructions.append(_ANSWER_FIRST_PROTOCOL)
         return self._compile(
             role_directory,
             profile,
@@ -468,6 +423,7 @@ class PromptCompiler:
                 "This is the final gradeability fallback. Solve the problem "
                 "directly and return the exact scorer-facing answer plus one "
                 "short public check. Do not emit an AgentTurn envelope.",
+                _ANSWER_FIRST_PROTOCOL,
             )
         )
         return self._compile(
@@ -537,6 +493,8 @@ class PromptCompiler:
         instructions = protocol
         if runtime_instructions.strip():
             instructions += "\n" + runtime_instructions.strip()
+        if role_directory == "finalizer":
+            instructions += "\n" + _ANSWER_FIRST_PROTOCOL
         stage = _ROLE_DIRECTORY_TO_STAGE[role_directory]
         return self._compile(
             role_directory,
@@ -614,20 +572,19 @@ class PromptCompiler:
     def _response_mode_protocol(problem: ProblemIR) -> str:
         if problem.response_mode == "proof_full":
             return (
-                "Host response mode is proof_full. proof_steps must contain the "
+                "Host response mode is proof_full. solution_text must contain the "
                 "complete public proof, including essential inferences, theorem "
                 "hypotheses, boundary cases, and the conclusion. Compress wording, "
                 "not mathematics."
             )
         if problem.response_mode == "worked_solution":
             return (
-                "Host response mode is worked_solution. steps must be an ordered, "
+                "Host response mode is worked_solution. solution_text must be an ordered, "
                 "independently checkable complete derivation."
             )
         return (
             "Host response mode is answer_only. Give the exact canonical answer and "
-            "the shortest independently checkable public justification required by "
-            "the selected Candidate profile."
+            "the shortest independently checkable public justification in solution_text."
         )
 
     def _compile(

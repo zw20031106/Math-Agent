@@ -7,13 +7,13 @@ import re
 
 import sympy
 
+from mathforge.parsing.answer_extraction import (
+    extract_final_answer_text,
+    unwrap_boxed,
+)
 from mathforge.tools.safe_parse import UnsafeExpression, parse_expression
 
 
-_FINAL_ANSWER = re.compile(
-    r"^\s*(?:final\s*answer|answer|答案)\s*[:：]\s*(.*?)\s*$",
-    re.IGNORECASE | re.MULTILINE,
-)
 _INTEGER = re.compile(r"[+-]?\d+")
 _FRACTION = re.compile(r"([+-]?\d+)\s*/\s*([+-]?\d+)")
 _CHOICE = re.compile(r"[A-H](?:\s*[,、]\s*[A-H])*", re.IGNORECASE)
@@ -128,12 +128,7 @@ def score_response(
 
 
 def extract_final_answer(response: str) -> str:
-    text = str(response or "").strip()
-    matches = _FINAL_ANSWER.findall(text)
-    if matches:
-        return _unwrap_answer(matches[-1])
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return _unwrap_answer(lines[-1] if lines else "")
+    return _unwrap_answer(extract_final_answer_text(response))
 
 
 def _default_scorer(answer_type: str) -> str:
@@ -620,10 +615,7 @@ def _normalize_math_structure(value: str) -> str:
 
 
 def _unwrap_answer(value: str) -> str:
-    normalized = str(value or "").strip().strip("$").strip()
-    boxed = re.fullmatch(r"\\boxed\{(.*)\}", normalized, re.DOTALL)
-    if boxed:
-        normalized = boxed.group(1).strip()
+    normalized = unwrap_boxed(value)
     text_wrapper = re.fullmatch(
         r"\\(?:text|mathrm)\s*\{(.*)\}",
         normalized,
