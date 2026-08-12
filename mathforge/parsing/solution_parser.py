@@ -128,6 +128,11 @@ class SolutionParser:
             ],
             source=self._candidate_source(candidate_id, role),
             parse_tier=CandidateParseTier.ANSWER_RECOVERED.value,
+            degraded=bool(
+                getattr(response, "output_budget_exceeded", False)
+                or str(getattr(response, "finish_reason", "")).casefold()
+                in {"length", "length_inferred"}
+            ),
         )
         candidate.validate()
         return candidate
@@ -194,7 +199,14 @@ class SolutionParser:
                     STANDARD_CANDIDATE_FIELDS,
                     PROOF_CANDIDATE_FIELDS,
                 }
-                if not complete_profile and not _REQUIRED_MODEL_FIELDS <= fields:
+                has_answer = bool(
+                    fields.intersection({"final_answer", "answer", "conclusion"})
+                )
+                if (
+                    not complete_profile
+                    and not _REQUIRED_MODEL_FIELDS <= fields
+                    and not has_answer
+                ):
                     return None, "truncated_json"
             status = {
                 "strict_json": "strict_json",
@@ -720,6 +732,7 @@ class SolutionParser:
                 public_solution_steps,
                 claims,
             ),
+            degraded="truncated" in status,
         )
         candidate.validate()
         return candidate
@@ -843,7 +856,7 @@ def candidate_response_integrity(candidate: CandidateSolution) -> str:
         and not candidate.solution_text.strip()
     ):
         return "empty"
-    if status == "truncated_json":
+    if "truncated" in status:
         return "truncated"
     if status == "malformed_json":
         return "malformed"
@@ -864,17 +877,17 @@ def candidate_response_validation(
 ) -> tuple[str, bool]:
     if "solution_text:json_wrapper" in candidate.contract_deviations:
         return "candidate_schema_invalid", True
+    integrity = candidate_response_integrity(candidate)
+    if integrity == "truncated":
+        return "candidate_json_incomplete", not bool(candidate.final_answer.strip())
     if candidate.parse_tier == CandidateParseTier.STRICT.value:
         return "strict_candidate_json", False
     if candidate.parse_tier == CandidateParseTier.RECOVERED.value:
         return "recovered_candidate_json", False
     if candidate.parse_tier == CandidateParseTier.ANSWER_RECOVERED.value:
         return "answer_recovered_candidate", False
-    integrity = candidate_response_integrity(candidate)
     if integrity == "empty":
         return "empty_response", True
-    if integrity == "truncated":
-        return "candidate_json_incomplete", True
     if integrity == "malformed":
         return "candidate_json_invalid", True
     if integrity == "natural_language":

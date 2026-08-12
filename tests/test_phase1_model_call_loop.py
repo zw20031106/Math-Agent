@@ -32,13 +32,13 @@ from scripts.run_case_outputs import run_model_preflight
 @pytest.mark.parametrize(
     ("stage", "expected_tokens", "expected_timeout"),
     [
-        ("router", 4096, 120.0),
-        ("primary", 8192, 240.0),
-        ("alternative", 8192, 240.0),
-        ("verifier", 6144, 180.0),
-        ("repair", 8192, 225.0),
-        ("lemma", 8192, 225.0),
-        ("finalizer", 4096, 120.0),
+        ("router", 8192, 180.0),
+        ("primary", 32768, 420.0),
+        ("alternative", 32768, 420.0),
+        ("verifier", 16384, 300.0),
+        ("repair", 24576, 360.0),
+        ("lemma", 16384, 300.0),
+        ("finalizer", 8192, 180.0),
     ],
 )
 def test_role_policy_separates_output_and_call_budgets(
@@ -57,9 +57,9 @@ def test_role_policy_separates_output_and_call_budgets(
 
 
 def test_provider_timeout_layers_leave_transport_and_gate_grace():
-    assert PROVIDER_RESPONSE_LIMIT_SECONDS == 120.0
-    assert PROVIDER_HTTP_TIMEOUT_SECONDS == 150.0
-    assert PROVIDER_CALL_TIMEOUT_SECONDS == 165.0
+    assert PROVIDER_RESPONSE_LIMIT_SECONDS == 390.0
+    assert PROVIDER_HTTP_TIMEOUT_SECONDS == 420.0
+    assert PROVIDER_CALL_TIMEOUT_SECONDS == 435.0
 
 
 def test_solver_keeps_a_valid_candidate_that_arrives_at_finalize_cutoff():
@@ -183,12 +183,12 @@ def test_provider_applies_role_cap_and_records_transport_attempts():
     )
 
     assert response == "ok"
-    assert client.calls[0]["max_tokens"] == 8_192
+    assert client.calls[0]["max_tokens"] == 32_768
     assert budget.transport_attempts == 2
     record = budget.model_call_records[0]
     assert record["configured_output_tokens"] == 65_536
-    assert record["stage_output_cap_tokens"] == 8_192
-    assert record["max_output_tokens"] == 8_192
+    assert record["stage_output_cap_tokens"] == 32_768
+    assert record["max_output_tokens"] == 32_768
     assert record["transport_attempts"] == 2
     assert record["status"] == "completed"
 
@@ -217,7 +217,7 @@ def test_provider_replaces_raw_exception_with_safe_failure_code():
     )
 
 
-def test_truncated_candidate_is_rejected_and_observable():
+def test_truncated_candidate_with_answer_is_degraded_and_observable():
     client = _RecordingClient(
         '{"method":"direct","solution_text":"partial","final_answer":"2"'
     )
@@ -237,23 +237,24 @@ def test_truncated_candidate_is_rejected_and_observable():
         method_family="direct-deduction",
     )
 
-    with pytest.raises(ModelResponseError) as captured:
-        SolverExecutor(
-            OfficialClientProvider(client, ModelCallGate(1)),
-            SolutionParser(),
-        ).execute(
-            PrimarySolver(),
-            request,
-            budget,
-            temperature=0.0,
-            max_tokens=4096,
-        )
-
-    assert captured.value.code == "candidate_json_incomplete"
-    assert budget.model_response_rejection_count == 1
-    assert budget.model_call_records[0]["response_validation"] == (
-        "candidate_json_incomplete"
+    candidate = SolverExecutor(
+        OfficialClientProvider(client, ModelCallGate(1)),
+        SolutionParser(),
+    ).execute(
+        PrimarySolver(),
+        request,
+        budget,
+        temperature=0.0,
+        max_tokens=4096,
     )
+
+    assert candidate.final_answer == "2"
+    assert candidate.degraded is True
+    assert budget.model_response_rejection_count == 0
+    assert budget.model_call_records[0]["response_validation"] in {
+        "candidate_json_incomplete",
+        "candidate_method_deviation",
+    }
 
 
 def test_complete_json_with_missing_candidate_fields_is_schema_invalid():

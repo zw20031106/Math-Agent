@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Completed the 2026-08-11 audit remediation Phase P1 truncation work without
+  removing the LLM Router. Competition stage ceilings now range from 8,192
+  Router tokens through 40,960 proof tokens, with solver timeouts raised to
+  420 seconds while preserving the 850-second case deadline. Removed the
+  misleading global `primary_max_tokens` override so stage policies are the
+  effective source of truth. The string-only official client path now infers
+  length truncation from token proximity, incomplete JSON/think blocks, and
+  incomplete endings. Solver candidate Turns salvage complete answers before
+  issuing one 2,048-token answer-only retry, record retry telemetry, and retain
+  recovered Candidates with explicit degraded assurance. Truncated JSON
+  prefixes containing an answer are non-fatal and round-trip with a degraded
+  Candidate marker. Added focused detection, recovery, retry, and policy gates.
 - Completed the 2026-08-11 audit remediation Phase P0 deliverability work
   without removing or disabling the LLM Router. Terminal failure paths now
   return a gradeable `\boxed{0}` instead of explanatory prose, preserve

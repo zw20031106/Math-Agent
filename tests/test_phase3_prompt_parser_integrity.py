@@ -115,17 +115,17 @@ def test_simple_production_prompt_is_well_below_the_previous_fallback_size():
     ("problem_text", "expected_profile", "expected_tokens"),
     [
         ("Compute 17+28.", "minimal", 2048),
-        ("Prove that x^2 >= 0 for every real x.", "proof", 8192),
+        ("Prove that x^2 >= 0 for every real x.", "proof", 40960),
         (
             "Given a probability density f(x)=1/2 on [0,2], "
             "verify normalization and compute the probability.",
             "tool",
-            4096,
+            32768,
         ),
         (
             "Given matrix [[1,2],[3,4]], compute its determinant.",
             "tool",
-            4096,
+            32768,
         ),
     ],
 )
@@ -205,15 +205,15 @@ def test_compiler_uses_minimal_candidate_schema_and_caps_non_solver_roles():
     assert compiler.compile_role(
         "router_planner",
         user_content="Problem: x",
-    ).max_output_tokens == 4096
+    ).max_output_tokens == 8192
     assert compiler.compile_role(
         "verifier_skeptic",
         user_content="Batch: {}",
-    ).max_output_tokens == 6144
+    ).max_output_tokens == 16384
     assert compiler.compile_role(
         "repair",
         user_content="Affected claim: c1",
-    ).max_output_tokens == 8192
+    ).max_output_tokens == 24576
 
 
 def test_parser_distinguishes_all_response_integrity_classes():
@@ -229,7 +229,7 @@ def test_parser_distinguishes_all_response_integrity_classes():
     expected_validation = {
         "complete": ("strict_candidate_json", False),
         "schema_violation": ("candidate_schema_invalid", True),
-        "truncated": ("candidate_json_incomplete", True),
+        "truncated": ("candidate_json_incomplete", False),
         "malformed": ("candidate_json_invalid", True),
         "natural_language": ("answer_recovered_candidate", False),
         "empty": ("empty_response", True),

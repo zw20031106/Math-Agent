@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-PROVIDER_RESPONSE_LIMIT_SECONDS = 120.0
+PROVIDER_RESPONSE_LIMIT_SECONDS = 390.0
 PROVIDER_HTTP_GRACE_SECONDS = 30.0
 PROVIDER_HTTP_TIMEOUT_SECONDS = (
     PROVIDER_RESPONSE_LIMIT_SECONDS + PROVIDER_HTTP_GRACE_SECONDS
@@ -12,29 +12,29 @@ PROVIDER_CALL_TIMEOUT_SECONDS = (
 )
 
 _DEFAULT_STAGE_EXECUTION_POLICY = {
-    "router": {"max_tokens": 4096, "timeout_seconds": 120.0, "minimum_start_window_seconds": 60.0},
-    "replan": {"max_tokens": 4096, "timeout_seconds": 120.0, "minimum_start_window_seconds": 60.0},
-    "solver_progress": {"max_tokens": 4096, "timeout_seconds": 180.0, "minimum_start_window_seconds": 90.0},
+    "router": {"max_tokens": 8192, "timeout_seconds": 180.0, "minimum_start_window_seconds": 60.0},
+    "replan": {"max_tokens": 12288, "timeout_seconds": 240.0, "minimum_start_window_seconds": 60.0},
+    "solver_progress": {"max_tokens": 12288, "timeout_seconds": 300.0, "minimum_start_window_seconds": 90.0},
     "solver_candidate_standard": {
-        "max_tokens": 8192,
-        "timeout_seconds": 240.0,
+        "max_tokens": 32768,
+        "timeout_seconds": 420.0,
         "minimum_start_window_seconds": 120.0,
     },
     "solver_compact_synthesis": {
-        "max_tokens": 8192,
-        "timeout_seconds": 240.0,
+        "max_tokens": 16384,
+        "timeout_seconds": 300.0,
         "minimum_start_window_seconds": 120.0,
     },
     "solver_candidate_proof": {
-        "max_tokens": 12288,
-        "timeout_seconds": 270.0,
+        "max_tokens": 40960,
+        "timeout_seconds": 420.0,
         "minimum_start_window_seconds": 180.0,
     },
-    "lemma_curator": {"max_tokens": 8192, "timeout_seconds": 225.0, "minimum_start_window_seconds": 120.0},
-    "peer_review": {"max_tokens": 6144, "timeout_seconds": 180.0, "minimum_start_window_seconds": 90.0},
-    "verifier": {"max_tokens": 6144, "timeout_seconds": 180.0, "minimum_start_window_seconds": 90.0},
-    "repair": {"max_tokens": 8192, "timeout_seconds": 225.0, "minimum_start_window_seconds": 120.0},
-    "finalizer": {"max_tokens": 4096, "timeout_seconds": 120.0, "minimum_start_window_seconds": 60.0},
+    "lemma_curator": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 120.0},
+    "peer_review": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 90.0},
+    "verifier": {"max_tokens": 16384, "timeout_seconds": 300.0, "minimum_start_window_seconds": 90.0},
+    "repair": {"max_tokens": 24576, "timeout_seconds": 360.0, "minimum_start_window_seconds": 120.0},
+    "finalizer": {"max_tokens": 8192, "timeout_seconds": 180.0, "minimum_start_window_seconds": 60.0},
 }
 _TURN_KIND_ALIASES = {
     "primary": "solver_candidate_standard",
@@ -86,6 +86,8 @@ def effective_output_tokens(
     configured_max_tokens: int,
     policy: dict[str, dict[str, int | float]] | None = None,
 ) -> int:
+    """Apply the stage policy, with an optional per-call downward limit."""
+
     if type(configured_max_tokens) is not int or configured_max_tokens < 0:
         raise ValueError("configured max output tokens must be nonnegative")
     cap = stage_output_cap(stage, policy)

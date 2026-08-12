@@ -63,6 +63,7 @@ MODEL_CANDIDATE_HOST_FIELDS = frozenset(
         "source",
         "is_method_duplicate",
         "contract_deviations",
+        "degraded",
     }
 )
 MODEL_CLAIM_FIELDS = frozenset(

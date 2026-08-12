@@ -300,7 +300,7 @@ def test_model_http_timeout_uses_the_transport_delivery_window():
         deterministic_finalize_reserve_seconds=30.0,
     )
 
-    assert model_http_timeout_seconds(config) == 150
+    assert model_http_timeout_seconds(config) == 420
 
 
 def test_local_model_client_does_not_add_a_second_transport_retry(

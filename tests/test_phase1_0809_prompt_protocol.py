@@ -149,9 +149,9 @@ def test_contract_runtime_source_of_truth_and_prompt_snapshot() -> None:
             "Evaluate the integral under the stated assumptions and show every "
             "required derivation step without treating this as a proof.",
             "standard",
-            4096,
+            32768,
         ),
-        ("Prove that x^2 is nonnegative for every real x.", "proof", 8192),
+        ("Prove that x^2 is nonnegative for every real x.", "proof", 40960),
     ],
 )
 def test_candidate_profile_schema_and_budget(

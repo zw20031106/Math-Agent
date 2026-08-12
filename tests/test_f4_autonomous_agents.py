@@ -338,11 +338,11 @@ class AutonomousClient:
             return "{}"
         if (
             self.reject_proof_tokens
-            and max_tokens == 12_288
+            and max_tokens == 40_960
             and role not in self._proof_rejections
         ):
             self._proof_rejections.add(role)
-            raise RuntimeError("provider rejects 12288 output tokens")
+            raise RuntimeError("provider rejects 40960 output tokens")
         response = _candidate_envelope(method)
         if (
             self.truncate_primary_candidate
@@ -410,7 +410,7 @@ def test_autonomous_solver_runs_beyond_six_turns_and_has_no_planned_rounds():
         item["agent_role"] for item in records if item["stage"] in {"primary", "alternative"}
     } == {"PrimarySolver", "AlternativeSolver"}
     assert all(
-        item["effective_output_tokens"] == 4096
+        item["effective_output_tokens"] == 12288
         for item in records
         if item["turn_kind"] == "solver_progress"
     )
@@ -537,8 +537,8 @@ def test_length_candidate_with_complete_payload_is_salvaged_without_recall():
         item["turn_kind"] == "solver_compact_synthesis" for item in records
     )
     assert any(
-        item["protocol_parse_tier"] == "strict_json"
-        and item["finish_reason"] == "length"
+            item["protocol_parse_tier"] == "semantic_answer_salvage"
+            and item["finish_reason"] == "length"
         for item in records
         if item["turn_kind"] == "solver_candidate_standard"
     )
@@ -563,7 +563,7 @@ def test_simple_candidate_turns_use_2048_tokens():
     assert all(item["effective_output_tokens"] == 2048 for item in standard)
 
 
-def test_proof_turns_use_8192_without_oversized_canary_degradation():
+def test_proof_turns_degrade_to_8192_after_oversized_canary_rejection():
     client = AutonomousClient(reject_proof_tokens=True)
     result = MathForgeHarness(client, _config()).solve(
         "Prove that 2+2=4.",
@@ -576,9 +576,9 @@ def test_proof_turns_use_8192_without_oversized_canary_degradation():
     ]
     records = _event(result, "budget_summary")["model_call_records"]
 
-    assert degradations == []
+    assert len(degradations) == 2
     assert any(
-        item["turn_kind"] == "solver_candidate_proof"
+        item["turn_kind"] == "solver_compact_synthesis"
         and item["effective_output_tokens"] == 8192
         for item in records
     )

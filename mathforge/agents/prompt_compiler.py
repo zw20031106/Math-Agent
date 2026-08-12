@@ -34,16 +34,16 @@ _SOLVER_OUTPUT_TOKENS = {
         "alternative_solver": 2048,
     },
     "standard": {
-        "primary_solver": 4096,
-        "alternative_solver": 4096,
+        "primary_solver": 32768,
+        "alternative_solver": 32768,
     },
     "tool": {
-        "primary_solver": 4096,
-        "alternative_solver": 4096,
+        "primary_solver": 32768,
+        "alternative_solver": 32768,
     },
     "proof": {
-        "primary_solver": 8192,
-        "alternative_solver": 8192,
+        "primary_solver": 40960,
+        "alternative_solver": 40960,
     },
 }
 _AGENT_TURN_ENVELOPE_PROTOCOL = (
@@ -441,7 +441,7 @@ class PromptCompiler:
             f"{profile}:{mode}",
             user_content,
             "\n".join(instructions),
-            4096,
+            12288,
             output_schema_fields=(
                 "claims",
                 "closed_obligation_ids",

@@ -252,7 +252,7 @@ def test_effective_config_is_public_and_empty_frozen_store_is_disabled():
 
     assert effective["provider"]["interface"] == "injected_client.chat"
     assert effective["provider"]["max_physical_concurrency"] == 16
-    assert effective["prompt"]["stage_output_cap_tokens"]["primary"] == 8192
+    assert effective["prompt"]["stage_output_cap_tokens"]["primary"] == 32768
     assert effective["deadline"]["hard_deadline_seconds"] == 870.0
     assert effective["features"]["frozen_lemma_store"] == {
         "requested": True,

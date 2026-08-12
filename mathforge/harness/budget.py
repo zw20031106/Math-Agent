@@ -101,6 +101,8 @@ class CallBudget:
         self.transport_attempts = 0
         self.model_call_failure_count = 0
         self.model_response_rejection_count = 0
+        self.retry_count = 0
+        self.retry_reasons: dict[str, int] = {}
         self.background_tail_started = 0
         self.background_tail_active = 0
         self.background_tail_completed = 0
@@ -660,6 +662,15 @@ class CallBudget:
                 raise BudgetExceeded("prompt character budget exhausted")
             self.used_prompt_chars = proposed
 
+    def record_model_retry(self, reason: str) -> None:
+        normalized = str(reason).strip() or "unspecified"
+        with self._lock:
+            self._ensure_mutable_locked()
+            self.retry_count += 1
+            self.retry_reasons[normalized] = (
+                self.retry_reasons.get(normalized, 0) + 1
+            )
+
     def _elapsed(self) -> float:
         return self.deadline.elapsed_seconds()
 
@@ -749,6 +760,8 @@ class CallBudget:
                 "model_response_rejection_count": (
                     self.model_response_rejection_count
                 ),
+                "retry_count": self.retry_count,
+                "retry_reasons": dict(sorted(self.retry_reasons.items())),
                 "background_tail_started": self.background_tail_started,
                 "background_tail_active": self.background_tail_active,
                 "background_tail_completed": self.background_tail_completed,

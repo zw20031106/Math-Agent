@@ -37,6 +37,7 @@ from mathforge.parsing.solution_parser import (
 )
 
 _PRIMARY_CONTRACT_ATTEMPTS = 2
+_TRUNCATION_RETRY_MAX_TOKENS = 2048
 
 
 @dataclass(frozen=True)
@@ -665,6 +666,29 @@ class SolverExecutor:
             agent_action_protocol=True,
             input_artifact_ids=input_artifact_ids,
         )
+        if _response_was_truncated(response):
+            salvaged = self._parser.recover_answer_candidate(
+                response,
+                candidate_id=request.candidate_id,
+                role=solver.role,
+                answer_type=request.problem.answer_type,
+                planned_method_family=request.method_family,
+            )
+            if salvaged is not None:
+                return self._recovered_autonomous_candidate(
+                    response,
+                    salvaged,
+                    budget,
+                    recovery_reason="answer_salvaged_from_truncated_response",
+                )
+            self._fail_agent_turn(response, budget, "response_truncated_retry")
+            response = self._retry_truncated_answer(
+                solver,
+                request,
+                budget,
+                stage=stage,
+                input_artifact_ids=input_artifact_ids,
+            )
         try:
             parsed = self._parse_agent_turn(
                 response,
@@ -683,54 +707,12 @@ class SolverExecutor:
             )
             if candidate is None:
                 raise
-            payload = AgentTurnPayload(
-                protocol_version=PROTOCOL_SCHEMA_VERSION,
-                task_result_type="CandidateArtifact",
-                action="publish_candidate",
-                public_state_delta={},
-                result_payload={
-                    "method": candidate.method,
-                    "final_answer": candidate.final_answer,
-                    "public_solution_steps": list(
-                        candidate.public_solution_steps
-                    ),
-                    "claims": [],
-                    "solution_text": candidate.solution_text,
-                    "assumptions": [],
-                    "theorems": [],
-                    "unresolved_obligations": [],
-                },
-                outbound_intents=(),
-                progress_summary="Recovered a public answer from a damaged envelope.",
-                stop_reason="answer_salvaged",
-            )
-            parsed = ParsedAgentTurn(
-                payload=payload,
-                response_sha256=sha256(str(response).encode("utf-8")).hexdigest(),
-                partial=_response_was_truncated(response),
-                truncation_reason=_response_truncation_reason(response),
-                parse_tier="semantic_answer_salvage",
-                recovery_reason="complete_answer_from_damaged_agent_turn",
-                assurance_degradation="high",
-            )
-            budget.record_model_protocol_telemetry(
-                getattr(response, "model_call_index", None),
-                parsed.parse_tier,
-                parsed.recovery_reason,
-                parsed.assurance_degradation,
-                candidate_parse_tier=candidate.parse_tier,
-            )
-            budget.record_model_response_validation(
-                getattr(response, "model_call_index", None),
-                "answer_recovered_candidate",
-                rejected=False,
-            )
-            self._complete_recovered_agent_turn(
+            return self._recovered_autonomous_candidate(
                 response,
+                candidate,
                 budget,
-                parsed,
+                recovery_reason="complete_answer_from_damaged_agent_turn",
             )
-            return AutonomousSolverTurn(parsed=parsed, candidate=candidate)
         if parsed.payload.action == "abstain":
             if parsed.payload.task_result_type != "CheckpointArtifact":
                 self._fail_agent_turn(response, budget, "agent_turn_result_type_invalid")
@@ -789,6 +771,104 @@ class SolverExecutor:
         candidate.planned_method_family = request.method_family
         candidate.validate()
         self._complete_agent_turn(response, budget)
+        return AutonomousSolverTurn(parsed=parsed, candidate=candidate)
+
+    def _retry_truncated_answer(
+        self,
+        solver: PrimarySolver | AlternativeSolver,
+        request: SolverRequest,
+        budget: CallBudget,
+        *,
+        stage: str,
+        input_artifact_ids: tuple[str, ...],
+    ) -> str:
+        budget.record_model_retry("truncated_answer_only")
+        budget.consume(
+            stage=stage,
+            optional=False,
+            action_category="candidate_completion",
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Solve the supplied problem. Output only the final answer as "
+                    "\\boxed{answer}; do not include explanations or JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": request.problem.normalized_problem,
+            },
+        ]
+        budget.record_prompt_chars(
+            sum(len(message["content"]) for message in messages)
+        )
+        return self._provider.chat(
+            messages=messages,
+            temperature=0.0,
+            max_tokens=_TRUNCATION_RETRY_MAX_TOKENS,
+            budget=budget,
+            stage=stage,
+            turn_kind="solver_compact_synthesis",
+            agent_id=f"{solver.role}:{request.candidate_id}:truncation-retry",
+            agent_action_protocol=True,
+            input_artifact_ids=input_artifact_ids,
+        )
+
+    def _recovered_autonomous_candidate(
+        self,
+        response: str,
+        candidate: CandidateSolution,
+        budget: CallBudget,
+        *,
+        recovery_reason: str,
+    ) -> AutonomousSolverTurn:
+        candidate.degraded = True
+        if "truncation_recovery" not in candidate.contract_deviations:
+            candidate.contract_deviations.append("truncation_recovery")
+        payload = AgentTurnPayload(
+            protocol_version=PROTOCOL_SCHEMA_VERSION,
+            task_result_type="CandidateArtifact",
+            action="publish_candidate",
+            public_state_delta={},
+            result_payload={
+                "method": candidate.method,
+                "final_answer": candidate.final_answer,
+                "public_solution_steps": list(candidate.public_solution_steps),
+                "claims": [],
+                "solution_text": candidate.solution_text,
+                "assumptions": [],
+                "theorems": [],
+                "unresolved_obligations": [],
+            },
+            outbound_intents=(),
+            progress_summary="Recovered a public answer from a truncated response.",
+            stop_reason="answer_salvaged",
+        )
+        parsed = ParsedAgentTurn(
+            payload=payload,
+            response_sha256=sha256(str(response).encode("utf-8")).hexdigest(),
+            partial=_response_was_truncated(response),
+            truncation_reason=_response_truncation_reason(response),
+            parse_tier="semantic_answer_salvage",
+            recovery_reason=recovery_reason,
+            assurance_degradation="high",
+        )
+        budget.record_model_protocol_telemetry(
+            getattr(response, "model_call_index", None),
+            parsed.parse_tier,
+            parsed.recovery_reason,
+            parsed.assurance_degradation,
+            candidate_parse_tier=candidate.parse_tier,
+        )
+        budget.record_model_response_validation(
+            getattr(response, "model_call_index", None),
+            "answer_recovered_candidate",
+            rejected=False,
+        )
+        self._complete_recovered_agent_turn(response, budget, parsed)
+        candidate.validate()
         return AutonomousSolverTurn(parsed=parsed, candidate=candidate)
 
     @staticmethod
@@ -920,13 +1000,14 @@ def _problem_structure_prompt(problem: ProblemIR) -> str:
 def _response_was_truncated(response: str) -> bool:
     return bool(
         getattr(response, "output_budget_exceeded", False)
-        or str(getattr(response, "finish_reason", "")).casefold() == "length"
+        or str(getattr(response, "finish_reason", "")).casefold()
+        in {"length", "length_inferred"}
     )
 
 
 def _response_truncation_reason(response: str) -> str:
     finish_reason = str(getattr(response, "finish_reason", "")).casefold()
-    if finish_reason == "length":
+    if finish_reason in {"length", "length_inferred"}:
         return "finish_reason_length"
     if getattr(response, "output_budget_exceeded", False):
         return "observed_output_exceeded_contract"

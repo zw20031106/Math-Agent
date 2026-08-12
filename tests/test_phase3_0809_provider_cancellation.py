@@ -57,9 +57,9 @@ def test_timeout_records_configured_client_and_effective_bounds() -> None:
     )
 
     record = budget.model_call_records[0]
-    assert record["configured_stage_timeout_seconds"] == 270.0
+    assert record["configured_stage_timeout_seconds"] == 420.0
     assert record["client_timeout_seconds"] == PROVIDER_CALL_TIMEOUT_SECONDS
-    assert record["effective_stage_timeout_seconds"] == 165.0
+    assert record["effective_stage_timeout_seconds"] == 420.0
     assert record["effective_stage_timeout_seconds"] <= min(
         record["configured_stage_timeout_seconds"],
         record["client_timeout_seconds"],

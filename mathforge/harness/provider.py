@@ -50,6 +50,28 @@ _TRANSPORT_HEALTH_FAILURE_CODES = frozenset(
         "unknown_provider_failure",
     }
 )
+_COMPLETE_RESPONSE_ENDINGS = frozenset('}]"\'。．.!?$')
+
+
+def _looks_truncated(
+    response: str,
+    max_output_tokens: int,
+    observed_output_tokens: int,
+) -> bool:
+    """Infer length truncation from signals exposed by the string-only client."""
+
+    text = str(response).strip()
+    if not text:
+        return True
+    maximum = max(0, int(max_output_tokens))
+    observed = max(0, int(observed_output_tokens))
+    if maximum and observed >= max(1, int(maximum * 0.95)):
+        return True
+    if text.startswith("{") and not text.endswith("}"):
+        return True
+    if "<think>" in text and "</think>" not in text:
+        return True
+    return text[-1] not in _COMPLETE_RESPONSE_ENDINGS
 
 
 def _record_protocol_dispatch(budget, call_index, runtime, turn) -> None:
@@ -921,10 +943,24 @@ class OfficialClientProvider:
         if budget is not None:
             budget.record_provider_health(self._gate.health_snapshot())
         output = self._context_budget.count_text(response)
-        output_budget_exceeded = output.tokens > allocation.max_output_tokens
-        finish_reason = str(
-            getattr(response, "finish_reason", "unobservable")
-        ) or "unobservable"
+        observed_finish_reason = str(
+            getattr(response, "finish_reason", "")
+        ).casefold()
+        output_budget_exceeded = (
+            observed_finish_reason == "length"
+            or _looks_truncated(
+                response,
+                allocation.max_output_tokens,
+                output.tokens,
+            )
+        )
+        finish_reason = (
+            "length"
+            if observed_finish_reason == "length"
+            else "length_inferred"
+            if output_budget_exceeded
+            else "stop_inferred"
+        )
         if budget is not None and call_index is not None:
             budget.record_model_call_completed(
                 call_index,

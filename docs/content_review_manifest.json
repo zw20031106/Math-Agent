@@ -95,7 +95,7 @@
       "version": "prompt-compiler-15-0809-phase8-audit",
       "engineering_reviewer": "codex-0809-phase2-availability-audit",
       "review_date": "2026-08-09",
-      "sha256": "b335dc6a1afcac03b5f58fb9c58bf056c5ed465db61338def7bf765c04e06117"
+      "sha256": "71ecbf6e849715cbe1dfc1f77a330aefcbe1b91baeaae642ee6109ad79f448ca"
     },
     {
       "id": "model-candidate-boundary",
@@ -113,7 +113,7 @@
       "version": "model-candidate-boundary-3.2-0809-phase8-audit",
       "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "87bebbdb8f1cf7264d4ae2868a1b714ae5f06bb15fe19c690bb52d3fd656defc"
+      "sha256": "986b54dafb900b237e9b690656e27f7e31d253f1cde7ea87acf6dc3694c47948"
     },
     {
       "id": "reasoning-state",
@@ -191,7 +191,7 @@
       "version": "typed-lemma-feedback-phase-f6-session-closure",
       "engineering_reviewer": "codex-phase-f6-verification-audit",
         "review_date": "2026-08-08",
-      "sha256": "e595246e2b5fe48ef7b70a3ec53360827502696a314f31a71da53ef6c8a2ccb6"
+      "sha256": "64970f7e20166d247d9b0e6a9ea65408ede21b149f1cd10e6bdb1906a7422c12"
     },
     {
       "id": "verification-closure",
@@ -251,7 +251,7 @@
       "version": "phase-f6-agent-protocol-8-phase8",
       "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "1387213ecca2af92df42f1263752b7bb8a4dbab69b28044d10d84f2cdb210e3e"
+      "sha256": "8225af6e7a3ce26bdc1992f3cddf913a502a8f41845d068fa210548076d98b42"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -274,7 +274,7 @@
       "version": "phase-f7-runtime-7-phase8-closure",
       "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "4547debc73ec9bd87ab53725e27ae57a96b7036bee29aad4b2d3477af296e24d"
+      "sha256": "b6caee651880df22fc6e3d12874d5cd91ff45cb8f62f7958c92a99ae11e0d01d"
     },
     {
       "id": "reviewed-method-cards",
@@ -345,7 +345,7 @@
       "version": "provider-controls-3-phase8-communication",
       "engineering_reviewer": "codex-0809-phase7-verification-audit",
       "review_date": "2026-08-09",
-      "sha256": "8bdcf3e38ac4ceace80ecdd0990c44224efc299b586e8179a2f3910b0d49914d"
+      "sha256": "df930541e58fd3c54a5ca3f6c93097b9639c6582b915e9e559986d7cd3ea1aec"
     },
     {
       "id": "phase7-live-calibration",
@@ -360,7 +360,7 @@
       "version": "phase7-live-calibration-3-phase3",
       "engineering_reviewer": "codex-0809-phase3-provider-audit",
       "review_date": "2026-08-09",
-      "sha256": "0bc9cba8acfa8b69dbd63f4600f4d5a480fc582373adb8ccd40516c688cc156e"
+      "sha256": "335a1a202a5d6d660fecdc1c06dd2d94fb08037c2bceb4eecd2d5dcf9d76615a"
     },
     {
       "id": "router-calibration",
@@ -395,7 +395,7 @@
       "version": "review-repair-communication-audit-2.0-phase8",
       "engineering_reviewer": "codex-0809-phase8-closure-audit",
       "review_date": "2026-08-09",
-      "sha256": "a266c7baa043fb520cc9df5565365214760a23a12eadcb5b8e68e1304eaab208"
+      "sha256": "68aef65df35fd176be99d6ae03fd6c09190dcbbf191d9dd1883ae5d09be7eeda"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -416,7 +416,7 @@
       "version": "scheduler-runtime-2.0-phase9",
       "engineering_reviewer": "codex-0809-phase9-scheduler-audit",
       "review_date": "2026-08-09",
-      "sha256": "7bd21c745b22578f5d17e88164b3248164ea007e6d09286f2181e48e08dc8cf8"
+      "sha256": "8798e915e2a18c3289932e6a1a7164905dc8c4f6523ccb2d0ee16ec5f68c61f4"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -441,7 +441,7 @@
       "version": "production-preflight-release-governance-1.0-phase10",
       "engineering_reviewer": "codex-0810-phase10-release-audit",
       "review_date": "2026-08-10",
-      "sha256": "f6b0f3b9843a4fef30ebf5727db3b2485b85f416d1ee957c9e897d4e5de33fcd"
+      "sha256": "489458624c42066a2519d63bfd8379a5770b51ecf97788d47729dd4c0cd9ab2a"
     },
     {
       "id": "router-e5-gold",

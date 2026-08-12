@@ -32,14 +32,14 @@ def test_proof_turn_uses_larger_cap_and_records_effective_policy():
     )
 
     assert response == "ok"
-    assert client.calls[0]["max_tokens"] == 12_288
+    assert client.calls[0]["max_tokens"] == 40_960
     record = budget.model_call_records[0]
     assert record["turn_kind"] == "solver_candidate_proof"
     assert record["configured_output_tokens"] == 65_536
-    assert record["effective_output_tokens"] == 12_288
-    assert record["configured_stage_timeout_seconds"] == 270.0
-    assert record["effective_stage_timeout_seconds"] <= 270.0
-    assert record["finish_reason"] == "unobservable"
+    assert record["effective_output_tokens"] == 40_960
+    assert record["configured_stage_timeout_seconds"] == 420.0
+    assert record["effective_stage_timeout_seconds"] <= 420.0
+    assert record["finish_reason"] == "length_inferred"
     assert record["logical_call_consumed"] is True
     assert record["dispatched"] is True
 

@@ -142,7 +142,8 @@ def test_solution_parser_classifies_json_failure_and_contract_incompleteness():
         answer_type="integer",
     )
 
-    assert truncated.parse_status == "truncated_json"
+    assert truncated.parse_status == "truncated_recovered_json:incomplete_candidate"
+    assert truncated.degraded is True
     assert malformed.parse_status == "malformed_json"
     assert incomplete.parse_status == "incomplete_json"
     assert "claims:missing" in incomplete.contract_deviations

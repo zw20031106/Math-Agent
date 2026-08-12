@@ -276,4 +276,5 @@ def _close_truncated_containers(text: str) -> str | None:
                 return None
     if in_string or not stack or len(stack) > 8:
         return None
-    return text + "".join(closers[item] for item in reversed(stack))
+    closed_prefix = re.sub(r",\s*$", "", text)
+    return closed_prefix + "".join(closers[item] for item in reversed(stack))
