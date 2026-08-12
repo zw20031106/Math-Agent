@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Callable
 from dataclasses import dataclass, replace
+from collections import OrderedDict
 import json
+from threading import Lock
 from time import perf_counter
 
 from mathforge.agents.registry import PromptContractLoader
@@ -94,6 +96,7 @@ from mathforge.output.loop_health import (
 )
 from mathforge.output.gradeability import enforce_scorer_round_trip
 from mathforge.parsing.problem_parser import ProblemParser
+from mathforge.parsing.answer_salvage import salvage_any_answer
 from mathforge.parsing.solution_parser import SolutionParser
 from mathforge.tools.executor import ToolExecutor
 from mathforge.harness.tool_feedback import ToolFeedbackController
@@ -196,6 +199,7 @@ _PUBLIC_METADATA_KEYS = (
     "answer_type",
     "response_mode",
 )
+_MISSING_METADATA_ID = object()
 
 
 def _build_resource_plan(
@@ -214,6 +218,8 @@ def _public_metadata(metadata: Any) -> dict[str, Any]:
         return {}
     result: dict[str, Any] = {}
     for key in _PUBLIC_METADATA_KEYS:
+        if key not in metadata:
+            continue
         value = metadata.get(key)
         if isinstance(value, (str, int, float, bool)) or value is None:
             result[key] = value
@@ -262,11 +268,16 @@ class MathForgeHarness:
             late_registry_limit=self._config.late_result_registry_max_entries,
         )
         self._model_gate = gate
+        self._raw_response_lock = Lock()
+        self._raw_responses: OrderedDict[str, list[str]] = OrderedDict()
+        self._raw_response_aliases: dict[str, str] = {}
+        self._raw_response_case_limit = max(3, self._config.case_max_concurrency * 4)
         self._provider = OfficialClientProvider(
             client,
             gate,
             self._context_budget,
             stage_execution_policy=self._config.stage_execution_policy,
+            response_observer=self._record_raw_response,
         )
         self._fallback = FallbackSolver()
         self._problem_parser = ProblemParser()
@@ -410,12 +421,49 @@ class MathForgeHarness:
             "provenance_hash": self._run_provenance.fingerprint,
         }
 
+    def _record_raw_response(self, case_id: str, response: str) -> None:
+        normalized_id = str(case_id).strip()
+        if not normalized_id or not isinstance(response, str) or not response:
+            return
+        with self._raw_response_lock:
+            storage_id = self._raw_response_aliases.get(normalized_id, normalized_id)
+            responses = self._raw_responses.setdefault(storage_id, [])
+            responses.append(response)
+            if len(responses) > self._config.max_logical_model_calls_per_problem:
+                del responses[:-self._config.max_logical_model_calls_per_problem]
+            self._raw_responses.move_to_end(storage_id)
+            while len(self._raw_responses) > self._raw_response_case_limit:
+                evicted_id, _ = self._raw_responses.popitem(last=False)
+                for source_id, target_id in tuple(self._raw_response_aliases.items()):
+                    if target_id == evicted_id:
+                        self._raw_response_aliases.pop(source_id, None)
+
+    def last_raw_responses(self, case_id: object = None) -> list[str]:
+        normalized_id = str(case_id).strip() if case_id is not None else ""
+        if not normalized_id:
+            return []
+        with self._raw_response_lock:
+            storage_id = self._raw_response_aliases.get(normalized_id, normalized_id)
+            return list(self._raw_responses.get(storage_id, ()))
+
+    def release_raw_responses(self, case_id: object = None) -> None:
+        normalized_id = str(case_id).strip() if case_id is not None else ""
+        if not normalized_id:
+            return
+        with self._raw_response_lock:
+            storage_id = self._raw_response_aliases.get(normalized_id, normalized_id)
+            self._raw_responses.pop(storage_id, None)
+            for source_id, target_id in tuple(self._raw_response_aliases.items()):
+                if source_id == normalized_id or target_id == storage_id:
+                    self._raw_response_aliases.pop(source_id, None)
+
     def solve(
         self,
         problem: str,
         metadata: dict,
         *,
         cancellation_token: CancellationToken | None = None,
+        raw_response_key: str = "",
     ) -> dict:
         normalized_problem = problem if isinstance(problem, str) else str(problem)
         safe_metadata = _public_metadata(metadata)
@@ -470,6 +518,19 @@ class MathForgeHarness:
             ),
             raw_context_max_chars=self._config.raw_context_max_chars,
         )
+        public_case_id = safe_metadata.get(
+            "id",
+            safe_metadata.get("idx", _MISSING_METADATA_ID),
+        )
+        with self._raw_response_lock:
+            self._raw_responses[session.session_id] = []
+            self._raw_responses.move_to_end(session.session_id)
+            self._raw_response_aliases[session.session_id] = session.session_id
+            normalized_response_key = str(raw_response_key).strip()
+            if normalized_response_key:
+                self._raw_response_aliases[normalized_response_key] = session.session_id
+            if public_case_id is not _MISSING_METADATA_ID:
+                self._raw_response_aliases[str(public_case_id)] = session.session_id
         session.agent_runtime = SessionAgentRuntime(
             session.session_id,
             self._agent_definitions,
@@ -3171,9 +3232,16 @@ class MathForgeHarness:
                         None,
                     )
             else:
+                raw_salvage = terminalizer.safe(
+                    "raw_response_salvage",
+                    lambda: salvage_any_answer(
+                        self.last_raw_responses(session.session_id)
+                    ),
+                    None,
+                )
                 final_response = terminalizer.safe(
                     "fallback_response",
-                    lambda: self._fallback.solve(normalized_problem),
+                    lambda: raw_salvage or self._fallback.solve(normalized_problem),
                     MINIMAL_FALLBACK_RESPONSE,
                 )
                 transition = terminalizer.safe(

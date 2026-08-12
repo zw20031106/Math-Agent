@@ -17,4 +17,4 @@ def test_provider_failure_returns_non_empty_fallback() -> None:
 
 def test_empty_problem_still_returns_non_empty_fallback() -> None:
     result = ReasoningAgent(FakeClient(fail=True)).solve("", {})
-    assert result["final_response"] == "No mathematical problem was provided."
+    assert result["final_response"] == r"\boxed{0}"

@@ -20,17 +20,23 @@ def test_constructor_tolerates_runner_extras() -> None:
     assert agent.solve("x", {})["final_response"]
 
 
-def test_public_output_rejects_empty_response_and_non_list_trace() -> None:
-    with pytest.raises(ValueError, match="non-empty final_response"):
-        build_public_result(1, {"final_response": "", "trace": []})
-    with pytest.raises(ValueError, match="list-valued trace"):
-        build_public_result(1, {"final_response": "answer", "trace": {}})
+def test_public_output_repairs_empty_response_and_non_list_trace() -> None:
+    empty = build_public_result(1, {"final_response": "", "trace": []})
+    malformed = build_public_result(
+        1,
+        {"final_response": r"\boxed{3}", "trace": {}},
+    )
+
+    assert empty["final_response"] == r"\boxed{0}"
+    assert isinstance(empty["trace"], list)
+    assert malformed["final_response"] == r"\boxed{3}"
+    assert isinstance(malformed["trace"], list)
 
 
 @pytest.mark.parametrize(
     ("outcome", "expected"),
     [
-        ("primary", "success"),
+        ("primary", "failed"),
         ("fallback", "failed"),
         ("error", "failed"),
         ("timeout", "timeout"),
@@ -48,16 +54,18 @@ def test_public_status_is_derived_from_terminal_outcome(outcome, expected) -> No
     assert result["status"] == expected
 
 
-def test_public_status_rejects_conflicting_explicit_value() -> None:
-    with pytest.raises(ValueError, match="conflicts"):
-        build_public_result(
-            1,
-            {
-                "status": "success",
-                "final_response": "fallback",
-                "trace": [{"event": "run_completed", "outcome": "fallback"}],
-            },
-        )
+def test_public_status_conflict_degrades_without_losing_answer() -> None:
+    result = build_public_result(
+        1,
+        {
+            "status": "success",
+            "final_response": r"\boxed{5}",
+            "trace": [{"event": "run_completed", "outcome": "fallback"}],
+        },
+    )
+
+    assert result["status"] == "failed"
+    assert result["final_response"] == r"\boxed{5}"
 
 
 def test_public_trace_keeps_selected_solution_and_omits_framework_noise() -> None:

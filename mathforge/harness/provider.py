@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections.abc import Callable
 from collections import deque
 from threading import Event, Lock, Thread
 from time import perf_counter
@@ -630,12 +631,14 @@ class OfficialClientProvider:
         stage_execution_policy: (
             dict[str, dict[str, int | float]] | None
         ) = None,
+        response_observer: Callable[[str, str], None] | None = None,
     ) -> None:
         if not callable(getattr(client, "chat", None)):
             raise TypeError("client must expose a callable chat method")
         self._chat = client.chat
         self._gate = gate
         self._stage_execution_policy = deepcopy(stage_execution_policy)
+        self._response_observer = response_observer
         self._context_budget = context_budget or ModelContextBudget(
             context_window_tokens=262144,
             safety_margin_tokens=8192,
@@ -906,6 +909,14 @@ class OfficialClientProvider:
                     transport_attempts=attempts,
                 )
             raise ModelTransportError("empty_response", attempts=attempts)
+        if self._response_observer is not None:
+            try:
+                self._response_observer(
+                    budget.scheduler_case_id if budget is not None else "",
+                    response,
+                )
+            except Exception:
+                pass
         self._gate.record_provider_result(success=True)
         if budget is not None:
             budget.record_provider_health(self._gate.health_snapshot())

@@ -19,12 +19,13 @@ def test_case_output_has_exact_flat_contract_and_atomic_filename(tmp_path):
     path = write_case_output(records[0], tmp_path)
 
     assert path == tmp_path / "7.json"
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "id": 7,
-        "status": "success",
-        "final_response": "Final answer: 2",
-        "trace": [{"event": "run_completed", "outcome": "success"}],
-    }
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert set(payload) == {"id", "status", "final_response", "trace"}
+    assert payload["id"] == 7
+    assert payload["status"] == "failed"
+    assert payload["final_response"] == "Final answer: 2"
+    assert payload["trace"][-1]["event"] == "run_completed"
+    assert payload["trace"][-1]["outcome"] == "fallback"
     assert not list(tmp_path.glob(".*.tmp"))
 
 
@@ -73,7 +74,7 @@ def test_completed_case_is_written_before_a_slow_peer_finishes(tmp_path):
     assert (tmp_path / "1.json").exists()
 
 
-def test_oversized_case_becomes_failed_output_without_aborting_peer(tmp_path):
+def test_oversized_case_is_trimmed_without_aborting_peer(tmp_path):
     def solve(problem, _metadata):
         response = "x" * 21000 if problem == "oversized" else "Final answer: 2"
         return {
@@ -97,7 +98,9 @@ def test_oversized_case_becomes_failed_output_without_aborting_peer(tmp_path):
     oversized = json.loads((tmp_path / "1.json").read_text(encoding="utf-8"))
     normal = json.loads((tmp_path / "2.json").read_text(encoding="utf-8"))
     assert oversized["status"] == "failed"
+    assert len(oversized["final_response"]) <= 20000
+    assert oversized["final_response"].endswith(r"\boxed{0}")
     assert oversized["trace"][-1]["event"] == "run_completed"
-    assert normal["status"] == "success"
-    assert records[0].run_metrics.outcome == "error"
+    assert normal["status"] == "failed"
+    assert records[0].run_metrics.outcome == "primary"
     assert records[1].run_metrics.outcome == "primary"

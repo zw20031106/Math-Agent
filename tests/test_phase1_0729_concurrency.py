@@ -23,7 +23,7 @@ def test_reasoning_agent_admits_at_most_three_active_cases(monkeypatch):
             self.started = 0
             self.lock = Lock()
 
-        def solve(self, _problem, metadata):
+        def solve(self, _problem, metadata, **_kwargs):
             with self.lock:
                 self.active += 1
                 self.started += 1
@@ -36,6 +36,9 @@ def test_reasoning_agent_admits_at_most_three_active_cases(monkeypatch):
             finally:
                 with self.lock:
                     self.active -= 1
+
+        def release_raw_responses(self, _identifier):
+            return None
 
     harness = ProbeHarness()
     agent = ReasoningAgent.__new__(ReasoningAgent)

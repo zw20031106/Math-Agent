@@ -321,12 +321,15 @@ def test_competition_output_limits_are_explicit_and_public_projection_is_idempot
     assert serialized_public_result_bytes(result) <= config.public_result_max_bytes
 
 
-def test_judge_trace_rejects_a_final_response_changed_after_projection():
+def test_judge_trace_mismatch_does_not_discard_a_changed_final_response():
     result = ReasoningAgent(FakeClient()).solve("Compute 3+3.", {"idx": 3})
     tampered = {**result, "final_response": "A conflicting answer."}
 
-    with pytest.raises(ValueError, match="digest is inconsistent"):
-        build_public_result(result["id"], tampered)
+    rebuilt = build_public_result(result["id"], tampered)
+
+    assert rebuilt["final_response"] == "A conflicting answer."
+    assert rebuilt["status"] == "failed"
+    assert any(event["event"] == "fallback_used" for event in rebuilt["trace"])
 
 
 def test_invalid_judge_output_limits_fail_configuration_validation():

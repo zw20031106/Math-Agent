@@ -1,13 +1,15 @@
 from threading import BoundedSemaphore
+from uuid import uuid4
 
 from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.model_identity import official_client_model_identity
-from mathforge.harness.terminalizer import minimal_fallback_result
+from mathforge.harness.terminalizer import MINIMAL_FALLBACK_RESPONSE
 from mathforge.output.public_result import (
     build_public_result,
     identifier_from_metadata,
 )
 from mathforge.output.judge_trace import minimal_judge_trace
+from mathforge.parsing.answer_salvage import salvage_any_answer
 from mathforge.runtime import MathForgeHarness
 
 
@@ -30,16 +32,39 @@ class ReasoningAgent:
 
     def solve(self, problem: str, metadata: dict) -> dict:
         identifier = None
+        response_key = uuid4().hex
+        result = None
         try:
             with self._case_gate:
                 identifier = identifier_from_metadata(metadata)
-                result = self._harness.solve(problem, metadata)
+                result = self._harness.solve(
+                    problem,
+                    metadata,
+                    raw_response_key=response_key,
+                )
                 return build_public_result(identifier, result)
         except Exception:
-            fallback = minimal_fallback_result()
+            try:
+                salvaged = salvage_any_answer(
+                    [
+                        *(
+                            [result.get("final_response", "")]
+                            if isinstance(result, dict)
+                            else []
+                        ),
+                        *self._harness.last_raw_responses(response_key),
+                    ]
+                )
+            except Exception:
+                salvaged = None
             return {
                 "id": identifier,
                 "status": "failed",
-                "final_response": fallback["final_response"],
+                "final_response": salvaged or MINIMAL_FALLBACK_RESPONSE,
                 "trace": minimal_judge_trace(),
             }
+        finally:
+            try:
+                self._harness.release_raw_responses(response_key)
+            except Exception:
+                pass

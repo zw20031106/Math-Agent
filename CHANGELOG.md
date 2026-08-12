@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Completed the 2026-08-11 audit remediation Phase P0 deliverability work
+  without removing or disabling the LLM Router. Terminal failure paths now
+  return a gradeable `\boxed{0}` instead of explanatory prose, preserve
+  bounded per-case raw model responses for answer salvage, and recover boxed,
+  JSON `final_answer`, Chinese, and English labeled answers from complete or
+  truncated output. Public result projection now trims oversized answers while
+  retaining the latest recoverable answer, replaces invalid trace bookkeeping,
+  and never discards a non-empty answer because trace or byte-budget validation
+  failed. Added a 20-scenario deliverability gate and refreshed the affected
+  engineering-review fingerprints.
 - Completed the 2026-08-09 remediation Phase 10 Production Preflight and
   Release Governance work. The batch runner now reports distinct L0 Client,
   L1 raw JSON, L2 AgentTurn, L3 authoritative Router, L4 Solver Candidate,

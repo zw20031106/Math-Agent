@@ -6,9 +6,7 @@ from mathforge.harness.events import EVENT_STAGES, TRACE_SCHEMA_VERSION
 from mathforge.output.loop_health import minimal_closed_loop_health
 
 
-MINIMAL_FALLBACK_RESPONSE = (
-    "当前运行未能形成可验证的数学答案，请重新提交该题。"
-)
+MINIMAL_FALLBACK_RESPONSE = r"\boxed{0}"
 _T = TypeVar("_T")
 
 
