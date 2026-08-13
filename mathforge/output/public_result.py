@@ -9,9 +9,14 @@ from mathforge.harness.trace import validate_trace_v2
 from mathforge.output.judge_trace import (
     JUDGE_TRACE_SCHEMA_VERSION,
     JudgeTraceLimits,
-    minimal_judge_trace,
     project_judge_trace,
     validate_judge_trace,
+)
+from mathforge.output.official_trace import (
+    is_official_trace,
+    minimal_official_trace,
+    project_official_trace,
+    validate_official_trace,
 )
 from mathforge.parsing.answer_salvage import salvage_any_answer
 
@@ -62,6 +67,16 @@ def build_public_result(identifier: int | str | None, result: dict) -> dict:
                 final_response=final_response,
                 limits=limits,
             )
+            validate_judge_trace(
+                trace,
+                final_response=final_response,
+                limits=limits,
+            )
+            trace = project_official_trace(
+                trace,
+                final_response=final_response,
+                limits=limits,
+            )
         elif any(
             isinstance(event, dict)
             and event.get("schema_version") == JUDGE_TRACE_SCHEMA_VERSION
@@ -72,13 +87,20 @@ def build_public_result(identifier: int | str | None, result: dict) -> dict:
                 final_response=final_response,
                 limits=limits,
             )
+            trace = project_official_trace(
+                trace,
+                final_response=final_response,
+                limits=limits,
+            )
+        elif is_official_trace(trace):
+            validate_official_trace(trace, limits=limits)
         else:
             trace_valid = False
     except Exception:
         trace_valid = False
     if not trace_valid:
         status = "timeout" if status == "timeout" else "failed"
-        trace = minimal_judge_trace(
+        trace = minimal_official_trace(
             outcome=_status_outcome(status),
             error_code="public_trace_replaced",
         )
@@ -90,7 +112,7 @@ def build_public_result(identifier: int | str | None, result: dict) -> dict:
     }
     if serialized_public_result_bytes(payload) > limits.public_result_max_bytes:
         payload["status"] = "failed"
-        payload["trace"] = minimal_judge_trace(
+        payload["trace"] = minimal_official_trace(
             outcome="fallback",
             error_code="public_trace_trimmed",
         )

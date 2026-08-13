@@ -174,13 +174,8 @@ def test_failed_case_is_a_terminal_atomic_four_field_output(tmp_path):
     assert set(payload) == {"id", "status", "final_response", "trace"}
     assert payload["status"] == "failed"
     assert payload["final_response"].strip()
-    assert payload["trace"][-1] == {
-        **payload["trace"][-1],
-        "event": "run_completed",
-        "outcome": "error",
-        "final_phase": "case_execution_failed",
-        "error_code": "case_execution_failed",
-    }
+    assert payload["trace"][-1]["step"] == "finalize"
+    assert "outcome: error" in payload["trace"][-1]["content"]
     assert records[0].run_metrics.outcome == "error"
     assert not list(output_dir.glob(".*.tmp"))
 

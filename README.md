@@ -74,7 +74,7 @@ mapping:
 {
   "id": 7,
   "status": "success",
-  "final_response": "Final answer: ...",
+  "final_response": "72",
   "trace": []
 }
 ```

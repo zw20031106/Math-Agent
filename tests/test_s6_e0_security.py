@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import pytest
 
+from mathforge.config import HarnessConfig
 from mathforge.model_identity import (
     EXACT_INTERN_MODEL,
     ModelIdentity,
     exact_model_identity,
 )
+from mathforge.runtime import MathForgeHarness
 from scripts.scan_secrets import SecretFinding, scan_repository
 from tests.fake_client import FakeClient
 from user_agent import ReasoningAgent
@@ -61,16 +63,13 @@ def test_public_runner_uses_the_injected_official_client_without_local_model_env
 
 
 def test_caller_cannot_replace_environment_model_with_a_display_label():
-    result = ReasoningAgent(
-        FakeClient(),
-        model_identifier="intern-latest",
-    ).solve("1 + 1", {})
+    result = MathForgeHarness(FakeClient(), HarnessConfig()).solve("1 + 1", {})
     session_started = next(
         event for event in result["trace"] if event["event"] == "session_started"
     )
 
     assert session_started["requested_model"] == "unreported"
-    assert session_started["request_source"] == "official_client_injected"
+    assert session_started["request_source"] == "not_supplied"
     assert session_started["response_model_observable"] is False
     assert session_started["thinking_mode_observable"] is False
     assert "model_identifier" not in session_started

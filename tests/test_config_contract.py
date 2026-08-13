@@ -118,7 +118,7 @@ def test_competition_config_cannot_silently_fall_back_to_six_calls():
         HarnessConfig.from_dict(payload)
 
 
-def test_public_and_benchmark_use_the_same_semantic_config_hash(
+def test_runtime_and_benchmark_use_the_same_semantic_config_hash(
     tmp_path,
     monkeypatch,
 ):
@@ -129,15 +129,15 @@ def test_public_and_benchmark_use_the_same_semantic_config_hash(
     _write_config(config_path, config)
     monkeypatch.setattr(config_module, "COMPETITION_CONFIG_PATH", config_path)
 
-    result = ReasoningAgent(FakeClient()).solve("1 + 1", {})
+    result = MathForgeHarness(FakeClient(), config).solve("1 + 1", {})
     session = next(
         event for event in result["trace"] if event["event"] == "session_started"
     )
-    public_hash = session["config_hash"]
+    runtime_hash = session["config_hash"]
     metadata = build_benchmark_metadata(dataset, config_path)
     benchmark_hash = metadata["config_sha256"]
 
-    assert public_hash == benchmark_hash == config.fingerprint
+    assert runtime_hash == benchmark_hash == config.fingerprint
     assert session["config_schema_version"] == HarnessConfig.SCHEMA_VERSION
     assert session["prompt_hash"] == metadata["prompt_sha256"]
     assert session["skill_hash"] == metadata["skill_sha256"]
@@ -180,15 +180,15 @@ def test_changing_competition_config_changes_public_behavior(
         event["event"] == "tool_checks"
         for event in with_tools_internal["trace"]
     )
-    assert all(event["event"] != "tool_checks" for event in with_tools["trace"])
+    assert "tool_checks" not in str(with_tools["trace"])
     without_hash = next(
         event["config_hash"]
-        for event in without_tools["trace"]
+        for event in without_tools_internal["trace"]
         if event["event"] == "session_started"
     )
     with_hash = next(
         event["config_hash"]
-        for event in with_tools["trace"]
+        for event in with_tools_internal["trace"]
         if event["event"] == "session_started"
     )
     assert without_hash != with_hash
@@ -196,7 +196,7 @@ def test_changing_competition_config_changes_public_behavior(
 
 def test_tests_can_inject_validated_config_without_an_external_path():
     config = _minimal_config()
-    result = ReasoningAgent(FakeClient(), config=config).solve("x", {})
+    result = MathForgeHarness(FakeClient(), config).solve("x", {})
     session = next(
         event for event in result["trace"] if event["event"] == "session_started"
     )

@@ -8,7 +8,7 @@ from mathforge.output.public_result import (
     build_public_result,
     identifier_from_metadata,
 )
-from mathforge.output.judge_trace import minimal_judge_trace
+from mathforge.output.official_trace import minimal_official_trace
 from mathforge.parsing.answer_salvage import salvage_any_answer
 from mathforge.runtime import MathForgeHarness
 
@@ -61,7 +61,7 @@ class ReasoningAgent:
                 "id": identifier,
                 "status": "failed",
                 "final_response": salvaged or MINIMAL_FALLBACK_RESPONSE,
-                "trace": minimal_judge_trace(),
+                "trace": minimal_official_trace(),
             }
         finally:
             try:

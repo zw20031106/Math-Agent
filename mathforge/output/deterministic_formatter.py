@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, ResponseMode
+from mathforge.parsing.answer_extraction import unwrap_boxed
 
 
 _ANSWER_BLOCK = re.compile(
@@ -33,22 +34,13 @@ class DeterministicFormatter:
         solution = candidate.solution_text.strip() or "\n".join(
             candidate.public_solution_steps
         ).strip()
-        if problem.response_mode == ResponseMode.ANSWER_ONLY.value:
+        if problem.response_mode != ResponseMode.PROOF_FULL.value:
             return canonical_final_response(
                 "",
                 exact_answer=answer,
                 answer_type=problem.answer_type,
                 response_mode=problem.response_mode,
             )
-        if not solution:
-            return canonical_final_response(
-                "",
-                exact_answer=answer,
-                answer_type=problem.answer_type,
-                response_mode=problem.response_mode,
-            )
-        if not answer:
-            return _ANSWER_BLOCK.sub("", solution).strip()
         return canonical_final_response(
             solution,
             exact_answer=answer,
@@ -82,6 +74,28 @@ def latex_final_answer(answer: str, answer_type: str) -> str:
     return f"${normalized}$"
 
 
+def exact_final_answer(answer: str, answer_type: str) -> str:
+    """Return the public answer without labels or outer math delimiters."""
+
+    del answer_type
+    normalized = unwrap_boxed(answer).strip()
+    prefix = re.fullmatch(
+        r"(?:(?:final\s*)?answer|\u6700\u7ec8\u7b54\u6848|\u7b54\u6848)\s*[:\uff1a]\s*(.+)",
+        normalized,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if prefix:
+        normalized = unwrap_boxed(prefix.group(1)).strip()
+    if normalized.startswith("$") and normalized.endswith("$"):
+        normalized = normalized[1:-1].strip()
+    elif normalized.startswith(r"\(") and normalized.endswith(r"\)"):
+        normalized = normalized[2:-2].strip()
+    elif normalized.startswith(r"\[") and normalized.endswith(r"\]"):
+        normalized = normalized[2:-2].strip()
+    wrapper = re.fullmatch(r"\\(?:mathrm|text)\{([^{}]*)\}", normalized)
+    return wrapper.group(1).strip() if wrapper else normalized
+
+
 def _escape_latex_text(value: str) -> str:
     replacements = {
         "\\": r"\textbackslash{}",
@@ -102,16 +116,19 @@ def canonical_final_response(
     answer_type: str,
     response_mode: str | None = None,
 ) -> str:
-    body = (
-        ""
-        if response_mode == ResponseMode.ANSWER_ONLY.value
-        else _ANSWER_BLOCK.sub("", str(text or "")).strip()
-    )
-    answer = latex_final_answer(exact_answer, answer_type)
+    body = _ANSWER_BLOCK.sub("", str(text or "")).strip()
+    answer = exact_final_answer(exact_answer, answer_type)
+    if response_mode != ResponseMode.PROOF_FULL.value:
+        return answer or body
+    if not body:
+        return answer
     if not answer:
         return body
-    answer_block = f"Final answer: {answer}"
-    return f"{body}\n\n{answer_block}" if body else answer_block
+    last_line = next(
+        (line.strip() for line in reversed(body.splitlines()) if line.strip()),
+        "",
+    )
+    return body if last_line == answer else f"{body}\n\n{answer}"
 
 
 def bound_final_response(
@@ -122,30 +139,20 @@ def bound_final_response(
     answer_type: str | None = None,
     response_mode: str | None = None,
 ) -> str:
-    """Bound exposition while retaining one complete canonical answer block."""
-    if response_mode == ResponseMode.ANSWER_ONLY.value:
-        answer = (
-            latex_final_answer(exact_answer, answer_type)
-            if answer_type is not None
-            else exact_answer.strip()
-        )
-        return f"Final answer: {answer}"
+    """Bound proof exposition while retaining the exact public conclusion."""
+    answer = exact_final_answer(exact_answer, answer_type or "text")
+    if response_mode != ResponseMode.PROOF_FULL.value:
+        return answer or str(text or "").strip()
     if max_chars <= 0 or len(text) <= max_chars:
         return text
 
-    answer = (
-        latex_final_answer(exact_answer, answer_type)
-        if answer_type is not None
-        else exact_answer.strip()
-    )
-    answer_block = f"Final answer: {answer}"
-    suffix = f"\n\n{_LIMIT_NOTICE}\n\n{answer_block}"
+    suffix = f"\n\n{_LIMIT_NOTICE}\n\n{answer}"
     if len(suffix) >= max_chars:
-        return answer_block
+        return answer[:max_chars]
 
     body = text
-    if body.rstrip().endswith(answer_block):
-        body = body.rstrip()[: -len(answer_block)].rstrip()
+    if answer and body.rstrip().endswith(answer):
+        body = body.rstrip()[: -len(answer)].rstrip()
     available = max_chars - len(suffix)
     prefix = body[:available].rstrip()
     for separator in ("\n\n", "\n", "。", ". ", "; "):

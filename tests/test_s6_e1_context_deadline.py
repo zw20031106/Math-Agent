@@ -21,7 +21,6 @@ from mathforge.harness.deadline import DeadlineController
 from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
 from mathforge.harness.trace import TraceBuilder
-from mathforge.output.judge_trace import JUDGE_TRACE_SCHEMA_VERSION
 from mathforge.runtime import MathForgeHarness
 from scripts.run_case_outputs import PerCaseWallClockRunner, write_case_output
 
@@ -358,17 +357,9 @@ def test_runner_timeout_is_terminal_atomic_and_late_result_cannot_overwrite(tmp_
     assert elapsed < 0.08
     assert set(payload) == {"id", "status", "final_response", "trace"}
     assert payload["status"] == "timeout"
-    assert payload["trace"][-1]["event"] == "run_completed"
-    assert payload["trace"][-1]["outcome"] == "timeout"
-    assert payload["trace"][-1]["final_phase"] == "timeout_completed"
-    assert (
-        payload["trace"][-1]["error_code"]
-        == "per_case_wall_clock_exceeded"
-    )
-    assert all(
-        event["schema_version"] == JUDGE_TRACE_SCHEMA_VERSION
-        for event in payload["trace"]
-    )
+    assert payload["trace"][-1]["step"] == "finalize"
+    assert "outcome: timeout" in payload["trace"][-1]["content"]
+    assert all(set(event) == {"step", "content"} for event in payload["trace"])
     assert records[0].run_metrics.per_case_wall_clock_timeout_count == 1
     assert summary["per_case_wall_clock_timeout_count"] == 1
     assert summary["timeout_rate"] == 1.0

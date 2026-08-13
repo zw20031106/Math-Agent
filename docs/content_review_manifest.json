@@ -324,7 +324,7 @@
       "version": "answer-normalization-5-0812-shared-boxed-parser",
       "engineering_reviewer": "codex-0812-phase-p2-contract-audit",
       "review_date": "2026-08-12",
-      "sha256": "c8c61a238367c0af0feb38a5eef9048cfbba1aa4a08927ebb18d4e4587aae3ce"
+      "sha256": "92572947b7e48ae95144236adbe040ed282fb814be5bb9786330a08d6fbec70a"
     },
     {
       "id": "phase3-provider-cancellation-controls",
@@ -349,7 +349,7 @@
       "version": "provider-controls-4-0812-p4-attributed-boundaries",
       "engineering_reviewer": "codex-0812-p4-audit",
       "review_date": "2026-08-12",
-      "sha256": "4947fd0596c57f4a12108079514512d0ef5abbdae7c1cf079432bfedb7dbc323"
+      "sha256": "432c91dad58d56502a6c70124830a6cc54e5b6a8cbdefb1a2d68e40ceabc66f4"
     },
     {
       "id": "phase7-live-calibration",
@@ -364,7 +364,7 @@
       "version": "phase7-live-calibration-4-0812-p4",
       "engineering_reviewer": "codex-0812-p4-audit",
       "review_date": "2026-08-12",
-      "sha256": "abf199832ef0906c8901bac28014cc1b90c5bd5af542e4bf6ec1c57d47c42052"
+      "sha256": "69ea0721b7816f0c1ed65b983a8b9810f3b271124f5a018a9771bbdeee8dea42"
     },
     {
       "id": "router-calibration",
@@ -421,7 +421,7 @@
       "version": "scheduler-runtime-2.0-phase9-0812-p4",
       "engineering_reviewer": "codex-0812-p4-audit",
       "review_date": "2026-08-12",
-      "sha256": "30d1bce9f0b65f5b340e311f7d01ff085217e0e25ed1fffa1537490084ba994a"
+      "sha256": "e7e36d544e53f1214b65e2fcb8a52e1a3f7953b4136da668dcb56369f6f9ef90"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -446,7 +446,7 @@
       "version": "production-preflight-release-governance-1.0-phase10-0812-p4",
       "engineering_reviewer": "codex-0812-p4-audit",
       "review_date": "2026-08-12",
-      "sha256": "16dfbdbca0a1eb8b5dc73e1dafb3d46a4faf901d67d57ddf2661c67fd5a30786"
+      "sha256": "51d9464f0f69f5bf412a3b71d63f855267620143b810739e9b3b2af3cf0b8de5"
     },
     {
       "id": "router-e5-gold",

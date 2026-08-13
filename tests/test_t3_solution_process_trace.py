@@ -10,36 +10,25 @@ from user_agent import ReasoningAgent
 
 def test_public_trace_starts_with_detailed_selected_solution_process():
     result = ReasoningAgent(FakeClient()).solve("1+1", {"idx": 1})
-    process = result["trace"][0]
-    selected = next(
-        event
-        for event in result["trace"]
-        if event["event"] == "final_answer_selected"
-    )
+    plan = result["trace"][0]
+    process = next(item for item in result["trace"] if item["step"] == "reasoning")
 
-    assert result["final_response"] == "Final answer: $1+1$"
-    assert process["event"] == "solution_process"
-    assert process["status"] == "complete"
-    assert process["response_mode"] == "answer_only"
-    assert process["candidate_id"] == selected["candidate_id"]
-    assert process["steps"]
-    assert process["conclusion"].startswith("$")
-    assert selected["public_solution"]["solution_process_ref"] == "trace[0]"
-    assert "public_solution_steps" not in selected["public_solution"]
+    assert result["final_response"] == "1+1"
+    assert plan["step"] == "plan"
+    assert process["content"]
+    assert "Step 1:" in process["content"]
+    assert result["trace"][-1]["step"] == "finalize"
 
 
 def test_public_trace_drops_full_effective_config_and_omitted_skill_catalog():
     result = ReasoningAgent(FakeClient()).solve("Compute $2+2$.", {"idx": 2})
-    names = [event["event"] for event in result["trace"]]
-    skills = next(
-        event for event in result["trace"] if event["event"] == "skills_selected"
-    )
+    serialized = json.dumps(result["trace"], ensure_ascii=False)
 
-    assert "effective_config_snapshot" not in names
-    assert "omitted_by_role" not in skills
-    assert "unknown_by_role" not in skills
-    assert all("included_sections" not in item for item in skills["skills"])
-    assert len(json.dumps(skills, ensure_ascii=False)) < 2048
+    assert "effective_config_snapshot" not in serialized
+    assert "omitted_by_role" not in serialized
+    assert "unknown_by_role" not in serialized
+    assert "included_sections" not in serialized
+    assert all(set(item) == {"step", "content"} for item in result["trace"])
 
 
 def test_fallback_trace_still_has_a_first_safe_solution_status():

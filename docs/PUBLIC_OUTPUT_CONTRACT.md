@@ -1,6 +1,6 @@
 # MathForge 公共输出契约
 
-版本：4.0
+版本：5.0
 
 ## 对外字段
 
@@ -10,8 +10,12 @@
 {
   "id": 0,
   "status": "success",
-  "final_response": "Final answer: ...",
-  "trace": []
+  "final_response": "72",
+  "trace": [
+    {"step": "plan", "content": "公开解题计划"},
+    {"step": "reasoning", "content": "可核查的数学推导"},
+    {"step": "finalize", "content": "答案提取与 JSON 校验"}
+  ]
 }
 ```
 
@@ -20,18 +24,18 @@
 - `status`：仅允许 `success`、`failed`、`timeout`。只有主求解流程成功才是
   `success`；Fallback、候选生成失败和内部执行失败均为 `failed`；竞赛配置的
   单题 900 秒边界到期为 `timeout`。
-- `final_response`：非空字符串。
-- `trace`：有序事件列表，以 `run_completed` 结束。
+- `final_response`：非空字符串。非证明题只返回规范化最终答案；证明题返回
+  关键且完整的公开证明步骤与结论。
+- `trace`：有序的 `{step, content}` 列表，以 `plan` 开始、以 `finalize`
+  结束。它呈现公开、可检查的数学推理和多 Agent 决策链，不输出隐藏思维链。
 
 公共结果没有 `result` 包装，也不暴露 `run_metrics`。后者只保留在内部
 Harness、Benchmark artifact 和逐题运行清单中。
 
-数学型答案（表达式、整数、分数、区间、集合、向量、元组、矩阵、多项式和
-代数结构）在 `final_response` 的唯一 `Final answer:` 块中统一使用
-`$...$` LaTeX 定界符；选择题字母使用 `\mathrm{...}`，纯文本/判断结论使用
-`\text{...}`。Solver 与
-Repair 输出不带定界符的标准 LaTeX 源，Host Formatter 负责唯一化答案块并
-添加定界符，避免重复包装。
+非证明题的 `final_response` 不带 `Final answer:` 标签，不携带推导正文，也不
+添加外围 `$...$`、`\(...\)` 或 `\[...\]`。分数、表达式、矩阵等答案保留内部
+标准 LaTeX 源；选择题仅返回选项字母。证明题保留选中 Candidate 的公开证明，
+并在末尾给出结论。非证明题的推导、候选比较和验证过程全部进入 `trace`。
 
 ## Prompt 与 Candidate 边界
 
@@ -53,8 +57,8 @@ Repair 输出不带定界符的标准 LaTeX 源，Host Formatter 负责唯一化
 
 ## Trace 内容
 
-公共 `trace` 使用 Judge Trace V4.0，是面向判分的有界审计叙事，不是内部
-框架日志或 Debug Journal：
+公共 `trace` 使用 Official Step/Content V1，是面向判分的有界审计叙事，不是
+内部框架日志或 Debug Journal。内部 Harness 仍保留 Judge Trace V4.0：
 
 - `trace[0]` 固定为 `solution_process`，记录选中 Candidate 的公开方法、
   分步数学过程、LaTeX 结论和 `response_mode`；失败结果以 `unavailable`

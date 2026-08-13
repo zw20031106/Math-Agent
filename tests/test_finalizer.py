@@ -87,7 +87,7 @@ def _run(answer: str, solution_text: str = "Proof", extra: dict | None = None):
     return LLMFinalizer(provider, SolutionParser(), DeterministicFormatter()).finalize(
         problem,
         candidate,
-        "Proof\n\nFinal answer: $42$",
+        "Proof\n\n42",
         CallBudget(1),
         max_tokens=0,
     )
@@ -96,17 +96,17 @@ def _run(answer: str, solution_text: str = "Proof", extra: dict | None = None):
 def test_finalizer_accepts_only_exact_answer_preserving_output():
     accepted = _run("42")
     assert accepted.used_llm
-    assert accepted.text.endswith("Final answer: $42$")
+    assert accepted.text.endswith("\n\n42")
     rejected = _run("43")
     assert not rejected.used_llm
-    assert rejected.text.endswith("Final answer: $42$")
+    assert rejected.text.endswith("\n\n42")
 
 
 def test_finalizer_rolls_back_same_answer_with_changed_mathematical_content():
     result = _run("42", "False claim: one plus one equals three.")
     assert not result.used_llm
     assert result.reason == "verified_content_changed"
-    assert result.text == "Proof\n\nFinal answer: $42$"
+    assert result.text == "Proof\n\n42"
 
 
 @pytest.mark.parametrize(

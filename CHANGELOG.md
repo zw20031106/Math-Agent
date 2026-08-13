@@ -1262,3 +1262,17 @@
   deterministic rollback; removed ambiguous empty `pass` statements.
 - Connected verified lemma progress to a budgeted next-round Primary reasoner;
   only verified cards are injected and full historical candidates remain hidden.
+## 2026-08-13 - Public final response and reasoning-trace contract
+
+- Changed non-proof `final_response` values to the canonical answer only, without
+  a `Final answer:` label, outer math delimiters, or derivation text.
+- Preserved public proof steps and the conclusion in proof-mode
+  `final_response` values.
+- Added an official `{step, content}` trace projection covering planning,
+  reasoning, candidate comparison, cross-review, verification, repair,
+  arbitration, model-call summary, and finalization while retaining Judge Trace
+  V4 internally.
+- Added conservative Chinese proof/justification markers for `求证`, `论证`,
+  `说明为什么`, and `说明为何`.
+- Updated case-output validation, public-output documentation, and contract
+  tests for the new boundary.

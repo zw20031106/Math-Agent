@@ -203,8 +203,11 @@ class ProblemParser:
                 "证明",
                 "证实",
                 "试证",
+                "求证",
+                "论证",
                 "prove ",
                 "prove that",
+                "prove or disprove",
                 "show that",
             )
         ):
@@ -219,6 +222,8 @@ class ProblemParser:
                 "给出过程",
                 "推导",
                 "说明理由",
+                "说明为什么",
+                "说明为何",
                 "解释原因",
                 "show your work",
                 "derive",
@@ -234,7 +239,17 @@ class ProblemParser:
     def _problem_type(lowered: str, options: list[str]) -> str:
         if options:
             return "multiple_choice"
-        if any(marker in lowered for marker in ("证明", "prove", "show that", "证毕")):
+        if any(
+            marker in lowered
+            for marker in (
+                "证明",
+                "求证",
+                "论证",
+                "prove",
+                "show that",
+                "证毕",
+            )
+        ):
             return "proof"
         if any(marker in lowered for marker in ("推导", "derive", "deduce")):
             return "derivation"

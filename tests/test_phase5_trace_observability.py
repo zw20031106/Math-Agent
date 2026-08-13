@@ -104,18 +104,16 @@ def test_runtime_trace_exposes_transport_proof_graph_and_case_summary():
     assert summary["selection_reason"]
     assert summary["decision_path"][-1] == "outcome:primary"
     public = build_public_result("case-1", result)
-    public_events = {event["event"] for event in public["trace"]}
-    assert not {
-        "model_transport_completed",
-        "proof_graph_completed",
-        "case_trace_summary",
-    } & public_events
+    public_steps = {event["step"] for event in public["trace"]}
+    assert "model_transport_completed" not in str(public["trace"])
+    assert "proof_graph_completed" not in str(public["trace"])
+    assert "case_trace_summary" not in str(public["trace"])
     assert {
-        "evidence_summary",
-        "proof_completion_summary",
-        "candidate_arbitrated",
-        "final_answer_selected",
-    } <= public_events
+        "reasoning",
+        "verification",
+        "arbitration",
+        "finalize",
+    } <= public_steps
 
 
 class _LeakyFailureClient(FakeClient):

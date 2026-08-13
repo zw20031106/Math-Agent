@@ -151,7 +151,7 @@ def test_runtime_accepts_fully_reverified_repair_and_rebuilds_solution_text():
         and state["status"] == "selected"
         for state in final_states["candidates"]
     )
-    assert result["final_response"] == r"Final answer: $\mathrm{B}$"
+    assert result["final_response"] == "B"
     proposal = next(
         event
         for event in result["trace"]
@@ -164,13 +164,10 @@ def test_runtime_accepts_fully_reverified_repair_and_rebuilds_solution_text():
     assert "STALE BAD DERIVATION" not in str(proposal["proposed_content"])
     public = build_public_result("repair-audit", result)
     history = next(
-        event for event in public["trace"] if event["event"] == "repair_history"
+        event for event in public["trace"] if event["step"] == "repair"
     )
-    attempt = history["attempts"][0]
-    assert attempt["accepted"] is True
-    assert attempt["rolled_back"] is False
-    assert attempt["proposed_candidate_id"] == "primary-1-v2"
-    assert any("x = x" in str(step) for step in attempt["public_solution_steps"])
+    assert "1 claim-local repair attempts" in history["content"]
+    assert "1 were accepted" in history["content"]
     repair_messages = next(
         messages
         for messages in client.calls

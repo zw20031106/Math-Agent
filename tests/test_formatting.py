@@ -35,7 +35,7 @@ def test_formatter_preserves_exact_answer():
         "c", "PrimarySolver", "algebra", r"\frac{1}{3}", "fraction", solution_text="Derivation"
     )
     rendered = DeterministicFormatter().format(candidate, parsed)
-    assert rendered.endswith(r"Final answer: $\frac{1}{3}$")
+    assert rendered == r"\frac{1}{3}"
 
 
 def test_final_response_limit_preserves_complete_exact_answer():
@@ -43,12 +43,11 @@ def test_final_response_limit_preserves_complete_exact_answer():
         ("A complete derivation. " * 2000) + "\n\nFinal answer: -1/4",
         exact_answer="-1/4",
         max_chars=20000,
+        response_mode="answer_only",
     )
 
     assert len(rendered) <= 20000
-    assert rendered.endswith("Final answer: -1/4")
-    assert rendered.count("Final answer:") == 1
-    assert "configured output limit" in rendered
+    assert rendered == "-1/4"
 
 
 def test_formatter_does_not_treat_exact_answer_as_substring_of_wrong_value():
@@ -62,8 +61,7 @@ def test_formatter_does_not_treat_exact_answer_as_substring_of_wrong_value():
         solution_text="A mistaken derivation concludes 42.",
     )
     rendered = DeterministicFormatter().format(candidate, parsed)
-    assert rendered.endswith("Final answer: $2$")
-    assert rendered.count("Final answer:") == 1
+    assert rendered == "2"
 
 
 def test_formatter_replaces_existing_answer_line_with_one_canonical_block():
@@ -78,17 +76,17 @@ def test_formatter_replaces_existing_answer_line_with_one_canonical_block():
     )
     rendered = DeterministicFormatter().format(candidate, parsed)
     assert "Answer: 42" not in rendered
-    assert rendered == "Work.\n\nFinal answer: $2$"
+    assert rendered == "2"
 
 
 @pytest.mark.parametrize(
     ("problem", "answer", "rendered_answer"),
     [
-        ("选择：\nA. 1\nB. 2", "A", r"$\mathrm{A}$"),
-        ("求分数答案", r"\frac{1}{3}", r"$\frac{1}{3}$"),
-        ("求解集合", "{1,2}", "${1,2}$"),
-        ("求解区间", "[0,1)", "$[0,1)$"),
-        ("求矩阵", "[[1,0],[0,1]]", "$[[1,0],[0,1]]$"),
+        ("选择：\nA. 1\nB. 2", "A", "A"),
+        ("求分数答案", r"\frac{1}{3}", r"\frac{1}{3}"),
+        ("求解集合", "{1,2}", "{1,2}"),
+        ("求解区间", "[0,1)", "[0,1)"),
+        ("求矩阵", "[[1,0],[0,1]]", "[[1,0],[0,1]]"),
     ],
 )
 def test_formatter_preserves_exact_answer_representation_in_unique_block(
@@ -106,8 +104,7 @@ def test_formatter_preserves_exact_answer_representation_in_unique_block(
         solution_text="Work.",
     )
     rendered = DeterministicFormatter().format(candidate, parsed)
-    assert rendered.endswith(f"Final answer: {rendered_answer}")
-    assert rendered.count("Final answer:") == 1
+    assert rendered == rendered_answer
 
 
 def test_formatter_does_not_double_wrap_existing_latex_delimiters():
@@ -123,4 +120,4 @@ def test_formatter_does_not_double_wrap_existing_latex_delimiters():
 
     rendered = DeterministicFormatter().format(candidate, parsed)
 
-    assert rendered.endswith(r"Final answer: $x^2+1$")
+    assert rendered == r"x^2+1"

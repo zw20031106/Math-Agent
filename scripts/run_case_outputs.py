@@ -57,9 +57,7 @@ from mathforge.model_identity import (  # noqa: E402
     exact_model_identity,
 )
 from mathforge.output.public_result import build_public_result  # noqa: E402
-from mathforge.output.judge_trace import (  # noqa: E402
-    JUDGE_TRACE_SCHEMA_VERSION,
-)
+from mathforge.output.official_trace import validate_official_trace  # noqa: E402
 from mathforge.parsing.problem_parser import ProblemParser  # noqa: E402
 from mathforge.runtime import MathForgeHarness  # noqa: E402
 from scripts.run_benchmark import load_benchmark_config  # noqa: E402
@@ -1202,13 +1200,7 @@ def validate_case_output(path: Path, identifier: str) -> dict[str, Any]:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"case output is unreadable: {path.name}") from error
     _validate_public_payload(payload, identifier)
-    schema_versions = {
-        event.get("schema_version")
-        for event in payload["trace"]
-        if isinstance(event, dict)
-    }
-    if schema_versions != {JUDGE_TRACE_SCHEMA_VERSION}:
-        raise ValueError("case output Judge Trace schema is incompatible")
+    validate_official_trace(payload["trace"])
     build_public_result(payload["id"], payload)
     return payload
 
@@ -1231,16 +1223,9 @@ def _validate_public_payload(payload: Any, identifier: str) -> None:
     ):
         raise ValueError("case output final_response must be non-empty")
     trace = payload["trace"]
-    if (
-        not isinstance(trace, list)
-        or not trace
-        or not isinstance(trace[-1], dict)
-        or trace[-1].get("event") != "run_completed"
-    ):
-        raise ValueError("case output trace must have a terminal run_completed event")
-    expected_status = _terminal_status(str(trace[-1].get("outcome", "")))
-    if payload["status"] != expected_status:
-        raise ValueError("case output status conflicts with terminal outcome")
+    validate_official_trace(trace)
+    if payload["status"] not in PUBLIC_CASE_STATUSES:
+        raise ValueError("case output status is invalid")
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -1354,7 +1339,7 @@ def _current_run_contract() -> dict[str, Any]:
         },
         "code_identity": _code_identity(),
         "output_contract": {
-            "judge_trace_schema_version": JUDGE_TRACE_SCHEMA_VERSION,
+            "trace_contract": "official-step-content-v1",
             "top_level_fields": [
                 "id",
                 "status",

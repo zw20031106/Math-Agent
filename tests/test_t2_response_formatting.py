@@ -22,10 +22,10 @@ def _candidate(answer: str, *, answer_type: str, solution: str) -> CandidateSolu
 @pytest.mark.parametrize(
     ("problem", "answer", "answer_type", "expected"),
     [
-        ("计算 $1+1$。", "2", "integer", "Final answer: $2$"),
-        ("选择正确选项。", "B", "choice", r"Final answer: $\mathrm{B}$"),
-        ("判断该命题是否正确。", "正确", "text", r"Final answer: $\text{正确}$"),
-        ("填空。", r"\frac{1}{2}", "fraction", r"Final answer: $\frac{1}{2}$"),
+        ("计算 $1+1$。", "2", "integer", "2"),
+        ("选择正确选项。", "B", "choice", "B"),
+        ("判断该命题是否正确。", "正确", "text", "正确"),
+        ("填空。", r"\frac{1}{2}", "fraction", r"\frac{1}{2}"),
     ],
 )
 def test_answer_only_returns_one_latex_answer_line(
@@ -44,14 +44,14 @@ def test_answer_only_returns_one_latex_answer_line(
     assert "Hidden exposition" not in rendered
 
 
-def test_explicit_worked_solution_preserves_public_steps_and_latex_answer():
+def test_explicit_worked_solution_keeps_steps_out_of_final_response():
     parsed = ProblemParser().parse("计算 $1+1$ 并写出过程。")
     rendered = DeterministicFormatter().format(
         _candidate("2", answer_type="integer", solution="由 $1+1=2$ 可得结果。"),
         parsed,
     )
     assert parsed.response_mode == "worked_solution"
-    assert rendered == "由 $1+1=2$ 可得结果。\n\nFinal answer: $2$"
+    assert rendered == "2"
 
 
 def test_proof_full_preserves_complete_public_proof():
@@ -67,7 +67,7 @@ def test_proof_full_preserves_complete_public_proof():
     )
     assert parsed.response_mode == "proof_full"
     assert rendered.startswith(proof)
-    assert rendered.endswith(r"Final answer: $\text{命题成立}$")
+    assert rendered.endswith("命题成立")
 
 
 def test_existing_latex_delimiters_are_not_nested_for_answer_only():
@@ -76,4 +76,4 @@ def test_existing_latex_delimiters_are_not_nested_for_answer_only():
         _candidate("$x^2+1$", answer_type="expression", solution="Unused."),
         parsed,
     )
-    assert rendered == r"Final answer: $x^2+1$"
+    assert rendered == r"x^2+1"

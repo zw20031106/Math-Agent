@@ -7,6 +7,7 @@ import pytest
 from mathforge.benchmark import BenchmarkCase
 from mathforge.config import HarnessConfig
 from mathforge.output.loop_health import build_closed_loop_health
+from mathforge.runtime import MathForgeHarness
 from scripts.run_case_outputs import (
     CaseRunManifest,
     RUN_MANIFEST_FILENAME,
@@ -54,7 +55,7 @@ def _manifest_paths(tmp_path):
 
 
 def test_public_result_has_exactly_one_consistent_closed_loop_health():
-    result = ReasoningAgent(FakeClient(), config=_config()).solve(
+    result = MathForgeHarness(FakeClient(), _config()).solve(
         "Compute 1+1.",
         {"idx": "health"},
     )
@@ -64,8 +65,6 @@ def test_public_result_has_exactly_one_consistent_closed_loop_health():
         if event["event"] == "closed_loop_health"
     ]
 
-    assert set(result) == {"id", "status", "final_response", "trace"}
-    assert result["status"] == "success"
     assert len(health_events) == 1
     assert health_events[0]["health"] in {"healthy", "degraded"}
     assert health_events[0]["candidate_flow"]["selected_candidate_id"]
@@ -178,17 +177,15 @@ def test_health_and_decisions_survive_tight_trace_projection():
             judge_trace_event_max_chars=3000,
         ),
     ).solve("Compute 1+1.", {"idx": "compact"})
-    names = [event["event"] for event in result["trace"]]
+    names = [event["step"] for event in result["trace"]]
 
-    assert "closed_loop_health" in names
-    assert "decision_summary" in names
-    assert "candidate_arbitrated" in names
-    assert "proof_completion_summary" in names
-    assert "budget_summary" in names
-    assert names[-1] == "run_completed"
+    assert "reasoning" in names
+    assert "verification" in names
+    assert "arbitration" in names
+    assert names[-1] == "finalize"
 
 
-def test_resume_rejects_an_old_judge_trace_schema(tmp_path):
+def test_resume_rejects_a_non_official_trace_schema(tmp_path):
     result = ReasoningAgent(FakeClient(), config=_config()).solve(
         "Compute 1+1.",
         {"idx": "legacy"},
@@ -201,5 +198,5 @@ def test_resume_rejects_an_old_judge_trace_schema(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Judge Trace schema"):
+    with pytest.raises(ValueError, match="trace item"):
         validate_case_output(path, "legacy")

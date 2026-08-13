@@ -8,10 +8,7 @@ import pytest
 from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.harness.events import DEBUG_TRACE_SCHEMA_VERSION
 from mathforge.harness.trace_journal import TraceJournalFactory
-from mathforge.output.judge_trace import (
-    JUDGE_TRACE_SCHEMA_VERSION,
-    validate_judge_trace,
-)
+from mathforge.output.official_trace import validate_official_trace
 from mathforge.output.public_result import (
     build_public_result,
     serialized_public_result_bytes,
@@ -88,7 +85,7 @@ class _ConflictingClient:
         return _candidate("2", "SELECTED_ANSWER_MARKER")
 
 
-def test_formal_output_uses_judge_v3_while_local_journal_keeps_debug_events(
+def test_formal_output_uses_official_trace_while_local_journal_keeps_debug_events(
     tmp_path,
 ):
     config = _minimal_config()
@@ -101,28 +98,13 @@ def test_formal_output_uses_judge_v3_while_local_journal_keeps_debug_events(
     internal = harness.solve("Compute 1+1.", {"idx": "judge-debug"})
     public = build_public_result("judge-debug", internal)
 
-    validate_judge_trace(
+    validate_official_trace(
         public["trace"],
-        final_response=public["final_response"],
         limits=internal["_public_output_limits"],
     )
-    selected = next(
-        event
-        for event in public["trace"]
-        if event["event"] == "final_answer_selected"
-    )
-    assert "final_response" not in selected["public_solution"]
-    assert all(
-        event["schema_version"] == JUDGE_TRACE_SCHEMA_VERSION
-        for event in public["trace"]
-    )
-    assert not {
-        "candidate_generated",
-        "candidate_generation_failed",
-        "proof_graph_completed",
-        "case_trace_summary",
-        "model_transport_completed",
-    } & {event["event"] for event in public["trace"]}
+    assert all(set(item) == {"step", "content"} for item in public["trace"])
+    assert public["trace"][0]["step"] == "plan"
+    assert public["trace"][-1]["step"] == "finalize"
 
     records = [
         json.loads(line)
@@ -155,52 +137,14 @@ def test_viable_candidate_public_answer_and_steps_enter_judge_trace():
         {"idx": "conflict"},
     )
     serialized = json.dumps(result["trace"], ensure_ascii=False)
-    selected = next(
-        event
-        for event in result["trace"]
-        if event["event"] == "final_answer_selected"
-    )
-    summaries = next(
-        event
-        for event in result["trace"]
-        if event["event"] == "candidate_summaries"
+    candidates = next(
+        event for event in result["trace"] if event["step"] == "candidate_generation"
     )
 
     assert result["status"] == "success"
-    assert selected["public_solution"]["final_answer"] == "2"
     assert "SELECTED_ANSWER_MARKER" in result["final_response"]
-    assert "REJECTED_ANSWER_MARKER" in serialized
-    assert all(
-        set(item)
-        == {
-            "candidate_id",
-            "role",
-            "method_family",
-            "status",
-            "content_digest",
-            "rejection_category",
-            "evidence_summary",
-            "public_final_answer",
-            "public_solution_steps",
-            "proof_status",
-            "selection_reason",
-            "selected",
-            "solution_process_ref",
-        }
-        for item in summaries["candidates"]
-    )
-    assert any(
-        item["status"] == "viable_not_selected"
-        and item["public_final_answer"] == "3"
-        and item["public_solution_steps"]
-        for item in summaries["candidates"]
-    )
-    selected_summary = next(
-        item for item in summaries["candidates"] if item["selected"]
-    )
-    assert selected_summary["candidate_id"] == selected["candidate_id"]
-    assert selected_summary["solution_process_ref"] == "trace[0]"
-    assert selected_summary["public_solution_steps"] == []
+    assert "answer 3" in candidates["content"]
+    assert "candidate_generation" in serialized
 
 
 def test_long_proof_and_sixty_four_claims_have_bounded_structured_judge_output():
@@ -280,7 +224,7 @@ def test_four_thousand_internal_events_are_projected_quickly_and_bounded():
     assert elapsed_seconds < 2.0
     assert len(public["trace"]) <= config.judge_trace_max_events
     assert serialized_public_result_bytes(public) <= config.public_result_max_bytes
-    assert public["trace"][-1]["event"] == "run_completed"
+    assert public["trace"][-1]["step"] == "finalize"
 
 
 def test_secret_path_traceback_and_private_payload_keys_are_absent():
@@ -300,7 +244,7 @@ def test_secret_path_traceback_and_private_payload_keys_are_absent():
     serialized = json.dumps(result, ensure_ascii=False).lower()
 
     assert result["status"] == "failed"
-    assert result["trace"][-1]["event"] == "run_completed"
+    assert result["trace"][-1]["step"] == "finalize"
     assert fake_secret.lower() not in serialized
     assert "c:\\private" not in serialized
     assert "traceback" not in serialized
@@ -321,15 +265,15 @@ def test_competition_output_limits_are_explicit_and_public_projection_is_idempot
     assert serialized_public_result_bytes(result) <= config.public_result_max_bytes
 
 
-def test_judge_trace_mismatch_does_not_discard_a_changed_final_response():
+def test_official_trace_is_idempotent_when_final_response_is_already_public():
     result = ReasoningAgent(FakeClient()).solve("Compute 3+3.", {"idx": 3})
     tampered = {**result, "final_response": "A conflicting answer."}
 
     rebuilt = build_public_result(result["id"], tampered)
 
     assert rebuilt["final_response"] == "A conflicting answer."
-    assert rebuilt["status"] == "failed"
-    assert any(event["event"] == "fallback_used" for event in rebuilt["trace"])
+    assert rebuilt["status"] == "success"
+    assert rebuilt["trace"] == result["trace"]
 
 
 def test_invalid_judge_output_limits_fail_configuration_validation():

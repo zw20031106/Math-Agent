@@ -7,12 +7,19 @@ from mathforge.benchmark import BenchmarkCase, run_benchmark
 from scripts.run_case_outputs import write_case_output
 
 
+def _trace():
+    return [
+        {"step": "plan", "content": "Prepared the public solution plan."},
+        {"step": "finalize", "content": "Completed public output checks."},
+    ]
+
+
 def test_case_output_has_exact_flat_contract_and_atomic_filename(tmp_path):
     records, _ = run_benchmark(
         [BenchmarkCase("7", "1 + 1")],
         lambda *_: {
-            "final_response": "Final answer: 2",
-            "trace": [{"event": "run_completed", "outcome": "success"}],
+            "final_response": "2",
+            "trace": _trace(),
         },
     )
 
@@ -23,9 +30,8 @@ def test_case_output_has_exact_flat_contract_and_atomic_filename(tmp_path):
     assert set(payload) == {"id", "status", "final_response", "trace"}
     assert payload["id"] == 7
     assert payload["status"] == "failed"
-    assert payload["final_response"] == "Final answer: 2"
-    assert payload["trace"][-1]["event"] == "run_completed"
-    assert payload["trace"][-1]["outcome"] == "fallback"
+    assert payload["final_response"] == "2"
+    assert payload["trace"][-1]["step"] == "finalize"
     assert not list(tmp_path.glob(".*.tmp"))
 
 
@@ -38,8 +44,8 @@ def test_completed_case_is_written_before_a_slow_peer_finishes(tmp_path):
         if problem == "slow":
             assert release_slow_case.wait(2)
         return {
-            "final_response": f"Final answer: {problem}",
-            "trace": [{"event": "run_completed", "outcome": "success"}],
+            "final_response": problem,
+            "trace": _trace(),
         }
 
     def on_record_completed(record):
@@ -76,10 +82,10 @@ def test_completed_case_is_written_before_a_slow_peer_finishes(tmp_path):
 
 def test_oversized_case_is_trimmed_without_aborting_peer(tmp_path):
     def solve(problem, _metadata):
-        response = "x" * 21000 if problem == "oversized" else "Final answer: 2"
+        response = "x" * 21000 if problem == "oversized" else "2"
         return {
             "final_response": response,
-            "trace": [{"event": "run_completed", "outcome": "primary"}],
+            "trace": _trace(),
         }
 
     records, _ = run_benchmark(
@@ -100,7 +106,7 @@ def test_oversized_case_is_trimmed_without_aborting_peer(tmp_path):
     assert oversized["status"] == "failed"
     assert len(oversized["final_response"]) <= 20000
     assert oversized["final_response"].endswith(r"\boxed{0}")
-    assert oversized["trace"][-1]["event"] == "run_completed"
+    assert oversized["trace"][-1]["step"] == "finalize"
     assert normal["status"] == "failed"
     assert records[0].run_metrics.outcome == "primary"
     assert records[1].run_metrics.outcome == "primary"

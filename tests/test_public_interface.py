@@ -11,7 +11,7 @@ def test_public_interface_returns_required_contract() -> None:
     assert set(result) == {"id", "status", "final_response", "trace"}
     assert result["id"] == 1
     assert result["status"] == "success"
-    assert result["final_response"] == "Final answer: $1 + 1$"
+    assert result["final_response"] == "1 + 1"
     assert isinstance(result["trace"], list)
 
 
@@ -70,19 +70,13 @@ def test_public_status_conflict_degrades_without_losing_answer() -> None:
 
 def test_public_trace_keeps_selected_solution_and_omits_framework_noise() -> None:
     result = ReasoningAgent(client=FakeClient()).solve("1 + 1", {"idx": 1})
-    names = [event["event"] for event in result["trace"]]
-    selected = next(
-        event
-        for event in result["trace"]
-        if event["event"] == "final_answer_selected"
-    )
+    steps = [event["step"] for event in result["trace"]]
+    serialized = str(result["trace"])
 
-    assert "phase_transition" not in names
-    assert "context_view_built" not in names
-    assert "candidate_generated" not in names
-    assert result["trace"][0]["event"] == "solution_process"
-    assert result["trace"][0]["steps"]
-    assert selected["public_solution"]["solution_process_ref"] == "trace[0]"
-    assert selected["public_solution"]["final_answer"]
-    assert result["trace"][-1]["event"] == "run_completed"
+    assert "phase_transition" not in serialized
+    assert "context_view_built" not in serialized
+    assert "candidate_generated" not in serialized
+    assert steps[0] == "plan"
+    assert "reasoning" in steps
+    assert steps[-1] == "finalize"
     assert build_public_result(result["id"], result) == result
