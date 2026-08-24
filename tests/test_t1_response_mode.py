@@ -66,7 +66,7 @@ def test_problem_ir_response_mode_round_trips_and_rejects_unknown_modes():
     problem = ProblemParser().parse("Compute $1+1$.")
     restored = ProblemIR.from_dict(problem.to_dict())
     assert restored.response_mode == "answer_only"
-    assert restored.schema_version == "2.1"
+    assert restored.schema_version == "2.2"
 
     payload = problem.to_dict()
     payload["response_mode"] = "verbose"

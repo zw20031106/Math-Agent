@@ -657,8 +657,18 @@ class MathForgeHarness:
                 problem_type=session.problem_ir.problem_type,
                 answer_type=session.problem_ir.answer_type,
                 response_mode=session.problem_ir.response_mode,
+                target_confidence=session.problem_ir.target_confidence,
                 answer_type_confidence=(
                     session.problem_ir.answer_type_confidence
+                ),
+                response_mode_confidence=(
+                    session.problem_ir.response_mode_confidence
+                ),
+                interpretation_conflicts=(
+                    session.problem_ir.interpretation_conflicts
+                ),
+                router_disambiguation_required=(
+                    session.problem_ir.requires_router_disambiguation
                 ),
                 target_phrase=session.problem_ir.target_phrase,
                 target_kind=session.problem_ir.target_kind,
@@ -3252,7 +3262,14 @@ class MathForgeHarness:
                 )
                 final_response = terminalizer.safe(
                     "fallback_response",
-                    lambda: raw_salvage or self._fallback.solve(normalized_problem),
+                    lambda: canonical_final_response(
+                        "",
+                        exact_answer=(
+                            raw_salvage or self._fallback.solve(normalized_problem)
+                        ),
+                        answer_type=session.problem_ir.answer_type,
+                        response_mode=session.problem_ir.response_mode,
+                    ),
                     MINIMAL_FALLBACK_RESPONSE,
                 )
                 transition = terminalizer.safe(

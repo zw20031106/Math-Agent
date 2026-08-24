@@ -105,7 +105,7 @@ def test_oversized_case_is_trimmed_without_aborting_peer(tmp_path):
     normal = json.loads((tmp_path / "2.json").read_text(encoding="utf-8"))
     assert oversized["status"] == "failed"
     assert len(oversized["final_response"]) <= 20000
-    assert oversized["final_response"].endswith(r"\boxed{0}")
+    assert oversized["final_response"].endswith("0")
     assert oversized["trace"][-1]["step"] == "finalize"
     assert normal["status"] == "failed"
     assert records[0].run_metrics.outcome == "primary"

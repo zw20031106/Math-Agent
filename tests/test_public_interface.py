@@ -27,9 +27,9 @@ def test_public_output_repairs_empty_response_and_non_list_trace() -> None:
         {"final_response": r"\boxed{3}", "trace": {}},
     )
 
-    assert empty["final_response"] == r"\boxed{0}"
+    assert empty["final_response"] == "0"
     assert isinstance(empty["trace"], list)
-    assert malformed["final_response"] == r"\boxed{3}"
+    assert malformed["final_response"] == "3"
     assert isinstance(malformed["trace"], list)
 
 
@@ -65,7 +65,7 @@ def test_public_status_conflict_degrades_without_losing_answer() -> None:
     )
 
     assert result["status"] == "failed"
-    assert result["final_response"] == r"\boxed{5}"
+    assert result["final_response"] == "5"
 
 
 def test_public_trace_keeps_selected_solution_and_omits_framework_noise() -> None:

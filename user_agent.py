@@ -9,6 +9,7 @@ from mathforge.output.public_result import (
     identifier_from_metadata,
 )
 from mathforge.output.official_trace import minimal_official_trace
+from mathforge.output.deterministic_formatter import exact_final_answer
 from mathforge.parsing.answer_salvage import salvage_any_answer
 from mathforge.runtime import MathForgeHarness
 
@@ -60,7 +61,10 @@ class ReasoningAgent:
             return {
                 "id": identifier,
                 "status": "failed",
-                "final_response": salvaged or MINIMAL_FALLBACK_RESPONSE,
+                "final_response": exact_final_answer(
+                    salvaged or MINIMAL_FALLBACK_RESPONSE,
+                    "expression",
+                ),
                 "trace": minimal_official_trace(),
             }
         finally:

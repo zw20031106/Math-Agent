@@ -99,7 +99,7 @@ def test_user_agent_exception_path_salvages_a_real_answer() -> None:
     result = agent.solve("hard problem", {"idx": 11})
 
     assert result["status"] == "failed"
-    assert result["final_response"] == r"\boxed{11}"
+    assert result["final_response"] == "11"
 
 
 @pytest.mark.parametrize(

@@ -9,18 +9,11 @@ from mathforge.harness.schemas import (
     ProblemType,
     ResponseMode,
 )
+from mathforge.parsing.choice_scanner import ChoiceScanner
 from mathforge.parsing.latex import braces_balanced
 from mathforge.parsing.normalization import normalize_problem
 
 
-_OPTION_PATTERN = re.compile(
-    r"(?:^|\n)\s*(?:"
-    r"\((?P<ascii_paren>[A-H])\)|"
-    r"（(?P<cjk_paren>[A-H])）|"
-    r"(?P<punctuated>[A-H])[)）.、:：]"
-    r")\s*(?P<content>[^\n]+)",
-    re.IGNORECASE,
-)
 _SYMBOL_PATTERN = re.compile(r"(?<![\\A-Za-z])([a-zA-Z])(?![A-Za-z])")
 _DOMAIN_PATTERN = re.compile(
     r"([a-zA-Z])\s*(?:\\in|in)\s*(\\mathbb\{[RZQNC]\}|[RZQNC])",
@@ -73,6 +66,9 @@ _SCALAR_TARGETS = (
 
 
 class ProblemParser:
+    def __init__(self, choice_scanner: ChoiceScanner | None = None) -> None:
+        self._choice_scanner = choice_scanner or ChoiceScanner()
+
     def parse(
         self,
         problem: str,
@@ -81,37 +77,65 @@ class ProblemParser:
         raw = problem if isinstance(problem, str) else str(problem)
         normalized = normalize_problem(raw)
         lowered = normalized.lower()
-        options = self._options(normalized)
-        requested_output = self._requested_output(normalized)
+        choice_scan = self._choice_scanner.scan(normalized)
+        options = choice_scan.options
+        requested_output = self._requested_output(
+            choice_scan.stem if options else normalized
+        )
         target_phrase, target_confidence = self._target_phrase(requested_output)
+        if options:
+            target_confidence = max(target_confidence, choice_scan.confidence)
         target_lowered = target_phrase.lower()
-        problem_type = self._metadata_enum(
+        inferred_problem_type = self._problem_type(target_lowered, options)
+        metadata_problem_type = self._metadata_enum(
             metadata,
             "problem_type",
             ProblemType,
-        ) or self._problem_type(target_lowered, options)
-        answer_type, type_confidence = self._answer_type(
+        )
+        problem_type = metadata_problem_type or inferred_problem_type
+        target_conflicts = list(choice_scan.conflicts)
+        if metadata_problem_type and metadata_problem_type != inferred_problem_type:
+            target_conflicts.append(
+                f"metadata_problem_type_conflict:{inferred_problem_type}->{metadata_problem_type}"
+            )
+        inferred_answer_type, type_confidence = self._answer_type(
             target_lowered,
             problem_type,
             lowered,
         )
+        answer_type = inferred_answer_type
+        answer_type_conflicts: list[str] = []
         metadata_answer_type = self._metadata_enum(
             metadata,
             "answer_type",
             AnswerType,
         )
         if metadata_answer_type:
+            if metadata_answer_type != inferred_answer_type:
+                answer_type_conflicts.append(
+                    "metadata_answer_type_conflict:"
+                    f"{inferred_answer_type}->{metadata_answer_type}"
+                )
             answer_type = metadata_answer_type
             type_confidence = 1.0
-        response_mode = self._metadata_enum(
+        inferred_response_mode, response_mode_confidence = self._response_mode(
+            problem_type,
+            lowered,
+        )
+        metadata_response_mode = self._metadata_enum(
             metadata,
             "response_mode",
             ResponseMode,
-        ) or self._response_mode(problem_type, lowered)
-        parser_confidence = round(
-            min(target_confidence, type_confidence),
-            4,
         )
+        response_mode = metadata_response_mode or inferred_response_mode
+        response_mode_conflicts: list[str] = []
+        if metadata_response_mode:
+            if metadata_response_mode != inferred_response_mode:
+                response_mode_conflicts.append(
+                    "metadata_response_mode_conflict:"
+                    f"{inferred_response_mode}->{metadata_response_mode}"
+                )
+            response_mode_confidence = 1.0
         domains = {symbol: domain for symbol, domain in _DOMAIN_PATTERN.findall(normalized)}
         constraints = self._constraints(normalized)
         assumptions = self._assumptions(normalized)
@@ -122,6 +146,31 @@ class ProblemParser:
             answer_type,
             target_lowered,
             lowered,
+        )
+        if not target_phrase:
+            target_conflicts.append("missing_target")
+        if target_kind == "multiple_targets":
+            target_conflicts.append("multiple_requested_targets")
+        all_conflicts = list(
+            dict.fromkeys(
+                [
+                    *target_conflicts,
+                    *answer_type_conflicts,
+                    *response_mode_conflicts,
+                ]
+            )
+        )
+        parser_confidence = round(
+            min(target_confidence, type_confidence, response_mode_confidence),
+            4,
+        )
+        requires_router_disambiguation = bool(all_conflicts) or any(
+            confidence < 0.85
+            for confidence in (
+                target_confidence,
+                type_confidence,
+                response_mode_confidence,
+            )
         )
         difficulty_features = self._difficulty_features(
             normalized,
@@ -137,6 +186,12 @@ class ProblemParser:
             answer_type_confidence=type_confidence,
             target_kind=target_kind,
         )
+        ambiguities = list(dict.fromkeys([*ambiguities, *all_conflicts]))
+        if target_confidence < 0.85:
+            ambiguities.append("low_target_confidence")
+        if response_mode_confidence < 0.85:
+            ambiguities.append("low_response_mode_confidence")
+        ambiguities = list(dict.fromkeys(ambiguities))
         risk_flags: list[str] = []
         if not normalized:
             risk_flags.append("empty_problem")
@@ -161,7 +216,13 @@ class ProblemParser:
             target_phrase=target_phrase,
             target_kind=target_kind,
             parser_confidence=parser_confidence,
+            target_confidence=round(target_confidence, 4),
             answer_type_confidence=round(type_confidence, 4),
+            response_mode_confidence=round(response_mode_confidence, 4),
+            target_conflicts=list(dict.fromkeys(target_conflicts)),
+            answer_type_conflicts=list(dict.fromkeys(answer_type_conflicts)),
+            response_mode_conflicts=list(dict.fromkeys(response_mode_conflicts)),
+            requires_router_disambiguation=requires_router_disambiguation,
             options=options,
             definitions=definitions,
             quantifiers=quantifiers,
@@ -196,7 +257,7 @@ class ProblemParser:
         )
 
     @staticmethod
-    def _response_mode(problem_type: str, lowered: str) -> str:
+    def _response_mode(problem_type: str, lowered: str) -> tuple[str, float]:
         if problem_type == ProblemType.PROOF.value or any(
             marker in lowered
             for marker in (
@@ -211,7 +272,7 @@ class ProblemParser:
                 "show that",
             )
         ):
-            return ResponseMode.PROOF_FULL.value
+            return ResponseMode.PROOF_FULL.value, 0.99
         if problem_type in {
             ProblemType.DERIVATION.value,
             ProblemType.EXPLANATION.value,
@@ -232,8 +293,8 @@ class ProblemParser:
                 "justify",
             )
         ):
-            return ResponseMode.WORKED_SOLUTION.value
-        return ResponseMode.ANSWER_ONLY.value
+            return ResponseMode.WORKED_SOLUTION.value, 0.96
+        return ResponseMode.ANSWER_ONLY.value, 0.9
 
     @staticmethod
     def _problem_type(lowered: str, options: list[str]) -> str:
@@ -313,26 +374,6 @@ class ProblemParser:
         if any(marker in target for marker in ("分数", "fraction", "rational number")):
             return "fraction", 0.9
         return "expression", 0.78
-
-    @staticmethod
-    def _options(normalized: str) -> list[str]:
-        matches = list(_OPTION_PATTERN.finditer(normalized))
-        labels = [
-            next(
-                group.upper()
-                for group in (
-                    match.group("ascii_paren"),
-                    match.group("cjk_paren"),
-                    match.group("punctuated"),
-                )
-                if group
-            )
-            for match in matches
-        ]
-        expected = [chr(ord("A") + index) for index in range(len(labels))]
-        if len(labels) < 2 or labels != expected:
-            return []
-        return [match.group("content").strip() for match in matches]
 
     @staticmethod
     def _assumptions(normalized: str) -> list[str]:

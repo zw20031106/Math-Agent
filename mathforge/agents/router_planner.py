@@ -720,8 +720,13 @@ class RouterRuleEngine:
             f"structure:{feature}"
             for feature in problem.difficulty_features
         )
+        confidence_only_ambiguities = {
+            "low_answer_type_confidence",
+            "low_target_confidence",
+            "low_response_mode_confidence",
+        }
         if any(
-            ambiguity != "low_answer_type_confidence"
+            ambiguity not in confidence_only_ambiguities
             for ambiguity in problem.ambiguities
         ):
             flags.append("problem_ir_ambiguity")
@@ -840,8 +845,35 @@ class RouterPlanner:
                 if previous_plan is not None
                 else ""
             )
+            if problem.requires_router_disambiguation:
+                problem_text = problem.raw_problem
+                interpretation_context = (
+                    "\n\nParser interpretation requiring disambiguation:\n"
+                    + json.dumps(
+                        {
+                            "target_phrase": problem.target_phrase,
+                            "target_confidence": problem.target_confidence,
+                            "answer_type": problem.answer_type,
+                            "answer_type_confidence": (
+                                problem.answer_type_confidence
+                            ),
+                            "response_mode": problem.response_mode,
+                            "response_mode_confidence": (
+                                problem.response_mode_confidence
+                            ),
+                            "conflicts": problem.interpretation_conflicts,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    + "\nUse the exact full original problem above to resolve "
+                    "the intended target; do not discard conditions."
+                )
+            else:
+                problem_text = problem.normalized_problem
+                interpretation_context = ""
             user = (
-                f"Problem:\n{problem.normalized_problem}\n\n"
+                f"Problem:\n{problem_text}{interpretation_context}\n\n"
                 "Return only the mathematical routing intent using the exact "
                 "RouterIntent schema. The Host owns subgoals, tasks, Agent "
                 f"assignments, the DAG, budgets, and plan IDs.{prior_context}{context}"

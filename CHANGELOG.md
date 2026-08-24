@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Completed the 2026-08-24 remediation Phase 1 ProblemIR and public-answer
+  contract work. Replaced the line-start-only option regex with a bounded
+  Choice Scanner that recognizes reliable inline and line-based A-H sequences
+  while retaining the complete stem and original problem. ProblemIR 2.2 now
+  records target, answer-type, and response-mode confidence, dimension-specific
+  conflicts, and the deterministic Router-disambiguation decision. Low-
+  confidence routing receives the exact original statement plus public parser
+  uncertainty instead of a shortened target. Normal, candidate-salvage, raw-
+  salvage, terminal fallback, public projection, and outer entry recovery now
+  share bare-answer canonicalization; successful proof-full formatting retains
+  its complete public proof steps and conclusion. Added inline English/Chinese,
+  false-positive, schema round-trip, Router prompt, response-profile, and JSON-
+  serialization gates. The 112-case boundary set was also checked read-only:
+  all 28 labeled choice cases were detected with no false choice promotions.
 - Implemented the 2026-08-24 remediation Phase 0 evidence freeze and official
   case-audit gate. The frozen candidate now records the clean parent commit and
   config, Prompt, Skill, and 171-file competition-source fingerprints. The

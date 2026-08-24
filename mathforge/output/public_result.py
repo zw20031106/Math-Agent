@@ -18,6 +18,7 @@ from mathforge.output.official_trace import (
     project_official_trace,
     validate_official_trace,
 )
+from mathforge.output.deterministic_formatter import exact_final_answer
 from mathforge.parsing.answer_salvage import salvage_any_answer
 
 
@@ -41,6 +42,7 @@ def build_public_result(identifier: int | str | None, result: dict) -> dict:
         if isinstance(supplied_response, str) and supplied_response.strip()
         else MINIMAL_FALLBACK_RESPONSE
     )
+    final_response = exact_final_answer(final_response, "expression")
     trace = result.get("trace", [])
     if not isinstance(trace, list):
         trace = []
@@ -180,6 +182,8 @@ def _trim_final_response(response: str, max_chars: int) -> str:
     if len(response) <= max_chars:
         return response
     salvaged = salvage_any_answer((response,))
+    if salvaged:
+        salvaged = exact_final_answer(salvaged, "expression")
     if not salvaged or len(salvaged) > max_chars:
         salvaged = MINIMAL_FALLBACK_RESPONSE
     separator = "\n\n"
@@ -191,6 +195,7 @@ def _trim_final_response(response: str, max_chars: int) -> str:
 
 def _trim_to_utf8_budget(response: str, max_bytes: int) -> str:
     salvaged = salvage_any_answer((response,)) or MINIMAL_FALLBACK_RESPONSE
+    salvaged = exact_final_answer(salvaged, "expression")
     if len(salvaged.encode("utf-8")) <= max_bytes:
         return salvaged
     return MINIMAL_FALLBACK_RESPONSE

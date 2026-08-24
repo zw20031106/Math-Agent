@@ -71,10 +71,10 @@
         "mathforge/runtime.py"
       ],
       "expected_count": 8,
-        "version": "effective-agent-governance-1-phase5-phase8-closure-0812-p4",
-        "engineering_reviewer": "codex-0812-p4-audit",
-      "review_date": "2026-08-12",
-      "sha256": "653fef50340097fad8887722f043a5a95a05ddf5c5740dcd37bca3e60fd3afcf"
+        "version": "effective-agent-governance-2-0824-phase1",
+        "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+      "review_date": "2026-08-24",
+      "sha256": "1967b28ea2bf6e5a9e2d656dfa01c23738e85436c6616ece40a6c9ce059379f3"
     },
     {
       "id": "prompt-contracts",
@@ -188,10 +188,10 @@
         "mathforge/harness/schemas.py"
       ],
       "expected_count": 3,
-      "version": "typed-lemma-feedback-phase-f6-session-closure",
-      "engineering_reviewer": "codex-phase-f6-verification-audit",
-        "review_date": "2026-08-08",
-      "sha256": "64970f7e20166d247d9b0e6a9ea65408ede21b149f1cd10e6bdb1906a7422c12"
+      "version": "typed-lemma-feedback-2-0824-phase1",
+      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+        "review_date": "2026-08-24",
+      "sha256": "a4c75b7c333022a9b19a505cab721f53af7290c7c50b01dfbe655eebe4290af9"
     },
     {
       "id": "verification-closure",
@@ -219,10 +219,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 20,
-      "version": "verification-closure-17-phase8-0812-p4",
-      "engineering_reviewer": "codex-0812-p4-audit",
-        "review_date": "2026-08-12",
-      "sha256": "928ec33ca6853253bb36550a7502bae896c5c8a8498cfe3dc16ef3590d4ed00d"
+      "version": "verification-closure-18-0824-phase1",
+      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+        "review_date": "2026-08-24",
+      "sha256": "5e779752fe19fa67faa7d2d4f6affa3aff1e6703209885f4dffd55a1c66a6c8f"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -250,10 +250,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 20,
-      "version": "phase-f6-agent-protocol-8-phase8-0812-p4",
-      "engineering_reviewer": "codex-0812-p4-audit",
-      "review_date": "2026-08-12",
-      "sha256": "c1f9cdf01945f5820d804344d8b7cd2d33a96d4059017058b36ec8765efb1806"
+      "version": "phase-f6-agent-protocol-9-0824-phase1",
+      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+      "review_date": "2026-08-24",
+      "sha256": "fcab0241529bcc042538c3c11fb7ed543c5cf8ac02ba2956bc0c010073cc117e"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -274,10 +274,10 @@
         "mathforge/output/loop_health.py"
       ],
       "expected_count": 13,
-      "version": "phase-f7-runtime-7-phase8-closure-0812-p4",
-      "engineering_reviewer": "codex-0812-p4-audit",
-      "review_date": "2026-08-12",
-      "sha256": "44052c40fe567c397e587ea19b6b38e01c716fbed0feb96f133450dbe1704958"
+      "version": "phase-f7-runtime-8-0824-phase1",
+      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+      "review_date": "2026-08-24",
+      "sha256": "f896beee7b042c4db84bc9c4aa9b0409baef87c97ac83531a522096136d45959"
     },
     {
       "id": "reviewed-method-cards",
@@ -346,10 +346,10 @@
         "scripts/run_case_outputs.py"
       ],
       "expected_count": 14,
-      "version": "provider-controls-4-0812-p4-attributed-boundaries",
-      "engineering_reviewer": "codex-0812-p4-audit",
-      "review_date": "2026-08-12",
-      "sha256": "432c91dad58d56502a6c70124830a6cc54e5b6a8cbdefb1a2d68e40ceabc66f4"
+      "version": "provider-controls-5-p1",
+      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+      "review_date": "2026-08-24",
+      "sha256": "6ad439dced2d1fa913365d6798e41ed288a59bd97692e7fc9f493dad8a50deff"
     },
     {
       "id": "phase7-live-calibration",
@@ -397,10 +397,10 @@
         "mathforge/verification/verification_v2.py"
       ],
       "expected_count": 15,
-      "version": "review-repair-communication-audit-2.0-phase8-0812-p4",
-      "engineering_reviewer": "codex-0812-p4-audit",
-      "review_date": "2026-08-12",
-      "sha256": "d7db8de486f6fc3f3a022402ad3cc444766e3235119c15b62b296dbde204cf7e"
+      "version": "review-repair-communication-audit-2.1-0824-phase1",
+      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+      "review_date": "2026-08-24",
+      "sha256": "f19d131425ecd3184402c68d44792289f4ac96ccc7a5825e9571889a780b07d3"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -418,10 +418,10 @@
         "tests/test_phase9_scheduler_runtime.py"
       ],
       "expected_count": 10,
-      "version": "scheduler-runtime-2.0-phase9-0824-phase0",
-      "engineering_reviewer": "codex-0824-phase0-evidence-audit",
+      "version": "scheduler-runtime-2.1-0824-phase1",
+      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
       "review_date": "2026-08-24",
-      "sha256": "608bcbe79d1b9cef19d9c4ff57aef321bafd152c73b4ea159cb3f5dc135539ea"
+      "sha256": "8b3a09ec67288146a1d5ad0e84af27aaf06ab189c0282ab88f475d53f90aed3a"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -443,10 +443,10 @@
         "tests/test_s6_e7_case_lifecycle.py"
       ],
       "expected_count": 14,
-      "version": "production-preflight-release-governance-1.0-phase10-0824-phase0",
-      "engineering_reviewer": "codex-0824-phase0-evidence-audit",
+      "version": "production-preflight-release-governance-1.1-0824-phase1",
+      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
       "review_date": "2026-08-24",
-      "sha256": "2841b7b9a7fee81f0f861a16b384cc82038d261807cbf8a692a2132810a678c6"
+      "sha256": "e356c13e09c084cdf6438ad1fcfc806d9f0542fa8be9fe74dc7a0fd6abc7d504"
     },
     {
       "id": "router-e5-gold",

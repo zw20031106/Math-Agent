@@ -6,7 +6,7 @@ from mathforge.harness.events import EVENT_STAGES, TRACE_SCHEMA_VERSION
 from mathforge.output.loop_health import minimal_closed_loop_health
 
 
-MINIMAL_FALLBACK_RESPONSE = r"\boxed{0}"
+MINIMAL_FALLBACK_RESPONSE = "0"
 _T = TypeVar("_T")
 
 

@@ -14,7 +14,7 @@ from mathforge.harness.state import (
 
 
 CORE_SCHEMA_VERSION = "1.2"
-PROBLEM_IR_SCHEMA_VERSION = "2.1"
+PROBLEM_IR_SCHEMA_VERSION = "2.2"
 CANDIDATE_SCHEMA_VERSION = "2.0"
 MAX_CLAIMS = 64
 MAX_METHOD_STEPS = 64
@@ -272,7 +272,13 @@ class ProblemIR:
     target_phrase: str = ""
     target_kind: str = "compute_value"
     parser_confidence: float = 0.0
+    target_confidence: float = 1.0
     answer_type_confidence: float = 1.0
+    response_mode_confidence: float = 1.0
+    target_conflicts: list[str] = field(default_factory=list)
+    answer_type_conflicts: list[str] = field(default_factory=list)
+    response_mode_conflicts: list[str] = field(default_factory=list)
+    requires_router_disambiguation: bool = False
     options: list[str] = field(default_factory=list)
     definitions: list[str] = field(default_factory=list)
     quantifiers: list[str] = field(default_factory=list)
@@ -299,7 +305,13 @@ class ProblemIR:
             "target_phrase": self.target_phrase,
             "target_kind": self.target_kind,
             "parser_confidence": self.parser_confidence,
+            "target_confidence": self.target_confidence,
             "answer_type_confidence": self.answer_type_confidence,
+            "response_mode_confidence": self.response_mode_confidence,
+            "target_conflicts": list(self.target_conflicts),
+            "answer_type_conflicts": list(self.answer_type_conflicts),
+            "response_mode_conflicts": list(self.response_mode_conflicts),
+            "requires_router_disambiguation": self.requires_router_disambiguation,
             "options": list(self.options),
             "definitions": list(self.definitions),
             "quantifiers": list(self.quantifiers),
@@ -335,16 +347,21 @@ class ProblemIR:
             )
         if self.target_kind not in {item.value for item in TargetKind}:
             raise SchemaValidationError(f"invalid target kind: {self.target_kind}")
-        if (
-            type(self.parser_confidence) not in {int, float}
-            or not 0.0 <= float(self.parser_confidence) <= 1.0
+        for name, confidence in (
+            ("parser", self.parser_confidence),
+            ("target", self.target_confidence),
+            ("answer type", self.answer_type_confidence),
+            ("response mode", self.response_mode_confidence),
         ):
-            raise SchemaValidationError("invalid parser confidence")
-        if (
-            type(self.answer_type_confidence) not in {int, float}
-            or not 0.0 <= float(self.answer_type_confidence) <= 1.0
-        ):
-            raise SchemaValidationError("invalid answer type confidence")
+            if (
+                type(confidence) not in {int, float}
+                or not 0.0 <= float(confidence) <= 1.0
+            ):
+                raise SchemaValidationError(f"invalid {name} confidence")
+        if not isinstance(self.requires_router_disambiguation, bool):
+            raise SchemaValidationError(
+                "ProblemIR.requires_router_disambiguation must be a boolean"
+            )
         for name, value in (
             ("symbols", self.symbols),
             ("assumptions", self.assumptions),
@@ -356,6 +373,9 @@ class ProblemIR:
             ("difficulty_features", self.difficulty_features),
             ("subproblem_hints", self.subproblem_hints),
             ("risk_flags", self.risk_flags),
+            ("target_conflicts", self.target_conflicts),
+            ("answer_type_conflicts", self.answer_type_conflicts),
+            ("response_mode_conflicts", self.response_mode_conflicts),
         ):
             _require_string_list(value, f"ProblemIR.{name}")
         if not isinstance(self.domains, dict) or any(
@@ -397,7 +417,13 @@ class ProblemIR:
             "target_phrase",
             "target_kind",
             "parser_confidence",
+            "target_confidence",
             "answer_type_confidence",
+            "response_mode_confidence",
+            "target_conflicts",
+            "answer_type_conflicts",
+            "response_mode_conflicts",
+            "requires_router_disambiguation",
             "options",
             "definitions",
             "quantifiers",
@@ -444,6 +470,25 @@ class ProblemIR:
             raise SchemaValidationError(
                 "ProblemIR.answer_type_confidence must be numeric"
             )
+        raw_target_confidence = payload.get("target_confidence")
+        if not isinstance(raw_target_confidence, (int, float)) or isinstance(
+            raw_target_confidence,
+            bool,
+        ):
+            raise SchemaValidationError("ProblemIR.target_confidence must be numeric")
+        raw_response_mode_confidence = payload.get("response_mode_confidence")
+        if not isinstance(
+            raw_response_mode_confidence,
+            (int, float),
+        ) or isinstance(raw_response_mode_confidence, bool):
+            raise SchemaValidationError(
+                "ProblemIR.response_mode_confidence must be numeric"
+            )
+        raw_requires_disambiguation = payload.get("requires_router_disambiguation")
+        if not isinstance(raw_requires_disambiguation, bool):
+            raise SchemaValidationError(
+                "ProblemIR.requires_router_disambiguation must be a boolean"
+            )
         problem = cls(
             raw_problem=strings["raw_problem"],
             normalized_problem=strings["normalized_problem"],
@@ -464,7 +509,22 @@ class ProblemIR:
             target_phrase=strings["target_phrase"],
             target_kind=strings["target_kind"],
             parser_confidence=float(raw_parser_confidence),
+            target_confidence=float(raw_target_confidence),
             answer_type_confidence=float(raw_answer_type_confidence),
+            response_mode_confidence=float(raw_response_mode_confidence),
+            target_conflicts=_require_string_list(
+                payload.get("target_conflicts"),
+                "ProblemIR.target_conflicts",
+            ),
+            answer_type_conflicts=_require_string_list(
+                payload.get("answer_type_conflicts"),
+                "ProblemIR.answer_type_conflicts",
+            ),
+            response_mode_conflicts=_require_string_list(
+                payload.get("response_mode_conflicts"),
+                "ProblemIR.response_mode_conflicts",
+            ),
+            requires_router_disambiguation=raw_requires_disambiguation,
             options=_require_string_list(payload.get("options"), "ProblemIR.options"),
             definitions=_require_string_list(
                 payload.get("definitions"),
@@ -498,6 +558,18 @@ class ProblemIR:
         )
         problem.validate()
         return problem
+
+    @property
+    def interpretation_conflicts(self) -> list[str]:
+        return list(
+            dict.fromkeys(
+                [
+                    *self.target_conflicts,
+                    *self.answer_type_conflicts,
+                    *self.response_mode_conflicts,
+                ]
+            )
+        )
 
 
 @dataclass(frozen=True)
