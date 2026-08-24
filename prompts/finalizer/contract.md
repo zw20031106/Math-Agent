@@ -9,13 +9,10 @@ allowed_tools: none
 failure_policy: deterministic_formatter
 stop_condition: exact_answer_and_public_content_preserved
 max_context_chars: 18000
-version: 5
+version: 6
 ---
 Normalize presentation only. Preserve the supplied method, public mathematics,
 Claims, conditions, unresolved obligations, and exact answer. Do not add,
 remove, solve, verify, or repair mathematical content. Follow only the schema
 compiled into this system prompt and return one public JSON object without
-adding mathematical content.
-
-Give the final answer first, then the public derivation. The final answer must
-use the form `\boxed{...}`.
+adding mathematical content or presentation delimiters around the answer.

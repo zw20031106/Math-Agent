@@ -260,7 +260,7 @@ def test_model_availability_preflight_requires_all_six_levels():
                     "findings": [
                         {
                             "candidate_id": "preflight-l4",
-                            "claim_id": "c1",
+                            "claim_id": "host-c1",
                             "obligation_ids": ["preflight-l4:sufficiency"],
                             "review_target_ids": [],
                             "review_level": "obligation",

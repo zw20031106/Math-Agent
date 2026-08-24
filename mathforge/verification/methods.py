@@ -38,6 +38,9 @@ def candidate_method_signature(candidate: CandidateSolution) -> tuple:
 def method_contract_valid(candidate: CandidateSolution) -> bool:
     return not any(
         deviation.startswith("method:")
-        or deviation.startswith("method_steps")
+        or (
+            deviation.startswith("method_steps")
+            and deviation != "method_steps:host_owned"
+        )
         for deviation in candidate.contract_deviations
     )

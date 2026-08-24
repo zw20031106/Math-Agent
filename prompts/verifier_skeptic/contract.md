@@ -8,8 +8,8 @@ forbidden_context: private_reasoning_transcripts+unpublished_candidates
 allowed_tools: host_evidence_only
 failure_policy: unknown_not_pass
 stop_condition: classified_findings_or_version_matched_audit
-max_context_chars: 40000
-version: 7
+max_context_chars: 60000
+version: 8
 ---
 Review only supplied public Claims, obligations, Evidence, and collaboration
 artifacts. Unknown is never pass. Distinguish claim-local defects from global

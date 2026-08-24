@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 
+from mathforge.agent_runtime.protocol import AGENT_TURN_FIELDS
 from mathforge.agent_runtime.router_protocol import (
     ROUTER_INTENT_FIELDS,
     ROUTER_INTENT_STRUCTURAL_SHAPE,
@@ -11,10 +12,12 @@ from mathforge.agent_runtime.router_protocol import (
 from mathforge.agents.registry import PromptContract, PromptContractLoader
 from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.harness.model_candidate_contract import (
+    MODEL_CANDIDATE_PATCH_FIELDS,
     MODEL_CANDIDATE_PATCH_STRUCTURAL_SHAPE,
-    MODEL_CANDIDATE_PAYLOAD_VERSION,
     MODEL_CANDIDATE_PROFILE_FIELDS,
-    MODEL_CANDIDATE_STRUCTURAL_SHAPE,
+    candidate_profile_example,
+    candidate_profile_for_response_mode,
+    candidate_profile_shape,
 )
 from mathforge.harness.model_policy import stage_output_cap
 from mathforge.harness.schemas import ProblemIR, RoutePlan
@@ -45,70 +48,149 @@ _SOLVER_OUTPUT_TOKENS = {
         "alternative_solver": 40960,
     },
 }
-_ANSWER_FIRST_PROTOCOL = (
-    "Give the final answer first, then the public derivation. Encode the exact "
-    "final answer as \\boxed{...}."
-)
 _AGENT_TURN_ENVELOPE_PROTOCOL = (
-    "Wrap the public result in AgentTurnPayload 1.0 with exactly these fields "
+    "Return one AgentTurnPayload 1.0 object with exactly these outer fields "
     "in this order: protocol_version, task_result_type, action, "
     "public_state_delta, result_payload, outbound_intents, progress_summary, "
     "stop_reason. protocol_version is \"1.0\". Never generate agent_id, "
     "task_id, turn_id, artifact_id, message_id, thread_id, token limits, or "
     "timeouts; the Host owns them. Return one bare JSON object only. "
 )
-_CANDIDATE_CORE_PROTOCOL = (
-    f"Return one bare ModelCandidatePayload {MODEL_CANDIDATE_PAYLOAD_VERSION} "
-    "JSON object. Put final_answer first as a string containing "
-    "\\boxed{...}; solution_text is the complete public derivation string. "
-    "Only those two fields are required. Optional structured fields may be "
-    "omitted. JSON-escape every LaTeX backslash. Return no Markdown fence or "
-    f"surrounding prose. Shape: {MODEL_CANDIDATE_STRUCTURAL_SHAPE}."
+
+
+def _agent_turn_candidate_example(profile: str) -> dict[str, object]:
+    return {
+        "protocol_version": "1.0",
+        "task_result_type": "CandidateArtifact",
+        "action": "publish_candidate",
+        "public_state_delta": {},
+        "result_payload": candidate_profile_example(profile),
+        "outbound_intents": [],
+        "progress_summary": "<public completion summary>",
+        "stop_reason": "candidate_complete",
+    }
+
+
+def _candidate_profile_protocol(profile: str, *, autonomous: bool) -> str:
+    normalized = candidate_profile_for_response_mode(profile)
+    shape = (
+        json.dumps(
+            _agent_turn_candidate_example(normalized),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if autonomous
+        else candidate_profile_shape(normalized)
+    )
+    profile_instruction = {
+        "answer_only": (
+            "result_payload has final_answer and one semantic check containing "
+            "only statement and claim_kind."
+        ),
+        "worked_solution": (
+            "result_payload has final_answer, method, semantic steps, and "
+            "uncertainties."
+        ),
+        "proof_full": (
+            "result_payload has final_answer, method, at least two complete "
+            "semantic proof_steps, and open_conditions."
+        ),
+    }[normalized]
+    envelope = _AGENT_TURN_ENVELOPE_PROTOCOL if autonomous else (
+        "Return one bare Candidate response object only. "
+    )
+    return (
+        envelope
+        + f"Candidate response mode is {normalized}; {profile_instruction} "
+        "Every semantic step contains exactly statement, claim_kind, and "
+        "depends_on, where depends_on uses zero-based indices of prior steps. "
+        "The model supplies mathematics and claim_kind only; the Host assigns "
+        "Candidate, Claim, MethodStep, version, status, and Artifact identifiers. "
+        "Use plain exact final_answer text without labels or presentation "
+        "delimiters. JSON-escape LaTeX backslashes. Return no prose outside JSON. "
+        f"Exact JSON schema example: {shape}."
+    )
+
+
+_PROGRESS_DELTA_FIELDS = (
+    "claims",
+    "closed_obligation_ids",
+    "contradictions",
+    "next_step",
+    "open_obligations",
+    "public_summary",
+    "stop_reason",
+    "strategy",
+    "subgoals",
 )
 
 
-def _candidate_profile_protocol(profile: str) -> str:
-    shared = _CANDIDATE_CORE_PROTOCOL + " "
-    if profile == "simple":
-        return shared + "Keep solution_text to one concise public check."
-    if profile == "proof":
-        return shared + (
-            "solution_text must contain the complete ordered public proof and "
-            "every genuinely unresolved hypothesis."
-        )
-    return shared + (
-        "solution_text must contain one non-redundant ordered public derivation."
-    )
-_PROGRESS_DELTA_PROTOCOL = (
-    "Public protocol mode is {mode}. Construct one ProgressDelta object with "
+def _progress_delta_example() -> dict[str, object]:
+    return {
+        "public_summary": "<public progress>",
+        "strategy": "<current method>",
+        "subgoals": [
+            {
+                "statement": "<public target>",
+                "depends_on": [],
+                "exit_condition": "<observable closure>",
+            }
+        ],
+        "claims": [
+            {
+                "statement": "<atomic public claim>",
+                "claim_kind": "reasoning",
+                "depends_on": [],
+                "subgoal_refs": [0],
+                "importance": "supporting",
+            }
+        ],
+        "open_obligations": [],
+        "closed_obligation_ids": [],
+        "contradictions": [],
+        "next_step": "<one bounded action>",
+        "stop_reason": "",
+    }
+
+
+def _progress_delta_protocol(mode: str, *, autonomous: bool) -> str:
+    delta = _progress_delta_example()
+    example: dict[str, object]
+    if autonomous:
+        example = {
+            "protocol_version": "1.0",
+            "task_result_type": "ProgressArtifact",
+            "action": "continue_reasoning",
+            "public_state_delta": delta,
+            "result_payload": {},
+            "outbound_intents": [],
+            "progress_summary": "<public progress summary>",
+            "stop_reason": "",
+        }
+    else:
+        example = delta
+    return (
+    f"Public protocol mode is {mode}. Construct one semantic ProgressDelta with "
     "these nine fields and no others: public_summary, strategy, subgoals, "
     "claims, open_obligations, closed_obligation_ids, contradictions, "
     "next_step, stop_reason. This is a public, auditable ProgressDelta, not a "
     "final Candidate response. public_summary, strategy, "
     "next_step, and stop_reason are strings. subgoals is an array of objects "
-    "with exactly subgoal_id, statement, depends_on, exit_condition, status; "
-    "status is open, active, closed, or blocked. claims is an array of objects "
-    "with exactly claim_id, statement, depends_on, subgoal_ids, importance, "
-    "check_type; importance is critical or supporting. check_type is only a "
-    "suggestion from the authorized check list; the Host owns typed check_spec "
-    "and all tool arguments. open_obligations is an array of "
-    "objects with exactly obligation_id, statement, depends_on, where "
-    "depends_on references public Claim ids. closed_obligation_ids and "
-    "contradictions are string arrays. Reuse existing ids without rewriting "
-    "their content. Add only atomic, publicly checkable mathematical claims. "
+    "with exactly statement, depends_on, and exit_condition. claims contains "
+    "exactly statement, claim_kind, depends_on, subgoal_refs, and importance. "
+    "Local dependencies and subgoal_refs are zero-based prior-item indices; "
+    "supplied existing public IDs may only be referenced, never created. "
+    "open_obligations contains only statement and depends_on. The Host assigns "
+    "all new IDs, status, versions, provenance, branches, and check specifications. "
+    "closed_obligation_ids may reference existing supplied obligations. Add only "
+    "atomic, publicly checkable mathematics. "
     "Do not emit a final answer, CandidateSolution, tool call, raw model "
-    "response, or Host-owned state/version fields. "
-    'Use this exact shape: {"public_summary":"<public progress>",'
-    '"strategy":"<current method>","subgoals":[{"subgoal_id":"g1",'
-    '"statement":"<public target>","depends_on":[],"exit_condition":'
-    '"<observable closure>","status":"open"}],"claims":[{"claim_id":'
-    '"r1-c1","statement":"<atomic public claim>","depends_on":[],'
-    '"subgoal_ids":["g1"],"importance":"supporting"}],'
-    '"open_obligations":[{"obligation_id":"o1","statement":'
-    '"<condition to establish>","depends_on":["r1-c1"]}],'
-    '"closed_obligation_ids":[],"contradictions":[],"next_step":'
-    '"<one bounded action>","stop_reason":""}.'
-)
+    "response, or Host-owned lifecycle fields. "
+    + (_AGENT_TURN_ENVELOPE_PROTOCOL if autonomous else "Return one bare JSON object. ")
+    + "Exact JSON schema example: "
+    + json.dumps(example, ensure_ascii=False, separators=(",", ":"))
+    + "."
+    )
 _PEER_REVIEW_PROTOCOL = (
     _AGENT_TURN_ENVELOPE_PROTOCOL
     + "Public protocol mode is peer_review. Use task_result_type "
@@ -219,7 +301,10 @@ _ROLE_PROTOCOLS = {
         "terminal Claim proves it must change."
     ),
     "finalizer": (
-        f"{_CANDIDATE_CORE_PROTOCOL} Normalize presentation only. Preserve the "
+        "Return exactly one bare JSON object containing final_answer and "
+        "solution_text, both strings, with no other fields. Use plain exact "
+        "final_answer text without labels or outer delimiters. Normalize "
+        "presentation only. Preserve the "
         "method, public exposition, verified Claims, assumptions, theorems, open "
         "obligations, and exact final answer; introduce no new mathematical content."
     ),
@@ -233,6 +318,7 @@ class PromptCompilation:
     max_output_tokens: int
     prompt_chars: int
     output_schema_fields: tuple[str, ...] = ()
+    output_schema_name: str = ""
     prompt_sha256: str = ""
     contract_sha256: str = ""
 
@@ -244,6 +330,7 @@ class PromptSpec:
     contract: PromptContract
     runtime_protocol: str
     output_schema_fields: tuple[str, ...] = ()
+    output_schema_name: str = ""
 
     def system_prompt(self) -> str:
         return self.contract.render_system(self.runtime_protocol)
@@ -274,27 +361,19 @@ class PromptCompiler:
         profile = self.solver_profile(problem, route)
         output_profile = self.candidate_output_profile(problem, route)
         instructions = [
-            _candidate_profile_protocol(output_profile),
+            _candidate_profile_protocol(output_profile, autonomous=autonomous),
             self._response_mode_protocol(problem),
             self._solver_profile_protocol(profile),
         ]
         if autonomous:
-            instructions.insert(
-                0,
-                _AGENT_TURN_ENVELOPE_PROTOCOL
-                + "For a complete solution use task_result_type "
+            instructions.append(
+                "For a complete solution use task_result_type "
                 "CandidateArtifact and action publish_candidate; place the "
                 f"entire {output_profile} Candidate object inside result_payload, set "
                 "public_state_delta to {}, and use outbound_intents []. If no "
                 "sound candidate can be produced, use action abstain, "
                 "task_result_type CheckpointArtifact, empty result_payload, "
-                "and explain the public reason in stop_reason. "
-            )
-        else:
-            instructions.insert(
-                0,
-                "Return the ModelCandidatePayload as exactly one complete bare "
-                "JSON object, with no prose or Markdown fence.",
+                "and explain the public reason in stop_reason."
             )
         if compact:
             instructions.append(
@@ -323,15 +402,21 @@ class PromptCompiler:
             f"This Candidate Turn has a {output_tokens:,}-token output ceiling; "
             "this is a per-Turn ceiling, not a per-problem reasoning budget."
         )
-        instructions.append(_ANSWER_FIRST_PROTOCOL)
         return self._compile(
             role_directory,
             profile,
             user_content,
             "\n".join(instructions),
             output_tokens,
-            output_schema_fields=tuple(
-                sorted(MODEL_CANDIDATE_PROFILE_FIELDS[output_profile])
+            output_schema_fields=(
+                tuple(sorted(AGENT_TURN_FIELDS))
+                if autonomous
+                else tuple(sorted(MODEL_CANDIDATE_PROFILE_FIELDS[output_profile]))
+            ),
+            output_schema_name=(
+                f"agent_turn:candidate:{output_profile}"
+                if autonomous
+                else f"candidate:{output_profile}"
             ),
         )
 
@@ -351,12 +436,10 @@ class PromptCompiler:
         if mode not in {"explore", "continue"}:
             raise ValueError("progress mode must be explore or continue")
         profile = self.solver_profile(problem, route)
-        instructions = [_PROGRESS_DELTA_PROTOCOL.replace("{mode}", mode)]
+        instructions = [_progress_delta_protocol(mode, autonomous=autonomous)]
         if autonomous:
-            instructions.insert(
-                0,
-                _AGENT_TURN_ENVELOPE_PROTOCOL
-                + "Use task_result_type ProgressArtifact. Put the exact "
+            instructions.append(
+                "Use task_result_type ProgressArtifact. Put the exact "
                 "ProgressDelta object inside public_state_delta and use empty "
                 "result_payload. Choose one action: continue_reasoning, "
                 "request_lemma, request_tool_check, request_replan, complete, "
@@ -370,12 +453,6 @@ class PromptCompiler:
                 "or concrete request; wording-only changes are invalid. Use "
                 "task_result_type ToolRequestArtifact for request_tool_check, "
                 "CheckpointArtifact for abstain, and ProgressArtifact otherwise."
-            )
-        else:
-            instructions.insert(
-                0,
-                "Return the ProgressDelta as exactly one complete bare JSON "
-                "object, with no prose or Markdown fence.",
             )
         if mode == "explore":
             instructions.append(
@@ -398,15 +475,14 @@ class PromptCompiler:
             "\n".join(instructions),
             12288,
             output_schema_fields=(
-                "claims",
-                "closed_obligation_ids",
-                "contradictions",
-                "next_step",
-                "open_obligations",
-                "public_summary",
-                "stop_reason",
-                "strategy",
-                "subgoals",
+                tuple(sorted(AGENT_TURN_FIELDS))
+                if autonomous
+                else _PROGRESS_DELTA_FIELDS
+            ),
+            output_schema_name=(
+                f"agent_turn:progress:{mode}"
+                if autonomous
+                else f"progress:{mode}"
             ),
         )
 
@@ -418,12 +494,11 @@ class PromptCompiler:
     ) -> PromptCompilation:
         instructions = "\n".join(
             (
-                _candidate_profile_protocol("simple"),
+                _candidate_profile_protocol("answer_only", autonomous=False),
                 self._response_mode_protocol(problem),
                 "This is the final gradeability fallback. Solve the problem "
                 "directly and return the exact scorer-facing answer plus one "
                 "short public check. Do not emit an AgentTurn envelope.",
-                _ANSWER_FIRST_PROTOCOL,
             )
         )
         return self._compile(
@@ -433,8 +508,9 @@ class PromptCompiler:
             instructions,
             2048,
             output_schema_fields=tuple(
-                sorted(MODEL_CANDIDATE_PROFILE_FIELDS["simple"])
+                sorted(MODEL_CANDIDATE_PROFILE_FIELDS["answer_only"])
             ),
+            output_schema_name="candidate:answer_only",
         )
 
     def compile_solver_collaboration(
@@ -458,6 +534,8 @@ class PromptCompiler:
             user_content,
             protocol,
             stage_output_cap("peer_review"),
+            output_schema_fields=tuple(sorted(AGENT_TURN_FIELDS)),
+            output_schema_name=f"agent_turn:collaboration:{mode}",
         )
 
     def compile_verifier_closure(
@@ -478,6 +556,8 @@ class PromptCompiler:
             user_content,
             protocol,
             stage_output_cap("verifier"),
+            output_schema_fields=tuple(sorted(AGENT_TURN_FIELDS)),
+            output_schema_name=f"agent_turn:verifier:{mode}",
         )
 
     def compile_role(
@@ -493,30 +573,28 @@ class PromptCompiler:
         instructions = protocol
         if runtime_instructions.strip():
             instructions += "\n" + runtime_instructions.strip()
-        if role_directory == "finalizer":
-            instructions += "\n" + _ANSWER_FIRST_PROTOCOL
         stage = _ROLE_DIRECTORY_TO_STAGE[role_directory]
+        schema_fields = {
+            "router_planner": tuple(sorted(ROUTER_INTENT_FIELDS)),
+            "lemma_curator": tuple(sorted(AGENT_TURN_FIELDS)),
+            "verifier_skeptic": ("findings",),
+            "repair": tuple(sorted(MODEL_CANDIDATE_PATCH_FIELDS)),
+            "finalizer": ("final_answer", "solution_text"),
+        }[role_directory]
         return self._compile(
             role_directory,
             stage,
             user_content,
             instructions,
             stage_output_cap(stage),
-            output_schema_fields=(
-                tuple(sorted(ROUTER_INTENT_FIELDS))
-                if role_directory == "router_planner"
-                else ()
-            ),
+            output_schema_fields=schema_fields,
+            output_schema_name=f"role:{role_directory}:{stage}",
         )
 
     @staticmethod
     def candidate_output_profile(problem: ProblemIR, route: RoutePlan) -> str:
-        solver_profile = PromptCompiler.solver_profile(problem, route)
-        if solver_profile == "proof":
-            return "proof"
-        if solver_profile == "minimal":
-            return "simple"
-        return "standard"
+        del route
+        return candidate_profile_for_response_mode(problem.response_mode)
 
     @staticmethod
     def solver_profile(problem: ProblemIR, route: RoutePlan) -> str:
@@ -549,8 +627,7 @@ class PromptCompiler:
     def _solver_profile_protocol(profile: str) -> str:
         if profile == "minimal":
             return (
-                "Use one direct check. Finish the compact JSON object before any "
-                "optional explanation."
+                "Use one direct public check and finish the compact JSON object."
             )
         if profile == "proof":
             return (
@@ -572,19 +649,19 @@ class PromptCompiler:
     def _response_mode_protocol(problem: ProblemIR) -> str:
         if problem.response_mode == "proof_full":
             return (
-                "Host response mode is proof_full. solution_text must contain the "
+                "Host response mode is proof_full. proof_steps must contain the "
                 "complete public proof, including essential inferences, theorem "
                 "hypotheses, boundary cases, and the conclusion. Compress wording, "
                 "not mathematics."
             )
         if problem.response_mode == "worked_solution":
             return (
-                "Host response mode is worked_solution. solution_text must be an ordered, "
-                "independently checkable complete derivation."
+                "Host response mode is worked_solution. steps must be an ordered, "
+                "independently checkable complete derivation with semantic claim_kind."
             )
         return (
             "Host response mode is answer_only. Give the exact canonical answer and "
-            "the shortest independently checkable public justification in solution_text."
+            "the shortest independently checkable public semantic check."
         )
 
     def _compile(
@@ -596,6 +673,7 @@ class PromptCompiler:
         output_tokens: int,
         *,
         output_schema_fields: tuple[str, ...] = (),
+        output_schema_name: str = "",
     ) -> PromptCompilation:
         contract = self._contracts.load(role_directory)
         spec = PromptSpec(
@@ -604,6 +682,7 @@ class PromptCompiler:
             contract=contract,
             runtime_protocol=instructions,
             output_schema_fields=output_schema_fields,
+            output_schema_name=output_schema_name,
         )
         system = spec.system_prompt()
         prompt_chars = len(system) + len(user_content)
@@ -630,6 +709,7 @@ class PromptCompiler:
             max_output_tokens=output_tokens,
             prompt_chars=prompt_chars,
             output_schema_fields=output_schema_fields,
+            output_schema_name=output_schema_name,
             prompt_sha256=prompt_digest,
             contract_sha256=contract.source_sha256,
         )

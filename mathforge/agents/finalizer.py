@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
+import json
 
 from mathforge.agents.prompt_compiler import PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
@@ -10,10 +12,7 @@ from mathforge.harness.errors import ModelResponseError
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, ProblemIR
 from mathforge.output.deterministic_formatter import DeterministicFormatter
-from mathforge.parsing.solution_parser import (
-    SolutionParser,
-    candidate_response_validation,
-)
+from mathforge.parsing.solution_parser import SolutionParser
 from mathforge.verification.equivalence import normalized_answer
 
 
@@ -73,7 +72,7 @@ class LLMFinalizer:
                     "or introduce new conclusions or assumptions. Preserve the "
                     "exact final answer. "
                     f"Host response mode is {problem.response_mode}. Return "
-                    "ModelCandidatePayload JSON."
+                    "only the compiled finalizer response object."
                 ),
             )
             messages = compilation.messages
@@ -95,28 +94,38 @@ class LLMFinalizer:
             if budget.deadline.must_finalize():
                 return FinalizationResult(deterministic_text, False, "finalize_cutoff")
             budget.ensure_stage("solution_parser")
-            finalized = self._parser.parse(
-                response,
-                candidate_id=f"{candidate.candidate_id}-final",
-                role="LLMFinalizer",
-                answer_type=candidate.answer_type,
-            )
-            validation_code, rejected = candidate_response_validation(finalized)
-            budget.record_model_response_validation(
-                getattr(response, "model_call_index", None),
-                validation_code,
-                rejected=rejected,
-            )
-            if rejected:
-                raise ModelResponseError(validation_code)
-            if normalized_answer(finalized.final_answer) != normalized_answer(candidate.final_answer):
-                return FinalizationResult(deterministic_text, False, "exact_answer_changed")
-            if not self._verified_content_unchanged(candidate, finalized):
+            try:
+                payload = json.loads(str(response))
+            except (TypeError, json.JSONDecodeError) as error:
+                raise ModelResponseError("finalizer_schema_invalid") from error
+            if not isinstance(payload, dict) or set(payload) != {
+                "final_answer",
+                "solution_text",
+            }:
                 return FinalizationResult(
                     deterministic_text,
                     False,
                     "verified_content_changed",
                 )
+            if not all(isinstance(payload[name], str) for name in payload):
+                raise ModelResponseError("finalizer_schema_invalid")
+            budget.record_model_response_validation(
+                getattr(response, "model_call_index", None),
+                "strict_finalizer_json",
+                rejected=False,
+            )
+            if normalized_answer(payload["final_answer"]) != normalized_answer(candidate.final_answer):
+                return FinalizationResult(deterministic_text, False, "exact_answer_changed")
+            if self._normalize_text(payload["solution_text"]) != self._normalize_text(
+                candidate.solution_text
+            ):
+                return FinalizationResult(
+                    deterministic_text,
+                    False,
+                    "verified_content_changed",
+                )
+            finalized = deepcopy(candidate)
+            finalized.solution_text = payload["solution_text"]
             finalized.final_answer = candidate.final_answer
             text = self._formatter.format(finalized, problem)
             if not text.strip():
@@ -124,25 +133,6 @@ class LLMFinalizer:
             return FinalizationResult(text, True, "accepted")
         except Exception:
             return FinalizationResult(deterministic_text, False, "finalizer_unavailable")
-
-    @staticmethod
-    def _verified_content_unchanged(
-        original: CandidateSolution,
-        finalized: CandidateSolution,
-    ) -> bool:
-        return (
-            finalized.method == original.method
-            and finalized.public_solution_steps
-            == original.public_solution_steps
-            and LLMFinalizer._normalize_text(finalized.solution_text)
-            == LLMFinalizer._normalize_text(original.solution_text)
-            and finalized.assumptions == original.assumptions
-            and finalized.theorems == original.theorems
-            and [claim.to_dict() for claim in finalized.claims]
-            == [claim.to_dict() for claim in original.claims]
-            and finalized.unresolved_obligations
-            == original.unresolved_obligations
-        )
 
     @staticmethod
     def _normalize_text(value: str) -> str:

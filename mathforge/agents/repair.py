@@ -15,10 +15,12 @@ from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import (
     CandidatePatch,
     CandidateSolution,
+    Claim,
     EvidenceRecord,
     ProblemIR,
 )
 from mathforge.parsing.solution_parser import SolutionParser
+from mathforge.verification.capabilities import derive_claim_kind
 
 
 class RepairAgent:
@@ -177,79 +179,71 @@ class RepairAgent:
         )
         deviations.extend(alias_deviations)
         normalized_replacements = normalized["claims"]
-        replacement_ids = {
-            str(item.get("claim_id", ""))
-            for item in normalized_replacements
-            if isinstance(item, dict)
+        valid_claim_ids = {claim.claim_id for claim in candidate.claims}
+        affected = set(affected_claim_ids)
+        replacement_claims: list[Claim] = []
+        allowed_claim_fields = {
+            "claim_id",
+            "statement",
+            "depends_on",
+            "check_type",
+            "importance",
         }
-        original_claims = {
-            claim.claim_id: {
-                "claim_id": claim.claim_id,
-                "statement": claim.statement,
-                "depends_on": list(claim.depends_on),
-                "check_type": claim.check_type,
-                "importance": claim.importance,
-            }
-            for claim in candidate.claims
-        }
-        for item in normalized_replacements:
-            if isinstance(item, dict):
-                original_claims[str(item.get("claim_id", ""))] = item
-        synthetic_payload = {
-            "method": candidate.method,
-            "method_steps": [
-                {
-                    "step_id": step.step_id,
-                    "kind": step.kind,
-                    "claim_ids": list(step.claim_ids),
-                    "theorem": step.theorem,
-                }
-                for step in candidate.method_steps
-            ],
-            "solution_text": "\n".join(
-                item
-                for item in payload.get("public_solution_steps", [])
-                if isinstance(item, str)
-            ),
-            "public_solution_steps": [
-                item
-                for item in payload.get("public_solution_steps", [])
-                if isinstance(item, str)
-            ],
-            "final_answer": (
-                payload.get("final_answer", "")
-                if isinstance(payload.get("final_answer", ""), str)
-                else ""
-            ),
-            "assumptions": list(candidate.assumptions),
-            "theorems": list(candidate.theorems),
-            "claims": list(original_claims.values()),
-            "unresolved_obligations": [
-                item
-                for item in payload.get("unresolved_obligations", [])
-                if isinstance(item, str)
-            ],
-        }
-        normalized_candidate = self._parser.parse(
-            json.dumps(synthetic_payload, ensure_ascii=False),
-            candidate_id=f"{candidate.candidate_id}-patch",
-            role="RepairAgent",
-            answer_type=candidate.answer_type,
+        for index, item in enumerate(normalized_replacements):
+            if not isinstance(item, dict):
+                raise ModelResponseError("repair_patch_invalid")
+            deviations.extend(
+                f"replacement_claims[{index}].{name}:ignored"
+                for name in sorted(set(item) - allowed_claim_fields)
+            )
+            claim_id = str(item.get("claim_id", "")).strip()
+            statement = str(item.get("statement", "")).strip()
+            dependencies = item.get("depends_on", [])
+            check_type = str(item.get("check_type", "reasoning")).strip()
+            importance = str(item.get("importance", "supporting")).strip()
+            if (
+                claim_id not in affected
+                or claim_id not in valid_claim_ids
+                or not statement
+                or not isinstance(dependencies, list)
+                or any(not isinstance(value, str) for value in dependencies)
+                or bool(set(dependencies) - valid_claim_ids)
+                or importance not in {"critical", "supporting"}
+            ):
+                raise ModelResponseError("repair_patch_invalid")
+            replacement = Claim(
+                claim_id=claim_id,
+                statement=statement,
+                depends_on=list(dependencies),
+                check_type=check_type or "reasoning",
+                importance=importance,
+                claim_kind=derive_claim_kind(check_type or "reasoning"),
+            )
+            replacement.validate()
+            replacement_claims.append(replacement)
+        final_answer = (
+            payload.get("final_answer", "")
+            if isinstance(payload.get("final_answer", ""), str)
+            else ""
         )
+        public_solution_steps = [
+            item
+            for item in payload.get("public_solution_steps", [])
+            if isinstance(item, str)
+        ]
+        unresolved_obligations = [
+            item
+            for item in payload.get("unresolved_obligations", [])
+            if isinstance(item, str)
+        ]
         patch = CandidatePatch(
             source_candidate_id=candidate.candidate_id,
             base_version=candidate.version,
             affected_claim_ids=list(affected_claim_ids),
-            replacement_claims=[
-                claim
-                for claim in normalized_candidate.claims
-                if claim.claim_id in replacement_ids
-            ],
-            final_answer=synthetic_payload["final_answer"],
-            public_solution_steps=synthetic_payload["public_solution_steps"],
-            unresolved_obligations=synthetic_payload[
-                "unresolved_obligations"
-            ],
+            replacement_claims=replacement_claims,
+            final_answer=final_answer,
+            public_solution_steps=public_solution_steps,
+            unresolved_obligations=unresolved_obligations,
             parse_status=parse_status,
             contract_deviations=deviations,
         )

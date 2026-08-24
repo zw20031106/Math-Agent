@@ -40,6 +40,25 @@ _ACTIVE_CLAIM_STATUSES = frozenset(
     {"pending", "accepted", "proposed", "supported", "verified", "challenged"}
 )
 _PROGRESS_MODES = frozenset({"explore", "continue"})
+_CLAIM_KINDS = frozenset(
+    {
+        "unknown",
+        "reasoning",
+        "definition",
+        "theorem_preconditions",
+        "necessity",
+        "sufficiency",
+        "existence",
+        "uniqueness",
+        "boundary",
+        "interchange",
+        "equality",
+        "matrix_shape",
+        "probability_normalization",
+        "finite_case",
+        "answer_shape",
+    }
+)
 
 
 class ReasoningStateValidationError(ValueError):
@@ -267,6 +286,7 @@ class PublicClaim:
     status: str = "pending"
     importance: str = "supporting"
     check_type: str = "reasoning"
+    claim_kind: str = "reasoning"
     version: int = 1
     supersedes: tuple[str, ...] = ()
     evidence_refs: tuple[str, ...] = ()
@@ -286,6 +306,10 @@ class PublicClaim:
                 "PublicClaim importance is invalid"
             )
         _public_id(self.check_type, "PublicClaim.check_type")
+        if self.claim_kind not in _CLAIM_KINDS:
+            raise ReasoningStateValidationError(
+                "PublicClaim claim_kind is invalid"
+            )
         _public_id(self.branch_id, "PublicClaim.branch_id")
         for dependency in self.depends_on:
             _public_id(dependency, "PublicClaim.depends_on")
@@ -305,6 +329,7 @@ class PublicClaim:
             "status": self.status,
             "importance": self.importance,
             "check_type": self.check_type,
+            "claim_kind": self.claim_kind,
             "version": self.version,
             "supersedes": list(self.supersedes),
             "evidence_refs": list(self.evidence_refs),
@@ -328,6 +353,7 @@ class PublicClaim:
             "check_type",
         }
         v2_fields = {
+            "claim_kind",
             "version",
             "supersedes",
             "evidence_refs",
@@ -354,6 +380,7 @@ class PublicClaim:
             status=str(payload["status"]).strip(),
             importance=str(payload["importance"]).strip(),
             check_type=str(payload["check_type"]).strip(),
+            claim_kind=str(payload.get("claim_kind", "reasoning")).strip(),
             version=int(payload.get("version", 1)),
             supersedes=_string_list(
                 payload.get("supersedes", []), "PublicClaim.supersedes"
@@ -1716,22 +1743,41 @@ class ProgressDeltaParser:
             raise ReasoningStateValidationError(
                 "ProgressDelta fields do not match the public protocol"
             )
+        raw_subgoals = _object_list(
+            payload["subgoals"], "ProgressDelta.subgoals"
+        )
         subgoals = tuple(
-            Subgoal.from_dict(item)
-            for item in _object_list(payload["subgoals"], "ProgressDelta.subgoals")
+            _progress_subgoal(
+                item,
+                round_index=round_index,
+                item_index=index,
+            )
+            for index, item in enumerate(raw_subgoals)
         )
         raw_claims = _object_list(
             payload["claims"], "ProgressDelta.claims"
         )
         branch_id = _public_id(branch_id, "ProgressDelta.branch_id")
         claims = tuple(
-            _progress_claim(item, branch_id=branch_id) for item in raw_claims
+            _progress_claim(
+                item,
+                branch_id=branch_id,
+                round_index=round_index,
+                item_index=index,
+            )
+            for index, item in enumerate(raw_claims)
         )
         obligations = tuple(
-            OpenObligation.from_dict(item)
-            for item in _object_list(
-                payload["open_obligations"],
-                "ProgressDelta.open_obligations",
+            _progress_obligation(
+                item,
+                round_index=round_index,
+                item_index=index,
+            )
+            for index, item in enumerate(
+                _object_list(
+                    payload["open_obligations"],
+                    "ProgressDelta.open_obligations",
+                )
             )
         )
         delta = RoundDelta(
@@ -1761,15 +1807,19 @@ def _progress_claim(
     payload: dict[str, Any],
     *,
     branch_id: str = "branch-main",
+    round_index: int,
+    item_index: int,
 ) -> PublicClaim:
     base_fields = {
-        "claim_id",
         "statement",
+        "claim_kind",
         "depends_on",
-        "subgoal_ids",
+        "subgoal_refs",
         "importance",
     }
-    optional_fields = {
+    host_owned_fields = {
+        "claim_id",
+        "subgoal_ids",
         "check_type",
         "status",
         "version",
@@ -1778,38 +1828,43 @@ def _progress_claim(
         "provenance",
         "branch_id",
     }
-    if (
-        not isinstance(payload, dict)
-        or not base_fields <= set(payload)
-        or bool(set(payload) - base_fields - optional_fields)
-    ):
+    if not isinstance(payload, dict):
         raise ReasoningStateValidationError(
             "ProgressDelta Claim fields are invalid"
         )
+    if set(payload).intersection(host_owned_fields):
+        raise ReasoningStateValidationError(
+            "ProgressDelta contains Host-owned Claim lifecycle fields"
+        )
+    if set(payload) != base_fields:
+        raise ReasoningStateValidationError(
+            "ProgressDelta Claim fields are invalid"
+        )
+    claim_kind = str(payload["claim_kind"]).strip()
+    if claim_kind not in _CLAIM_KINDS:
+        raise ReasoningStateValidationError(
+            "ProgressDelta claim_kind is invalid"
+        )
     claim = PublicClaim(
-        claim_id=_public_id(
-            payload["claim_id"], "ProgressDelta.claim_id"
-        ),
+        claim_id=f"host-r{round_index}-c{item_index + 1}",
         statement=str(payload["statement"]).strip(),
-        depends_on=_string_list(
-            payload["depends_on"], "ProgressDelta.depends_on"
+        depends_on=_semantic_refs(
+            payload["depends_on"],
+            name="ProgressDelta.depends_on",
+            local_prefix=f"host-r{round_index}-c",
+            item_index=item_index,
         ),
-        subgoal_ids=_string_list(
-            payload["subgoal_ids"], "ProgressDelta.subgoal_ids"
+        subgoal_ids=_semantic_refs(
+            payload["subgoal_refs"],
+            name="ProgressDelta.subgoal_refs",
+            local_prefix=f"host-r{round_index}-g",
+            item_index=None,
         ),
-        status=str(payload.get("status", "pending")).strip(),
+        status="proposed",
         importance=str(payload["importance"]).strip(),
-        check_type=str(payload.get("check_type", "reasoning")).strip(),
-        version=int(payload.get("version", 1)),
-        supersedes=_string_list(
-            payload.get("supersedes", []), "ProgressDelta.supersedes"
-        ),
-        evidence_refs=_string_list(
-            payload.get("evidence_refs", []), "ProgressDelta.evidence_refs"
-        ),
-        provenance=_string_list(
-            payload.get("provenance", []), "ProgressDelta.provenance"
-        ),
+        check_type=_check_type_for_claim_kind(claim_kind),
+        claim_kind=claim_kind,
+        version=1,
         branch_id=_public_id(
             branch_id,
             "ProgressDelta.branch_id",
@@ -1817,6 +1872,106 @@ def _progress_claim(
     )
     claim.validate()
     return claim
+
+
+def _progress_subgoal(
+    payload: dict[str, Any],
+    *,
+    round_index: int,
+    item_index: int,
+) -> Subgoal:
+    semantic_fields = {"statement", "depends_on", "exit_condition"}
+    if not isinstance(payload, dict):
+        raise ReasoningStateValidationError("ProgressDelta Subgoal is invalid")
+    if set(payload).intersection({"subgoal_id", "status"}):
+        raise ReasoningStateValidationError(
+            "ProgressDelta contains Host-owned Subgoal lifecycle fields"
+        )
+    if set(payload) != semantic_fields:
+        raise ReasoningStateValidationError("ProgressDelta Subgoal is invalid")
+    subgoal = Subgoal(
+        subgoal_id=f"host-r{round_index}-g{item_index + 1}",
+        statement=str(payload["statement"]).strip(),
+        depends_on=_semantic_refs(
+            payload["depends_on"],
+            name="ProgressDelta.Subgoal.depends_on",
+            local_prefix=f"host-r{round_index}-g",
+            item_index=item_index,
+        ),
+        exit_condition=str(payload["exit_condition"]).strip(),
+        status="open",
+    )
+    subgoal.validate()
+    return subgoal
+
+
+def _progress_obligation(
+    payload: dict[str, Any],
+    *,
+    round_index: int,
+    item_index: int,
+) -> OpenObligation:
+    semantic_fields = {"statement", "depends_on"}
+    if not isinstance(payload, dict):
+        raise ReasoningStateValidationError(
+            "ProgressDelta OpenObligation is invalid"
+        )
+    if "obligation_id" in payload:
+        raise ReasoningStateValidationError(
+            "ProgressDelta contains a Host-owned Obligation field"
+        )
+    if set(payload) != semantic_fields:
+        raise ReasoningStateValidationError(
+            "ProgressDelta OpenObligation is invalid"
+        )
+    obligation = OpenObligation(
+        obligation_id=f"host-r{round_index}-o{item_index + 1}",
+        statement=str(payload["statement"]).strip(),
+        depends_on=_semantic_refs(
+            payload["depends_on"],
+            name="ProgressDelta.OpenObligation.depends_on",
+            local_prefix=f"host-r{round_index}-c",
+            item_index=None,
+        ),
+    )
+    obligation.validate()
+    return obligation
+
+
+def _semantic_refs(
+    value: Any,
+    *,
+    name: str,
+    local_prefix: str,
+    item_index: int | None,
+) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ReasoningStateValidationError(f"{name} must be a reference list")
+    references: list[str] = []
+    for reference in value:
+        if type(reference) is int:
+            if reference < 0 or (item_index is not None and reference >= item_index):
+                raise ReasoningStateValidationError(
+                    f"{name} local index must reference a prior item"
+                )
+            references.append(f"{local_prefix}{reference + 1}")
+        elif isinstance(reference, str):
+            references.append(_public_id(reference, name))
+        else:
+            raise ReasoningStateValidationError(
+                f"{name} must contain integer indices or public IDs"
+            )
+    return tuple(dict.fromkeys(references))
+
+
+def _check_type_for_claim_kind(claim_kind: str) -> str:
+    return {
+        "equality": "symbolic_equivalence",
+        "matrix_shape": "matrix_shape_check",
+        "probability_normalization": "density_normalization",
+        "finite_case": "small_case_enumeration",
+        "answer_shape": "answer_type_check",
+    }.get(claim_kind, claim_kind)
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -1855,6 +2010,7 @@ def _claim_content_key(claim: PublicClaim) -> tuple[Any, ...]:
         claim.subgoal_ids,
         claim.importance,
         claim.check_type,
+        claim.claim_kind,
         claim.branch_id,
     )
 
@@ -1866,6 +2022,7 @@ def _claim_semantic_key(claim: PublicClaim) -> tuple[Any, ...]:
         tuple(claim.depends_on),
         tuple(claim.subgoal_ids),
         claim.check_type,
+        claim.claim_kind,
     )
 
 

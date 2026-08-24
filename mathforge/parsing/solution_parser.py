@@ -11,11 +11,17 @@ from mathforge.harness.model_candidate_contract import (
     MODEL_CANDIDATE_NONEMPTY_FIELDS,
     MODEL_CANDIDATE_OPTIONAL_FIELDS,
     MODEL_CANDIDATE_REQUIRED_FIELDS,
+    LEGACY_PROOF_CANDIDATE_FIELDS,
+    LEGACY_SIMPLE_CANDIDATE_FIELDS,
+    LEGACY_STANDARD_CANDIDATE_FIELDS,
+    MODEL_CLAIM_KINDS,
     PROOF_CANDIDATE_FIELDS,
     SIMPLE_CANDIDATE_FIELDS,
     STANDARD_CANDIDATE_FIELDS,
     MODEL_CLAIM_FIELDS,
     MODEL_CLAIM_HOST_FIELDS,
+    candidate_profile_for_response_mode,
+    validate_candidate_profile,
 )
 from mathforge.parsing.answer_extraction import (
     extract_final_answer_text,
@@ -112,18 +118,16 @@ class SolutionParser:
         if not answer or len(answer) > 4096:
             return None
         check = fields.get("check")
-        public_check = (
-            check.strip()
-            if isinstance(check, str) and check.strip()
-            else f"Recovered public answer: {answer}"
-        )
+        if isinstance(check, dict):
+            check = check.get("statement")
+        public_check = check.strip() if isinstance(check, str) else ""
         candidate = CandidateSolution(
             candidate_id=candidate_id,
             role=role,
             method=planned_method_family or "direct-deduction",
             final_answer=answer,
             answer_type=answer_type,
-            public_solution_steps=[public_check],
+            public_solution_steps=([public_check] if public_check else []),
             solution_text=public_check,
             parse_status="semantic_answer_salvage",
             planned_method_family=planned_method_family,
@@ -150,6 +154,7 @@ class SolutionParser:
         role: str,
         answer_type: str,
         planned_method_family: str = "",
+        response_mode: str | None = None,
     ) -> CandidateSolution:
         model_text = prepare_model_text(response)
         text = model_text.public_text
@@ -170,6 +175,7 @@ class SolutionParser:
             payload, profile_deviations = self._normalize_profile_payload(
                 payload,
                 planned_method_family=planned_method_family,
+                response_mode=response_mode,
             )
             payload, alias_deviations = self._normalize_aliases(payload)
             return self._from_payload(
@@ -268,41 +274,54 @@ class SolutionParser:
         payload: dict[str, Any],
         *,
         planned_method_family: str,
+        response_mode: str | None,
     ) -> tuple[dict[str, Any], list[str]]:
         fields = set(payload)
-        if fields == SIMPLE_CANDIDATE_FIELDS:
+        official_profiles = {
+            frozenset(SIMPLE_CANDIDATE_FIELDS): "answer_only",
+            frozenset(STANDARD_CANDIDATE_FIELDS): "worked_solution",
+            frozenset(PROOF_CANDIDATE_FIELDS): "proof_full",
+        }
+        profile = official_profiles.get(frozenset(fields))
+        if profile is not None:
+            if response_mode is not None:
+                expected = candidate_profile_for_response_mode(response_mode)
+                if profile != expected:
+                    return payload, [f"response_profile:{profile}:expected:{expected}"]
+            try:
+                validate_candidate_profile(payload, profile)
+            except ValueError:
+                return payload, [f"response_profile:{profile}:invalid"]
+            return SolutionParser._host_normalize_profile(
+                payload,
+                profile=profile,
+                planned_method_family=planned_method_family,
+            ), []
+
+        if fields == LEGACY_SIMPLE_CANDIDATE_FIELDS:
             answer = payload.get("answer")
             check = payload.get("check")
-            if not isinstance(answer, str) or not isinstance(check, str):
-                return payload, []
-            statement = check.strip() or f"The stated answer is {answer.strip()}."
-            return (
-                {
-                    "method": planned_method_family or "direct-deduction",
-                    "final_answer": answer,
-                    "public_solution_steps": [statement],
-                    "claims": [
+            if isinstance(answer, str) and isinstance(check, str):
+                return (
+                    SolutionParser._host_normalize_profile(
                         {
-                            "claim_id": "host-c1",
-                            "statement": statement,
-                            "depends_on": [],
-                            "check_type": "reasoning",
-                            "importance": "critical",
-                        }
-                    ],
-                    "solution_text": statement,
-                    "assumptions": [],
-                    "theorems": [],
-                    "unresolved_obligations": [],
-                },
-                ["model_profile:simple:host_normalized"],
-            )
-        if fields == STANDARD_CANDIDATE_FIELDS:
+                            "final_answer": answer,
+                            "check": {
+                                "statement": check or answer,
+                                "claim_kind": "reasoning",
+                            },
+                        },
+                        profile="answer_only",
+                        planned_method_family=planned_method_family,
+                    ),
+                    ["legacy_profile:answer_check"],
+                )
+        if fields == LEGACY_STANDARD_CANDIDATE_FIELDS:
             answer = payload.get("answer")
             method = payload.get("method")
             steps = payload.get("steps")
             uncertainties = payload.get("uncertainties")
-            if not (
+            if (
                 isinstance(answer, str)
                 and isinstance(method, str)
                 and isinstance(steps, list)
@@ -310,99 +329,146 @@ class SolutionParser:
                 and isinstance(uncertainties, list)
                 and all(isinstance(item, str) for item in uncertainties)
             ):
-                return payload, []
-            public_steps = [item.strip() for item in steps if item.strip()]
-            claims = [
-                {
-                    "claim_id": f"host-c{index}",
-                    "statement": statement,
-                    "depends_on": ([f"host-c{index - 1}"] if index > 1 else []),
-                    "check_type": "reasoning",
-                    "importance": (
-                        "critical" if index == len(public_steps) else "supporting"
+                semantic_steps = [
+                    {
+                        "statement": statement,
+                        "claim_kind": "reasoning",
+                        "depends_on": ([index - 1] if index else []),
+                    }
+                    for index, statement in enumerate(steps)
+                ]
+                return (
+                    SolutionParser._host_normalize_profile(
+                        {
+                            "final_answer": answer,
+                            "method": method,
+                            "steps": semantic_steps,
+                            "uncertainties": uncertainties,
+                        },
+                        profile="worked_solution",
+                        planned_method_family=planned_method_family,
                     ),
-                }
-                for index, statement in enumerate(public_steps, start=1)
-            ]
-            return (
-                {
-                    "method": method,
-                    "final_answer": answer,
-                    "public_solution_steps": public_steps,
-                    "claims": claims,
-                    "solution_text": "\n".join(public_steps),
-                    "assumptions": [],
-                    "theorems": [],
-                    "unresolved_obligations": list(uncertainties),
-                },
-                ["model_profile:standard:host_normalized"],
-            )
-        if fields == PROOF_CANDIDATE_FIELDS:
+                    ["legacy_profile:answer_steps"],
+                )
+        if fields == LEGACY_PROOF_CANDIDATE_FIELDS:
             conclusion = payload.get("conclusion")
             method = payload.get("method")
             proof_steps = payload.get("proof_steps")
             open_conditions = payload.get("open_conditions")
-            if not (
+            if (
                 isinstance(conclusion, str)
                 and isinstance(method, str)
                 and isinstance(proof_steps, list)
                 and isinstance(open_conditions, list)
                 and all(isinstance(item, str) for item in open_conditions)
             ):
-                return payload, []
-            statements: list[str] = []
-            dependencies: list[list[str]] = []
-            for index, item in enumerate(proof_steps):
-                if not isinstance(item, dict) or set(item) != {
-                    "statement",
-                    "depends_on",
-                }:
-                    return payload, []
-                statement = item.get("statement")
-                raw_dependencies = item.get("depends_on")
-                if not isinstance(statement, str) or not isinstance(
-                    raw_dependencies, list
-                ):
-                    return payload, []
-                normalized_dependencies: list[str] = []
-                for dependency in raw_dependencies:
-                    if type(dependency) is int and 0 <= dependency < index:
-                        normalized_dependencies.append(f"host-p{dependency + 1}")
-                    elif (
-                        isinstance(dependency, str)
-                        and re.fullmatch(r"(?:host-)?p\d+", dependency)
+                semantic_steps = []
+                for index, item in enumerate(proof_steps):
+                    if not isinstance(item, dict):
+                        return payload, ["legacy_profile:proof:invalid"]
+                    statement = item.get("statement")
+                    dependencies = item.get("depends_on", [])
+                    if not isinstance(statement, str) or not isinstance(
+                        dependencies,
+                        list,
                     ):
-                        number = int(re.search(r"\d+", dependency).group(0))
-                        if 1 <= number <= index:
-                            normalized_dependencies.append(f"host-p{number}")
-                statements.append(statement.strip())
-                dependencies.append(normalized_dependencies)
-            claims = [
-                {
-                    "claim_id": f"host-p{index}",
-                    "statement": statement,
-                    "depends_on": dependencies[index - 1],
-                    "check_type": "reasoning",
-                    "importance": (
-                        "critical" if index == len(statements) else "supporting"
-                    ),
-                }
-                for index, statement in enumerate(statements, start=1)
-            ]
-            return (
-                {
-                    "method": method,
-                    "final_answer": conclusion,
-                    "public_solution_steps": statements,
-                    "claims": claims,
-                    "solution_text": "\n".join(statements),
-                    "assumptions": [],
-                    "theorems": [],
-                    "unresolved_obligations": list(open_conditions),
-                },
-                ["model_profile:proof:host_normalized"],
-            )
+                        return payload, ["legacy_profile:proof:invalid"]
+                    semantic_steps.append(
+                        {
+                            "statement": statement,
+                            "claim_kind": "reasoning",
+                            "depends_on": [
+                                dependency
+                                for dependency in dependencies
+                                if type(dependency) is int and dependency < index
+                            ],
+                        }
+                    )
+                if len(semantic_steps) >= 2:
+                    return (
+                        SolutionParser._host_normalize_profile(
+                            {
+                                "final_answer": conclusion,
+                                "method": method,
+                                "proof_steps": semantic_steps,
+                                "open_conditions": open_conditions,
+                            },
+                            profile="proof_full",
+                            planned_method_family=planned_method_family,
+                        ),
+                        ["legacy_profile:conclusion_proof_steps"],
+                    )
         return payload, []
+
+    @staticmethod
+    def _host_normalize_profile(
+        payload: dict[str, Any],
+        *,
+        profile: str,
+        planned_method_family: str,
+    ) -> dict[str, Any]:
+        if profile == "answer_only":
+            check = payload["check"]
+            statement = str(check["statement"]).strip()
+            claim_kind = str(check["claim_kind"])
+            method = planned_method_family or "direct-deduction"
+            steps = [(statement, claim_kind, [])]
+            unresolved: list[str] = []
+        else:
+            field = "steps" if profile == "worked_solution" else "proof_steps"
+            method = str(payload["method"]).strip()
+            steps = [
+                (
+                    str(item["statement"]).strip(),
+                    str(item["claim_kind"]),
+                    [f"host-c{dependency + 1}" for dependency in item["depends_on"]],
+                )
+                for item in payload[field]
+            ]
+            unresolved = list(
+                payload[
+                    "uncertainties"
+                    if profile == "worked_solution"
+                    else "open_conditions"
+                ]
+            )
+        statements = [statement for statement, _, _ in steps]
+        claims = [
+            {
+                "statement": statement,
+                "depends_on": dependencies,
+                "check_type": SolutionParser._check_type_for_claim_kind(claim_kind),
+                "claim_kind": claim_kind,
+                "importance": (
+                    "critical" if index == len(steps) else "supporting"
+                ),
+            }
+            for index, (statement, claim_kind, dependencies) in enumerate(
+                steps,
+                start=1,
+            )
+        ]
+        return {
+            "_host_normalized_profile": profile,
+            "method": method,
+            "final_answer": payload["final_answer"],
+            "public_solution_steps": statements,
+            "claims": claims,
+            "solution_text": "\n".join(statements),
+            "assumptions": [],
+            "theorems": [],
+            "unresolved_obligations": unresolved,
+        }
+
+    @staticmethod
+    def _check_type_for_claim_kind(claim_kind: str) -> str:
+        return {
+            "equality": "symbolic_equivalence",
+            "matrix_shape": "matrix_shape_check",
+            "probability_normalization": "density_normalization",
+            "finite_case": "small_case_enumeration",
+            "answer_shape": "answer_type_check",
+        }.get(claim_kind, claim_kind if claim_kind in _ALLOWED_CHECK_TYPES else "reasoning")
 
     @staticmethod
     def _json_failure_status(text: str) -> str:
@@ -432,6 +498,7 @@ class SolutionParser:
         if in_string or stack:
             return "truncated_json"
         return "malformed_json"
+
     @staticmethod
     def _normalize_aliases(
         payload: dict[str, Any],
@@ -511,6 +578,9 @@ class SolutionParser:
         planned_method_family: str = "",
     ) -> CandidateSolution:
         deviations = list(initial_deviations or [])
+        host_normalized_profile = str(
+            payload.pop("_host_normalized_profile", "")
+        ).strip()
         missing_fields = sorted(_REQUIRED_MODEL_FIELDS - set(payload))
         deviations.extend(f"{name}:missing" for name in missing_fields)
         empty_fields = sorted(
@@ -526,9 +596,11 @@ class SolutionParser:
                 else f"{status}:incomplete_candidate"
             )
         host_fields = MODEL_CANDIDATE_HOST_FIELDS
-        deviations.extend(
-            f"{name}:host_owned" for name in sorted(host_fields.intersection(payload))
-        )
+        if not host_normalized_profile:
+            deviations.extend(
+                f"{name}:host_owned"
+                for name in sorted(host_fields.intersection(payload))
+            )
         allowed_fields = (
             host_fields
             | MODEL_CANDIDATE_REQUIRED_FIELDS
@@ -545,6 +617,11 @@ class SolutionParser:
             raw_claims = []
         if len(raw_claims) > MAX_CLAIMS:
             raise SchemaValidationError(f"claim count exceeds {MAX_CLAIMS}")
+        model_claim_ids = {
+            str(item.get("claim_id", "")).strip(): f"host-c{index + 1}"
+            for index, item in enumerate(raw_claims)
+            if isinstance(item, dict) and str(item.get("claim_id", "")).strip()
+        }
         for index, item in enumerate(raw_claims):
             prefix = f"claims[{index}]"
             if not isinstance(item, dict):
@@ -552,10 +629,11 @@ class SolutionParser:
                 continue
             claim_model_fields = MODEL_CLAIM_FIELDS
             claim_host_fields = MODEL_CLAIM_HOST_FIELDS
-            deviations.extend(
-                f"{prefix}.{name}:host_owned"
-                for name in sorted(claim_host_fields.intersection(item))
-            )
+            if not host_normalized_profile:
+                deviations.extend(
+                    f"{prefix}.{name}:host_owned"
+                    for name in sorted(claim_host_fields.intersection(item))
+                )
             deviations.extend(
                 f"{prefix}.{name}:ignored"
                 for name in sorted(set(item) - claim_model_fields - claim_host_fields)
@@ -580,15 +658,29 @@ class SolutionParser:
             if importance not in _ALLOWED_CLAIM_IMPORTANCE:
                 deviations.append(f"{prefix}.importance:value")
                 importance = "supporting"
+            claim_kind = SolutionParser._model_string(
+                item,
+                "claim_kind",
+                derive_claim_kind(check_suggestion),
+                deviations,
+                prefix=prefix,
+            )
+            if claim_kind not in MODEL_CLAIM_KINDS:
+                deviations.append(f"{prefix}.claim_kind:value")
+                claim_kind = derive_claim_kind(check_suggestion)
+            raw_dependencies = SolutionParser._model_string_list(
+                item,
+                "depends_on",
+                deviations,
+                prefix=prefix,
+            )
+            dependencies = [
+                model_claim_ids.get(dependency, dependency)
+                for dependency in raw_dependencies
+            ]
             claims.append(
                 Claim(
-                    claim_id=SolutionParser._model_string(
-                        item,
-                        "claim_id",
-                        f"c{index + 1}",
-                        deviations,
-                        prefix=prefix,
-                    ),
+                    claim_id=f"host-c{index + 1}",
                     statement=SolutionParser._model_string(
                         item,
                         "statement",
@@ -596,15 +688,10 @@ class SolutionParser:
                         deviations,
                         prefix=prefix,
                     ),
-                    depends_on=SolutionParser._model_string_list(
-                        item,
-                        "depends_on",
-                        deviations,
-                        prefix=prefix,
-                    ),
+                    depends_on=dependencies,
                     check_type=check_suggestion,
                     importance=importance,
-                    claim_kind=derive_claim_kind(check_suggestion),
+                    claim_kind=claim_kind,
                 )
             )
         raw_method_steps = payload.get("method_steps", [])
@@ -616,63 +703,8 @@ class SolutionParser:
             raise SchemaValidationError(
                 f"method step count exceeds {MAX_METHOD_STEPS}"
             )
-        valid_claim_ids = {claim.claim_id for claim in claims}
-        valid_kinds = {item.value for item in MethodStepKind}
-        for index, item in enumerate(raw_method_steps):
-            prefix = f"method_steps[{index}]"
-            if not isinstance(item, dict):
-                deviations.append(f"{prefix}:type")
-                continue
-            allowed_step_fields = {"step_id", "kind", "claim_ids", "theorem"}
-            deviations.extend(
-                f"{prefix}.{name}:ignored"
-                for name in sorted(set(item) - allowed_step_fields)
-            )
-            step_id = SolutionParser._model_string(
-                item,
-                "step_id",
-                f"s{index + 1}",
-                deviations,
-                prefix=prefix,
-            )
-            kind = SolutionParser._model_string(
-                item,
-                "kind",
-                MethodStepKind.OTHER.value,
-                deviations,
-                prefix=prefix,
-            )
-            if kind not in valid_kinds:
-                deviations.append(f"{prefix}.kind:value")
-                kind = MethodStepKind.OTHER.value
-            claim_ids = SolutionParser._model_string_list(
-                item,
-                "claim_ids",
-                deviations,
-                prefix=prefix,
-            )
-            unknown_claim_ids = sorted(set(claim_ids) - valid_claim_ids)
-            if unknown_claim_ids:
-                deviations.append(f"{prefix}.claim_ids:unknown")
-                claim_ids = [
-                    claim_id
-                    for claim_id in claim_ids
-                    if claim_id in valid_claim_ids
-                ]
-            method_steps.append(
-                MethodStep(
-                    step_id=step_id,
-                    kind=kind,
-                    claim_ids=claim_ids,
-                    theorem=SolutionParser._model_string(
-                        item,
-                        "theorem",
-                        "",
-                        deviations,
-                        prefix=prefix,
-                    ),
-                )
-            )
+        if raw_method_steps and not host_normalized_profile:
+            deviations.append("method_steps:host_owned")
         if not method_steps and claims:
             for index, claim in enumerate(claims, start=1):
                 method_steps.append(

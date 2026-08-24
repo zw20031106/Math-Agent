@@ -144,14 +144,13 @@ def test_contract_runtime_source_of_truth_and_prompt_snapshot() -> None:
 @pytest.mark.parametrize(
     ("problem_text", "profile", "cap"),
     [
-        ("Compute 17+28.", "simple", 2048),
+        ("Compute 17+28.", "answer_only", 2048),
         (
-            "Evaluate the integral under the stated assumptions and show every "
-            "required derivation step without treating this as a proof.",
-            "standard",
-            32768,
+            "Show all steps to derive the value of 2+2.",
+            "worked_solution",
+            40960,
         ),
-        ("Prove that x^2 is nonnegative for every real x.", "proof", 40960),
+        ("Prove that x^2 is nonnegative for every real x.", "proof_full", 40960),
     ],
 )
 def test_candidate_profile_schema_and_budget(
@@ -161,7 +160,7 @@ def test_candidate_profile_schema_and_budget(
 ) -> None:
     problem = ProblemParser().parse(problem_text)
     route = RouterRuleEngine().plan(problem)
-    if profile == "standard":
+    if profile == "worked_solution":
         route = replace(route, risk_level="high")
     compilation = PrimarySolver().compile_prompt(
         SolverRequest("profile", problem, route, "", route.method_families[0])

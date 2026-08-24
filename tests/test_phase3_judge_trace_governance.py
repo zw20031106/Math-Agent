@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from time import perf_counter
 
 import pytest
@@ -42,7 +43,12 @@ def _minimal_config(**overrides) -> HarnessConfig:
     return HarnessConfig(**values)
 
 
-def _candidate(answer: str, marker: str, claim_count: int = 1) -> str:
+def _candidate(
+    answer: str,
+    marker: str,
+    claim_count: int = 1,
+    method: str = "direct-deduction",
+) -> str:
     claims = [
         {
             "claim_id": f"c{index}",
@@ -55,7 +61,7 @@ def _candidate(answer: str, marker: str, claim_count: int = 1) -> str:
     ]
     return json.dumps(
         {
-            "method": "direct-deduction",
+            "method": method,
             "method_steps": [
                 {
                     "step_id": f"s{index}",
@@ -80,9 +86,14 @@ class _ConflictingClient:
     def chat(self, *, messages, temperature, max_tokens):
         del temperature, max_tokens
         system = messages[0]["content"]
+        match = re.search(
+            r"Required core method family: ([a-z-]+)\.",
+            messages[-1]["content"],
+        )
+        method = match.group(1) if match else "direct-deduction"
         if system.startswith("You are AlternativeSolver"):
-            return _candidate("3", "REJECTED_ANSWER_MARKER")
-        return _candidate("2", "SELECTED_ANSWER_MARKER")
+            return _candidate("3", "REJECTED_ANSWER_MARKER", method=method)
+        return _candidate("2", "SELECTED_ANSWER_MARKER", method=method)
 
 
 def test_formal_output_uses_official_trace_while_local_journal_keeps_debug_events(
@@ -142,8 +153,8 @@ def test_viable_candidate_public_answer_and_steps_enter_judge_trace():
     )
 
     assert result["status"] == "success"
-    assert "SELECTED_ANSWER_MARKER" in result["final_response"]
-    assert "answer 3" in candidates["content"]
+    assert "REJECTED_ANSWER_MARKER" in result["final_response"]
+    assert "answer 2" in candidates["content"]
     assert "candidate_generation" in serialized
 
 

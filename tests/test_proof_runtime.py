@@ -85,11 +85,16 @@ class ProofClient:
             if self.invalid_verifier:
                 return "not JSON"
             findings = []
-            for kind in ("definition", "sufficiency", "boundary"):
+            for index, kind in enumerate(
+                ("definition", "sufficiency", "boundary"),
+                start=1,
+            ):
                 findings.append(
                     {
                         "candidate_id": "primary-1",
-                        "claim_id": kind if not self.claimless else "invented",
+                        "claim_id": (
+                            f"host-c{index}" if not self.claimless else "invented"
+                        ),
                         "obligation_ids": [f"primary-1:{kind}"],
                         "status": "pass",
                         "description": f"{kind} is supported",
@@ -177,7 +182,7 @@ class LowRiskTheoremClient:
                     "findings": [
                         {
                             "candidate_id": "primary-1",
-                            "claim_id": "conditions",
+                            "claim_id": "host-c1",
                             "obligation_ids": [
                                 "primary-1:theorem_preconditions"
                             ],

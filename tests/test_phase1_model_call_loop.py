@@ -351,58 +351,20 @@ def test_primary_retries_one_contract_rejection_at_zero_temperature():
 def test_primary_retries_nested_schema_validation_failure():
     invalid = json.dumps(
         {
-            "method": "direct-deduction",
-            "method_steps": [],
-            "solution_text": "Invalid duplicate Claim identifiers.",
-            "public_solution_steps": ["Invalid duplicate Claim identifiers."],
             "final_answer": "2",
-            "assumptions": [],
-            "theorems": [],
-            "claims": [
-                {
-                    "claim_id": "c1",
-                    "statement": "First.",
-                    "depends_on": [],
-                    "check_type": "reasoning",
-                    "importance": "supporting",
-                },
-                {
-                    "claim_id": "c1",
-                    "statement": "Duplicate.",
-                    "depends_on": [],
-                    "check_type": "reasoning",
-                    "importance": "critical",
-                },
-            ],
-            "unresolved_obligations": [],
+            "check": {
+                "statement": "The sum equals 2.",
+                "claim_kind": "invalid-kind",
+            },
         }
     )
     valid = json.dumps(
         {
-            "method": "direct-deduction",
-            "method_steps": [
-                {
-                    "step_id": "s1",
-                    "kind": "conclusion",
-                    "claim_ids": ["c1"],
-                    "theorem": "",
-                }
-            ],
-            "solution_text": "Adding one and one gives two.",
-            "public_solution_steps": ["Compute 1+1=2."],
             "final_answer": "2",
-            "assumptions": [],
-            "theorems": [],
-            "claims": [
-                {
-                    "claim_id": "c1",
-                    "statement": "The sum equals 2.",
-                    "depends_on": [],
-                    "check_type": "reasoning",
-                    "importance": "critical",
-                }
-            ],
-            "unresolved_obligations": [],
+            "check": {
+                "statement": "Adding one and one gives two.",
+                "claim_kind": "equality",
+            },
         }
     )
 
@@ -442,7 +404,7 @@ def test_primary_retries_nested_schema_validation_failure():
     )
 
     assert candidate.final_answer == "2"
-    assert "nested_schema_invariant:invalid" in (
+    assert "response_profile:answer_only:invalid" in (
         client.calls[1]["messages"][-1]["content"]
     )
 
@@ -535,30 +497,11 @@ def test_preflight_failure_report_never_contains_raw_exception_text():
 def test_l0_to_l5_preflight_uses_the_production_candidate_contract_retry():
     valid = json.dumps(
         {
-            "method": "direct-deduction",
-            "method_steps": [
-                {
-                    "step_id": "s1",
-                    "kind": "conclusion",
-                    "claim_ids": ["c1"],
-                    "theorem": "",
-                }
-            ],
-            "solution_text": "One plus one equals two.",
-            "public_solution_steps": ["Compute 1+1=2."],
             "final_answer": "2",
-            "assumptions": [],
-            "theorems": [],
-            "claims": [
-                {
-                    "claim_id": "c1",
-                    "statement": "The sum is 2.",
-                    "depends_on": [],
-                    "check_type": "reasoning",
-                    "importance": "critical",
-                }
-            ],
-            "unresolved_obligations": [],
+            "check": {
+                "statement": "One plus one equals two.",
+                "claim_kind": "equality",
+            },
         }
     )
 
@@ -596,7 +539,7 @@ def test_l0_to_l5_preflight_uses_the_production_candidate_contract_retry():
                         "findings": [
                             {
                                 "candidate_id": "preflight-l4",
-                                "claim_id": "c1",
+                                "claim_id": "host-c1",
                                 "obligation_ids": [
                                     "preflight-l4:sufficiency"
                                 ],

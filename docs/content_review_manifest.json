@@ -71,10 +71,10 @@
         "mathforge/runtime.py"
       ],
       "expected_count": 8,
-        "version": "effective-agent-governance-2-0824-phase1",
-        "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+        "version": "effective-agent-governance-3-0824-phase2",
+        "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
       "review_date": "2026-08-24",
-      "sha256": "1967b28ea2bf6e5a9e2d656dfa01c23738e85436c6616ece40a6c9ce059379f3"
+      "sha256": "5cd86ae716ade39c63970711cac0b686cc32692fd126194555a629d639f29bcd"
     },
     {
       "id": "prompt-contracts",
@@ -82,20 +82,20 @@
       "path": "prompts",
       "pattern": "contract.md",
       "expected_count": 7,
-        "version": "prompt-contract-13-0812-p2-compact",
-        "engineering_reviewer": "codex-0812-phase-p2-contract-audit",
-        "review_date": "2026-08-12",
-        "sha256": "a161ce8990ed57a770607b50580eb74ce977f119685348c1bfb9c2e4ef3925a1"
+        "version": "prompt-contract-14-0824-phase2",
+        "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
+        "review_date": "2026-08-24",
+        "sha256": "9b9045645d1ad209804872d8a6b4c01a1412223a917b40aa2edfdb6b68293594"
     },
     {
       "id": "prompt-compiler",
       "kind": "file",
       "path": "mathforge/agents/prompt_compiler.py",
       "expected_count": 1,
-      "version": "prompt-compiler-16-0812-p2-compact",
-      "engineering_reviewer": "codex-0812-phase-p2-contract-audit",
-      "review_date": "2026-08-12",
-      "sha256": "c72e037351172fa1214c0aac60676756bac88b46ea9e17c6f784dd935d0e69fd"
+      "version": "prompt-compiler-17-0824-phase2",
+      "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
+      "review_date": "2026-08-24",
+      "sha256": "bcdee06b1fe550769cbede3a98195e1a10ac5f3562487afe044a06b27b70c3ba"
     },
     {
       "id": "model-candidate-boundary",
@@ -110,20 +110,20 @@
         "mathforge/parsing/solution_parser.py"
       ],
       "expected_count": 7,
-      "version": "model-candidate-boundary-3.3-0812-p2",
-      "engineering_reviewer": "codex-0812-phase-p2-contract-audit",
-      "review_date": "2026-08-12",
-      "sha256": "5330c02062da4c9b622ff7ae6ce7e95ae26a47c541d0a76ab67b32eace3f3d35"
+      "version": "model-candidate-boundary-4.0-0824-phase2",
+      "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
+      "review_date": "2026-08-24",
+      "sha256": "cd79d8fe732886f72cfbc31690a66fda5e7699acb9076fec59cd7b446cbf0ba4"
     },
     {
       "id": "reasoning-state",
       "kind": "file",
       "path": "mathforge/harness/reasoning_state.py",
       "expected_count": 1,
-      "version": "reasoning-state-2.0-phase6",
-      "engineering_reviewer": "codex-0809-phase6-reasoning-state-audit",
-      "review_date": "2026-08-09",
-      "sha256": "a712403ea4b2115233f3adb32cfea1fd041d4ce6a724ab028dc8968fb637e43d"
+      "version": "reasoning-state-2.1-0824-phase2",
+      "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
+      "review_date": "2026-08-24",
+      "sha256": "bea0f82c56d8a93dd83cf9b72fe1848a92c7ad496d7386ef784c7411b594b830"
     },
     {
       "id": "proof-obligations",
@@ -250,10 +250,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 20,
-      "version": "phase-f6-agent-protocol-9-0824-phase1",
-      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+      "version": "phase-f6-agent-protocol-10-0824-phase2",
+      "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
       "review_date": "2026-08-24",
-      "sha256": "fcab0241529bcc042538c3c11fb7ed543c5cf8ac02ba2956bc0c010073cc117e"
+      "sha256": "9021776dab8802075fe55ba1f93770183ce245de06e7e9844bf16d6547df7cb7"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -397,10 +397,10 @@
         "mathforge/verification/verification_v2.py"
       ],
       "expected_count": 15,
-      "version": "review-repair-communication-audit-2.1-0824-phase1",
-      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+      "version": "review-repair-communication-audit-2.2-0824-phase2",
+      "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
       "review_date": "2026-08-24",
-      "sha256": "f19d131425ecd3184402c68d44792289f4ac96ccc7a5825e9571889a780b07d3"
+      "sha256": "464a4720aa95e2181cd191a489da8b2c9cf9f697ae16170bfbc8d75fbb9c6ba0"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -418,10 +418,10 @@
         "tests/test_phase9_scheduler_runtime.py"
       ],
       "expected_count": 10,
-      "version": "scheduler-runtime-2.1-0824-phase1",
-      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+      "version": "scheduler-runtime-2.2-0824-phase2",
+      "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
       "review_date": "2026-08-24",
-      "sha256": "8b3a09ec67288146a1d5ad0e84af27aaf06ab189c0282ab88f475d53f90aed3a"
+      "sha256": "982479951eb25541032986b70f4c25a1e8adb6f8ee94ab89c4d0a974b94fe5da"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -443,10 +443,10 @@
         "tests/test_s6_e7_case_lifecycle.py"
       ],
       "expected_count": 14,
-      "version": "production-preflight-release-governance-1.1-0824-phase1",
-      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+      "version": "production-preflight-release-governance-1.2-0824-phase2",
+      "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
       "review_date": "2026-08-24",
-      "sha256": "e356c13e09c084cdf6438ad1fcfc806d9f0542fa8be9fe74dc7a0fd6abc7d504"
+      "sha256": "e62e90a01e291ab055f695f95589e8fb7f03bfbaebdbf110ceb3f7898dd52005"
     },
     {
       "id": "router-e5-gold",

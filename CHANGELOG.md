@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Completed the 2026-08-24 remediation Phase 2 Turn/Candidate protocol work.
+  Each compiled model Turn now names one authoritative output schema. Candidate
+  wire profiles are selected only from ProblemIR response mode: answer-only
+  uses an exact answer plus semantic check, worked solutions use ordered
+  semantic steps, and proofs require at least two complete proof steps. Models
+  provide mathematical statements, prior-step references, and claim kinds;
+  the Host assigns Candidate, Claim, MethodStep, Progress, lifecycle, version,
+  branch, and Artifact identifiers. Progress Turns accept semantic deltas only
+  and reject model-created IDs, status, version, provenance, or check specs.
+  Prompt examples and Candidate validators now share the same executable
+  profile definitions, while repeated answer-first, optional-exposition, and
+  boxed-answer rules were removed. Truncated autonomous responses are parsed
+  before answer salvage so complete public derivations survive; answer-only
+  salvage no longer invents a fake reasoning step. Repair patches may cite
+  existing Host Claim IDs without reassigning them, and finalization uses its
+  own two-field presentation schema. Added response-profile, Host-ownership,
+  semantic-delta, schema-generation, 20-case contract-probe, repair-lineage,
+  truncation, and proof-delivery regression gates.
 - Completed the 2026-08-24 remediation Phase 1 ProblemIR and public-answer
   contract work. Replaced the line-start-only option regex with a bounded
   Choice Scanner that recognizes reliable inline and line-based A-H sequences

@@ -244,41 +244,61 @@ class FakeClient:
                 user_content,
             )
             method = method_match.group(1) if method_match else "direct-deduction"
-            candidate = {
-                    "method": method,
-                    "final_answer": problem,
-                    "public_solution_steps": [
-                        f"Solved independently: {problem}"
-                    ],
-                    "claims": [
+            semantic_step = {
+                "statement": (
+                    f"The {role} {method} public route establishes {problem}."
+                ),
+                "claim_kind": "reasoning",
+                "depends_on": [],
+            }
+            profile_match = re.search(
+                r"Candidate response mode is ([a-z_]+)", system_content
+            )
+            profile = profile_match.group(1) if profile_match else "answer_only"
+            if profile == "proof_full":
+                proof_steps = [semantic_step]
+                if role == "AlternativeSolver":
+                    proof_steps.append(
                         {
-                            "claim_id": "c1",
+                            **semantic_step,
                             "statement": (
-                                f"The {role} public route establishes the requested "
-                                f"result {problem}."
-                                if "AgentTurnPayload 1.0" in system_content
-                                else f"The requested result is {problem}."
+                                f"The {method} construction supplies an independent "
+                                "intermediate implication."
                             ),
-                            "depends_on": [],
-                            "check_type": "reasoning",
-                            "importance": "critical",
+                            "claim_kind": "necessity",
+                            "depends_on": [0],
                         }
-                    ],
-                    "method_steps": [
-                        {
-                            "step_id": "s1",
-                            "kind": "conclusion",
-                            "claim_ids": ["c1"],
-                            "theorem": "",
-                        }
-                    ],
-                    "solution_text": f"Solved independently: {problem}",
-                    "assumptions": [],
-                    "theorems": [],
-                    "unresolved_obligations": [],
+                    )
+                proof_steps.append(
+                    {
+                        **semantic_step,
+                        "statement": f"Therefore {problem} follows.",
+                        "claim_kind": "sufficiency",
+                        "depends_on": [len(proof_steps) - 1],
+                    }
+                )
+                candidate = {
+                    "final_answer": problem,
+                    "method": method,
+                    "proof_steps": proof_steps,
+                    "open_conditions": [],
+                }
+            elif profile == "worked_solution":
+                candidate = {
+                    "final_answer": problem,
+                    "method": method,
+                    "steps": [semantic_step],
+                    "uncertainties": [],
+                }
+            else:
+                candidate = {
+                    "final_answer": problem,
+                    "check": {
+                        "statement": semantic_step["statement"],
+                        "claim_kind": "reasoning",
+                    },
                 }
             if "AgentTurnPayload 1.0" in system_content:
-                candidate.pop("method_steps", None)
                 return json.dumps(
                     _agent_envelope(
                         task_result_type="CandidateArtifact",

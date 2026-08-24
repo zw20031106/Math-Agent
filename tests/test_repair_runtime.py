@@ -73,18 +73,20 @@ class RepairRuntimeClient:
         self.calls.append(messages)
         if messages[0]["content"].startswith("You are RepairAgent"):
             return json.dumps(
-                _candidate_payload(
-                    self.repaired_answer,
-                    "x = x",
-                    [
+                {
+                    "replacement_claims": [
                         {
-                            "claim_id": "failed",
+                            "claim_id": "host-c1",
                             "statement": "x = x",
+                            "depends_on": [],
                             "check_type": "symbolic_equivalence",
+                            "importance": "critical",
                         }
                     ],
-                    method=self.primary_method,
-                )
+                    "final_answer": self.repaired_answer,
+                    "public_solution_steps": ["x = x"],
+                    "unresolved_obligations": [],
+                }
             )
         match = re.search(
             r"Required core method family: ([a-z-]+)\.",
@@ -138,7 +140,7 @@ def test_runtime_accepts_fully_reverified_repair_and_rebuilds_solution_text():
         if event["event"] == "resource_plan_updated"
     )
     assert rebalanced["evidence_repair_triggers"] == {
-        "primary-1": ["failed"]
+        "primary-1": ["host-c1"]
     }
     assert rebalanced["repair_reserve"] == 1
     final_states = next(

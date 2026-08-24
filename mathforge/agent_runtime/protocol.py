@@ -152,7 +152,7 @@ class ParsedAgentTurn:
     assurance_degradation: str = "none"
 
 
-_MODEL_TURN_FIELDS = frozenset(
+AGENT_TURN_FIELDS = frozenset(
     {
         "protocol_version",
         "task_result_type",
@@ -164,6 +164,7 @@ _MODEL_TURN_FIELDS = frozenset(
         "stop_reason",
     }
 )
+_MODEL_TURN_FIELDS = AGENT_TURN_FIELDS
 _HOST_OWNED_TURN_FIELDS = frozenset(
     {
         "agent_id",

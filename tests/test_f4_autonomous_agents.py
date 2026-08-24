@@ -93,7 +93,6 @@ def _router_payload() -> dict:
 
 
 def _progress_delta(index: int, role: str) -> dict:
-    prefix = "p" if role == "PrimarySolver" else "a"
     return {
         "public_summary": f"{role} added public step {index}.",
         "strategy": (
@@ -103,21 +102,18 @@ def _progress_delta(index: int, role: str) -> dict:
         ),
         "subgoals": [
             {
-                "subgoal_id": "g1",
                 "statement": "Derive the exact result independently.",
                 "depends_on": [],
                 "exit_condition": "A complete candidate can be synthesized.",
-                "status": "active",
             }
         ],
         "claims": [
             {
-                "claim_id": f"{prefix}-c{index}",
                 "statement": f"Public checkable step {index} for {role}.",
+                "claim_kind": "reasoning",
                 "depends_on": [],
-                "subgoal_ids": ["g1"],
+                "subgoal_refs": [0],
                 "importance": "supporting",
-                "check_type": "reasoning",
             }
         ],
         "open_obligations": [],
@@ -162,35 +158,40 @@ def _progress_envelope(
     )
 
 
-def _candidate_payload(method: str) -> dict:
+def _candidate_payload(method: str, profile: str) -> dict:
+    step = {
+        "statement": "$2+2=4$.",
+        "claim_kind": "equality",
+        "depends_on": [],
+    }
+    if profile == "proof_full":
+        return {
+            "final_answer": "4",
+            "method": method,
+            "proof_steps": [step, {**step, "statement": "Thus the claim holds.", "depends_on": [0]}],
+            "open_conditions": [],
+        }
+    if profile == "worked_solution":
+        return {
+            "final_answer": "4",
+            "method": method,
+            "steps": [step],
+            "uncertainties": [],
+        }
     return {
-        "method": method,
         "final_answer": "4",
-        "public_solution_steps": ["$2+2=4$"],
-        "claims": [
-            {
-                "claim_id": "c-final",
-                "statement": "$2+2=4$.",
-                "depends_on": [],
-                "check_type": "reasoning",
-                "importance": "critical",
-            }
-        ],
-        "solution_text": "$2+2=4$.",
-        "assumptions": [],
-        "theorems": [],
-        "unresolved_obligations": [],
+        "check": {"statement": "$2+2=4$.", "claim_kind": "equality"},
     }
 
 
-def _candidate_envelope(method: str) -> str:
+def _candidate_envelope(method: str, profile: str) -> str:
     return json.dumps(
         {
             "protocol_version": "1.0",
             "task_result_type": "CandidateArtifact",
             "action": "publish_candidate",
             "public_state_delta": {},
-            "result_payload": _candidate_payload(method),
+            "result_payload": _candidate_payload(method, profile),
             "outbound_intents": [],
             "progress_summary": "Published a complete candidate.",
             "stop_reason": "candidate_complete",
@@ -343,7 +344,9 @@ class AutonomousClient:
         ):
             self._proof_rejections.add(role)
             raise RuntimeError("provider rejects 40960 output tokens")
-        response = _candidate_envelope(method)
+        profile_match = re.search(r"Candidate response mode is ([a-z_]+)", system)
+        profile = profile_match.group(1) if profile_match else "answer_only"
+        response = _candidate_envelope(method, profile)
         if (
             self.truncate_primary_candidate
             and role == "PrimarySolver"
@@ -537,8 +540,8 @@ def test_length_candidate_with_complete_payload_is_salvaged_without_recall():
         item["turn_kind"] == "solver_compact_synthesis" for item in records
     )
     assert any(
-            item["protocol_parse_tier"] == "semantic_answer_salvage"
-            and item["finish_reason"] == "length"
+        item["protocol_parse_tier"] in {"strict_json", "truncated_prefix"}
+        and item["finish_reason"] == "length"
         for item in records
         if item["turn_kind"] == "solver_candidate_standard"
     )

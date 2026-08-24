@@ -275,13 +275,17 @@ def assess_prompt_contract_responses(
     final_answers = 0
     method_matches = 0
     private_fields = 0
+    problem_parser = ProblemParser()
     for case in PROMPT_CONTRACT_PROBE_CASES:
         response = str(responses[case.case_id])
+        problem = problem_parser.parse(case.problem)
         candidate = solution_parser.parse(
             response,
             candidate_id=f"probe-{case.case_id}",
             role=case.role,
             answer_type=case.answer_type,
+            planned_method_family=case.method_family,
+            response_mode=problem.response_mode,
         )
         own_host_deviations = [
             item

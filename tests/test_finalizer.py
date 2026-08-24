@@ -30,30 +30,8 @@ class FinalizerClient:
         del messages, temperature, max_tokens
         return json.dumps(
             {
-                "method": "direct",
-                "method_steps": [
-                    {
-                        "step_id": "s1",
-                        "kind": "conclusion",
-                        "claim_ids": ["c1"],
-                        "theorem": "",
-                    }
-                ],
                 "solution_text": self.solution_text,
-                "public_solution_steps": [self.solution_text],
                 "final_answer": self.answer,
-                "assumptions": [],
-                "theorems": [],
-                "claims": [
-                    {
-                        "claim_id": "c1",
-                        "statement": "The verified result is 42.",
-                        "depends_on": [],
-                        "check_type": "reasoning",
-                        "importance": "critical",
-                    }
-                ],
-                "unresolved_obligations": [],
                 **self.extra,
             }
         )

@@ -352,6 +352,7 @@ class SolverExecutor:
                     role=solver.role,
                     answer_type=request.problem.answer_type,
                     planned_method_family=request.method_family,
+                    response_mode=request.problem.response_mode,
                 )
             except SchemaValidationError:
                 validation_code = "candidate_schema_invalid"
@@ -445,6 +446,7 @@ class SolverExecutor:
             role=solver.role,
             answer_type=request.problem.answer_type,
             planned_method_family=request.method_family,
+            response_mode=request.problem.response_mode,
         )
         validation_code, rejected = candidate_response_validation(candidate)
         budget.record_model_protocol_telemetry(
@@ -666,29 +668,6 @@ class SolverExecutor:
             agent_action_protocol=True,
             input_artifact_ids=input_artifact_ids,
         )
-        if _response_was_truncated(response):
-            salvaged = self._parser.recover_answer_candidate(
-                response,
-                candidate_id=request.candidate_id,
-                role=solver.role,
-                answer_type=request.problem.answer_type,
-                planned_method_family=request.method_family,
-            )
-            if salvaged is not None:
-                return self._recovered_autonomous_candidate(
-                    response,
-                    salvaged,
-                    budget,
-                    recovery_reason="answer_salvaged_from_truncated_response",
-                )
-            self._fail_agent_turn(response, budget, "response_truncated_retry")
-            response = self._retry_truncated_answer(
-                solver,
-                request,
-                budget,
-                stage=stage,
-                input_artifact_ids=input_artifact_ids,
-            )
         try:
             parsed = self._parse_agent_turn(
                 response,
@@ -705,13 +684,40 @@ class SolverExecutor:
                 answer_type=request.problem.answer_type,
                 planned_method_family=request.method_family,
             )
+            if candidate is not None:
+                return self._recovered_autonomous_candidate(
+                    response,
+                    candidate,
+                    budget,
+                    recovery_reason=(
+                        "answer_salvaged_from_truncated_response"
+                        if _response_was_truncated(response)
+                        else "complete_answer_from_damaged_agent_turn"
+                    ),
+                )
+            if not _response_was_truncated(response):
+                raise
+            response = self._retry_truncated_answer(
+                solver,
+                request,
+                budget,
+                stage=stage,
+                input_artifact_ids=input_artifact_ids,
+            )
+            candidate = self._parser.recover_answer_candidate(
+                response,
+                candidate_id=request.candidate_id,
+                role=solver.role,
+                answer_type=request.problem.answer_type,
+                planned_method_family=request.method_family,
+            )
             if candidate is None:
                 raise
             return self._recovered_autonomous_candidate(
                 response,
                 candidate,
                 budget,
-                recovery_reason="complete_answer_from_damaged_agent_turn",
+                recovery_reason="answer_recovered_by_compact_retry",
             )
         if parsed.payload.action == "abstain":
             if parsed.payload.task_result_type != "CheckpointArtifact":
@@ -729,6 +735,7 @@ class SolverExecutor:
                 role=solver.role,
                 answer_type=request.problem.answer_type,
                 planned_method_family=request.method_family,
+                response_mode=request.problem.response_mode,
             )
         except SchemaValidationError as error:
             self._fail_agent_turn(response, budget, "candidate_schema_invalid")
@@ -792,8 +799,8 @@ class SolverExecutor:
             {
                 "role": "system",
                 "content": (
-                    "Solve the supplied problem. Output only the final answer as "
-                    "\\boxed{answer}; do not include explanations or JSON."
+                    "Solve the supplied problem. Output only the exact final "
+                    "answer without labels, delimiters, explanations, or JSON."
                 ),
             },
             {

@@ -7,6 +7,7 @@ import pytest
 from mathforge.agents.router_planner import RouterRuleEngine
 from mathforge.agents.solver import PrimarySolver, SolverRequest
 from mathforge.harness.model_candidate_contract import (
+    ANSWER_ONLY_CANDIDATE_FIELDS,
     MODEL_CANDIDATE_COMPATIBILITY_FIELDS,
     MODEL_CANDIDATE_PAYLOAD_VERSION,
     MODEL_CANDIDATE_REQUIRED_FIELDS,
@@ -40,7 +41,7 @@ def _compiled_prompt(problem_text: str) -> tuple[str, str]:
         (
             "Compute 2+2.",
             "answer_only",
-            "shortest independently checkable public justification",
+            "shortest independently checkable public semantic check",
         ),
         (
             "Show all steps to derive the value of 2+2.",
@@ -50,7 +51,7 @@ def _compiled_prompt(problem_text: str) -> tuple[str, str]:
         (
             "Prove that the square of every real number is nonnegative.",
             "proof_full",
-            "solution_text must contain the complete public proof",
+            "proof_steps must contain the complete public proof",
         ),
     ],
 )
@@ -68,40 +69,32 @@ def test_solver_prompt_explicitly_aligns_public_exposition_to_response_mode(
     assert "standard LaTeX" in system
     assert "JSON-escaped" in system
     assert "hidden chain-of-thought" not in system
-    assert system.rstrip().endswith(
-        "Encode the exact final answer as \\boxed{...}."
-    )
+    assert system.count("Exact JSON schema example:") == 1
+    assert "\\boxed" not in system
 
 
 def test_model_candidate_payload_has_one_shared_executable_boundary():
     shape = json.loads(MODEL_CANDIDATE_STRUCTURAL_SHAPE)
 
-    assert MODEL_CANDIDATE_PAYLOAD_VERSION == "2.2"
-    assert set(shape) == MODEL_CANDIDATE_REQUIRED_FIELDS
-    assert MODEL_CANDIDATE_COMPATIBILITY_FIELDS == {"method_steps"}
+    assert MODEL_CANDIDATE_PAYLOAD_VERSION == "3.0"
+    assert set(shape) == ANSWER_ONLY_CANDIDATE_FIELDS
+    assert MODEL_CANDIDATE_COMPATIBILITY_FIELDS == frozenset()
 
     candidate = SolutionParser().parse(
         json.dumps(
             {
-                **shape,
-                "method": "direct-deduction",
                 "final_answer": "4",
-                "public_solution_steps": ["Compute $2+2=4$."],
-                "solution_text": "Compute $2+2=4$.",
-                "claims": [
-                    {
-                        "claim_id": "c1",
-                        "statement": "$2+2=4$.",
-                        "depends_on": [],
-                        "check_type": "reasoning",
-                        "importance": "critical",
-                    }
-                ],
+                "check": {
+                    "statement": "Compute $2+2=4$.",
+                    "claim_kind": "equality",
+                },
             }
         ),
         candidate_id="shared-contract",
         role="PrimarySolver",
         answer_type="integer",
+        planned_method_family="direct-deduction",
+        response_mode="answer_only",
     )
 
     assert candidate.parse_status == "strict_json"

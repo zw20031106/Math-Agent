@@ -493,7 +493,7 @@ def test_runtime_does_not_start_repair_without_atomic_call_pair():
     assert planned["timing"] == "before_solver"
     assert planned["obligations"]
     assert gate["actionable_claims"] == {
-        "primary-1": ["conclusion"]
+        "primary-1": ["host-c1"]
     }
     assert gate["atomic_budget_pair_available"] is False
     assert "RepairAgent" not in client.roles

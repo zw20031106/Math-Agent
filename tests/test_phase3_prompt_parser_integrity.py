@@ -22,32 +22,41 @@ from mathforge.parsing.solution_parser import (
 from mathforge.tools.registry import ToolRegistry, run_tool_direct
 
 
-def _candidate_payload(method: str, *, solution_text: str = "A public derivation.") -> dict:
+def _candidate_payload(
+    method: str,
+    *,
+    profile: str = "answer_only",
+    solution_text: str = "A public derivation.",
+) -> dict:
+    step = {
+        "statement": solution_text,
+        "claim_kind": "reasoning",
+        "depends_on": [],
+    }
+    if profile == "proof_full":
+        return {
+            "final_answer": "2",
+            "method": method,
+            "proof_steps": [
+                step,
+                {
+                    **step,
+                    "statement": "Therefore the conclusion follows.",
+                    "depends_on": [0],
+                },
+            ],
+            "open_conditions": [],
+        }
+    if profile == "worked_solution":
+        return {
+            "final_answer": "2",
+            "method": method,
+            "steps": [step],
+            "uncertainties": [],
+        }
     return {
-        "method": method,
         "final_answer": "2",
-        "public_solution_steps": ["Derive the result from the stated conditions."],
-        "claims": [
-            {
-                "claim_id": "c1",
-                "statement": "The requested result equals 2.",
-                "depends_on": [],
-                "check_type": "reasoning",
-                "importance": "critical",
-            }
-        ],
-        "method_steps": [
-            {
-                "step_id": "s1",
-                "kind": "conclusion",
-                "claim_ids": ["c1"],
-                "theorem": "",
-            }
-        ],
-        "solution_text": solution_text,
-        "assumptions": [],
-        "theorems": [],
-        "unresolved_obligations": [],
+        "check": {"statement": solution_text, "claim_kind": "reasoning"},
     }
 
 
@@ -68,7 +77,11 @@ class _CompilerAwareClient:
             messages[-1]["content"],
         )
         assert match is not None
-        return json.dumps(_candidate_payload(match.group(1)))
+        profile_match = re.search(
+            r"Candidate response mode is ([a-z_]+)", messages[0]["content"]
+        )
+        profile = profile_match.group(1) if profile_match else "answer_only"
+        return json.dumps(_candidate_payload(match.group(1), profile=profile))
 
 
 class _BrokenTokenizer:
@@ -195,10 +208,10 @@ def test_compiler_uses_minimal_candidate_schema_and_caps_non_solver_roles():
     )
     system = compilation.messages[0]["content"]
 
-    assert set(compilation.output_schema_fields) == {"final_answer", "solution_text"}
-    assert '"final_answer":"\\\\boxed{<answer>}"' in system
-    assert "Only those two fields are required" in system
-    assert "solution_text" in system
+    assert set(compilation.output_schema_fields) == {"final_answer", "check"}
+    assert '"final_answer":"<exact answer>"' in system
+    assert "Candidate response mode is answer_only" in system
+    assert '"check"' in system
     assert "unresolved_obligations" not in system
 
     compiler = PromptCompiler()
@@ -241,6 +254,8 @@ def test_parser_distinguishes_all_response_integrity_classes():
             candidate_id=expected_integrity,
             role="PrimarySolver",
             answer_type="expression",
+            planned_method_family="direct-deduction",
+            response_mode="answer_only",
         )
         assert candidate_response_integrity(candidate) == expected_integrity
         assert candidate_response_validation(candidate) == expected_validation[
@@ -260,6 +275,8 @@ def test_solution_json_wrapper_is_rejected_before_final_response_formatting():
         candidate_id="wrapped",
         role="PrimarySolver",
         answer_type="expression",
+        planned_method_family="direct-deduction",
+        response_mode="answer_only",
     )
 
     assert "solution_text:json_wrapper" in wrapped.contract_deviations
@@ -273,6 +290,8 @@ def test_solution_json_wrapper_is_rejected_before_final_response_formatting():
         candidate_id="clean",
         role="PrimarySolver",
         answer_type="expression",
+        planned_method_family="direct-deduction",
+        response_mode="answer_only",
     )
     final_response = DeterministicFormatter().format(
         clean,

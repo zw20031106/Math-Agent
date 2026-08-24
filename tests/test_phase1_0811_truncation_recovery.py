@@ -115,7 +115,7 @@ def test_truncated_autonomous_turn_uses_answer_only_retry() -> None:
     assert turn.candidate.final_answer == "4"
     assert turn.candidate.degraded is True
     assert client.calls[1]["max_tokens"] == 2048
-    assert "Output only the final answer" in client.calls[1]["messages"][0]["content"]
+    assert "Output only the exact final answer" in client.calls[1]["messages"][0]["content"]
     assert budget.to_dict()["retry_count"] == 1
     assert budget.to_dict()["retry_reasons"] == {"truncated_answer_only": 1}
 

@@ -311,8 +311,8 @@ def test_solution_parser_accepts_only_structured_method_steps_with_real_claims()
         answer_type="expression",
     )
 
-    assert candidate.method_steps[0].claim_ids == ["base"]
-    assert "method_steps[0].claim_ids:unknown" in candidate.contract_deviations
+    assert candidate.method_steps[0].claim_ids == ["host-c1"]
+    assert "method_steps:host_owned" in candidate.contract_deviations
 
 
 def test_route_rejects_uncontrolled_method_family():
@@ -397,7 +397,64 @@ class _LemmaIsolationClient:
         system = messages[0]["content"]
         user = messages[-1]["content"]
         if system.startswith("You are VerifierSkeptic"):
-            batch = json.loads(user.split("Batch:\n", 1)[1])
+            if "Batch:\n" in user:
+                batch = json.loads(user.split("Batch:\n", 1)[1])
+                self.verifier_candidate_ids = [
+                    candidate["candidate_id"] for candidate in batch["candidates"]
+                ]
+                findings = []
+                for candidate in batch["candidates"]:
+                    if (
+                        candidate["candidate_id"].startswith("lemma-round")
+                        and not self.review_expanded
+                    ):
+                        continue
+                    for obligation in candidate["obligations"]:
+                        findings.append(
+                            {
+                                "candidate_id": candidate["candidate_id"],
+                                "claim_id": obligation["source_claim_ids"][0],
+                                "obligation_ids": [obligation["obligation_id"]],
+                                "review_target_ids": [],
+                                "status": "pass",
+                                "description": "reviewed",
+                            }
+                        )
+                return json.dumps({"findings": findings})
+            batch = json.loads(user)
+            if "Public protocol mode is final_audit" in system:
+                candidate = batch["final_active_candidate"]
+                requirements = batch.get("audit_requirements", {})
+                return json.dumps(
+                    {
+                        "protocol_version": "1.0",
+                        "task_result_type": "AuditArtifact",
+                        "action": "complete",
+                        "public_state_delta": {},
+                        "result_payload": {
+                            "candidate_id": candidate["candidate_id"],
+                            "candidate_version": candidate["version"],
+                            "status": "complete_audited",
+                            "open_finding_ids": [],
+                            "open_obligation_ids": [],
+                            "reviewed_artifact_ids": list(
+                                requirements.get("required_artifact_ids", [])
+                            ),
+                            "reviewed_finding_ids": list(
+                                requirements.get("required_finding_ids", [])
+                            ),
+                            "reviewed_obligation_ids": list(
+                                requirements.get("required_obligation_ids", [])
+                            ),
+                            "requested_action": "retain",
+                            "public_rationale": "The public candidate was audited.",
+                            "stop_reason": "audit_complete",
+                        },
+                        "outbound_intents": [],
+                        "progress_summary": "Final audit completed.",
+                        "stop_reason": "audit_complete",
+                    }
+                )
             self.verifier_candidate_ids = [
                 candidate["candidate_id"] for candidate in batch["candidates"]
             ]
@@ -408,17 +465,42 @@ class _LemmaIsolationClient:
                     and not self.review_expanded
                 ):
                     continue
-                for obligation in candidate["obligations"]:
-                    findings.append(
-                        {
-                            "candidate_id": candidate["candidate_id"],
-                            "claim_id": obligation["kind"],
-                            "obligation_ids": [obligation["obligation_id"]],
-                            "status": "pass",
-                            "description": "reviewed",
-                        }
-                    )
-            return json.dumps({"findings": findings})
+                findings.append(
+                    {
+                        "finding_id": f"finding-{candidate['candidate_id']}",
+                        "candidate_id": candidate["candidate_id"],
+                        "claim_id": candidate["claims"][-1]["claim_id"],
+                        "obligation_ids": [
+                            item["obligation_id"]
+                            for item in candidate.get("obligations", [])
+                        ],
+                        "peer_finding_ids": [],
+                        "status": "pass",
+                        "scope": "global",
+                        "actionability": "retain",
+                        "public_rationale": "The complete candidate was reviewed.",
+                        "missing_condition": "",
+                        "counterexample_summary": "",
+                    }
+                )
+            return json.dumps(
+                {
+                    "protocol_version": "1.0",
+                    "task_result_type": "CritiqueArtifact",
+                    "action": "challenge_candidate",
+                    "public_state_delta": {},
+                    "result_payload": {
+                        "findings": findings,
+                        "peer_review_assessments": [],
+                        "uncovered_goal_ids": [],
+                        "recommended_action": "retain",
+                        "stop_reason": "cross_exam_complete",
+                    },
+                    "outbound_intents": [],
+                    "progress_summary": "Candidates were batch reviewed.",
+                    "stop_reason": "cross_exam_complete",
+                }
+            )
 
         self.solver_calls += 1
         family = re.search(r"Required core method family: ([^.\n]+)", user)
@@ -430,31 +512,15 @@ class _LemmaIsolationClient:
         )
         return json.dumps(
             {
+                "final_answer": (
+                    historical_marker if self.solver_calls == 1 else "QED"
+                ),
                 "method": method,
-                "method_steps": [
+                "proof_steps": [
                     {
-                        "step_id": "s1",
-                        "kind": "conclusion",
-                        "claim_ids": ["boundary"],
-                        "theorem": "",
-                    }
-                ],
-                "solution_text": historical_marker,
-                "public_solution_steps": [historical_marker],
-                "final_answer": "QED",
-                "assumptions": [],
-                "theorems": [],
-                "claims": [
-                    {
-                        "claim_id": f"identity{index}",
                         "statement": statement,
-                        "check_type": "symbolic_equivalence",
-                        "depends_on": (
-                            [f"identity{index - 1}"]
-                            if index > 1
-                            else []
-                        ),
-                        "importance": "supporting",
+                        "claim_kind": "equality",
+                        "depends_on": ([index - 2] if index > 1 else []),
                     }
                     for index, statement in enumerate(
                         ("x = x", "x+0 = x", "2*x = 2*x", "x*1 = x"),
@@ -463,28 +529,22 @@ class _LemmaIsolationClient:
                 ]
                 + [
                     {
-                        "claim_id": "definition",
                         "statement": "definition is supplied",
-                        "depends_on": [],
-                        "check_type": "definition",
-                        "importance": "critical",
+                        "claim_kind": "definition",
+                        "depends_on": [3],
                     },
                     {
-                        "claim_id": "sufficiency",
                         "statement": "sufficiency is supplied",
-                        "depends_on": [],
-                        "check_type": "sufficiency",
-                        "importance": "critical",
+                        "claim_kind": "sufficiency",
+                        "depends_on": [4],
                     },
                     {
-                        "claim_id": "boundary",
                         "statement": "boundary is supplied",
-                        "depends_on": [],
-                        "check_type": "boundary",
-                        "importance": "critical",
+                        "claim_kind": "boundary",
+                        "depends_on": [5],
                     },
                 ],
-                "unresolved_obligations": [],
+                "open_conditions": [],
             }
         )
 
@@ -494,7 +554,7 @@ def _lemma_config():
 
     return replace(
         HarnessConfig(),
-        max_model_calls=3,
+        max_model_calls=4,
         model_max_concurrency=1,
         enable_router=False,
         enable_skills=False,

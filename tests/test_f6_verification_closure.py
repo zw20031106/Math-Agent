@@ -297,7 +297,7 @@ class _LocalRepairClient(FakeClient):
                 {
                     "replacement_claims": [
                         {
-                            "claim_id": "c1",
+                            "claim_id": "host-c1",
                             "statement": "The requested local equality follows directly.",
                             "depends_on": [],
                             "check_type": "reasoning",
@@ -336,7 +336,7 @@ def test_local_repair_is_model_authored_critique_linked_and_reverified():
     assert len(repair_calls) == 1
     assert repair["critique_id"]
     assert repair["critique_artifact_id"]
-    assert repair["affected_claim_ids"] == ["c1"]
+    assert repair["affected_claim_ids"] == ["host-c1", "host-c2"]
     assert repair["reverified_claim_ids"]
     assert repair_artifact["artifact_type"] == "RepairPatchArtifact"
     assert repair_artifact["producer_agent_id"] == repair_calls[0]["agent_id"]

@@ -75,7 +75,7 @@ def test_host_owns_claim_verification_fields_and_records_unknown_fields():
     assert {
         "claims[0].status:host_owned",
         "claims[0].verification_state:host_owned",
-        "claims[0].claim_kind:host_owned",
+        "claims[0].claim_kind:value",
         "claims[0].unexpected:ignored",
     } <= set(candidate.contract_deviations)
 
@@ -109,13 +109,6 @@ def test_string_list_fields_are_not_split_into_characters():
     [
         (
             [
-                {"claim_id": "same", "statement": "a"},
-                {"claim_id": "same", "statement": "b"},
-            ],
-            "duplicate claim id",
-        ),
-        (
-            [
                 {
                     "claim_id": "step",
                     "statement": "a",
@@ -142,6 +135,24 @@ def test_invalid_claim_graphs_are_rejected(claims, message):
                 "claims": claims,
             }
         )
+
+
+def test_host_reassigns_duplicate_model_claim_ids() -> None:
+    candidate = _parse(
+        {
+            "solution_text": "work",
+            "final_answer": "2",
+            "claims": [
+                {"claim_id": "same", "statement": "a"},
+                {"claim_id": "same", "statement": "b"},
+            ],
+        }
+    )
+
+    assert [claim.claim_id for claim in candidate.claims] == [
+        "host-c1",
+        "host-c2",
+    ]
 
 
 def test_candidate_schema_round_trips_with_explicit_version():

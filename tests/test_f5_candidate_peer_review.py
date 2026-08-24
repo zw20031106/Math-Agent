@@ -77,7 +77,7 @@ def test_bidirectional_solver_reviews_and_rebuttals_have_real_lineage():
     }
     assert all(item["independent_model_call"] for item in reviews)
     assert all(item["host_generated"] is False for item in reviews)
-    assert all(item["claim_ids"] == ["c1"] for item in reviews)
+    assert all(item["claim_ids"] == ["host-c1"] for item in reviews)
 
     task_types = [item["task_type"] for item in protocol["tasks"]]
     assert task_types.count("peer_review_candidate") == 2
@@ -115,7 +115,7 @@ def test_peer_review_artifacts_cite_claims_and_rebuttals_cite_findings():
     }
     assert finding_ids
     assert all(
-        finding["claim_id"] == "c1"
+        finding["claim_id"] == "host-c1"
         for review in reviews
         for finding in review["payload"]["result_payload"]["finding_items"]
     )

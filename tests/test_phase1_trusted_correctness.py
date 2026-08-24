@@ -443,9 +443,9 @@ class _PostVerifierRepairClient:
     @staticmethod
     def _verifier(candidate_id: str, *, repaired: bool) -> str:
         statuses = {
-            "definition": "pass",
-            "sufficiency": "pass" if repaired else "fail",
-            "boundary": "pass",
+            "host-c1": ("definition", "pass"),
+            "host-c2": ("sufficiency", "pass" if repaired else "fail"),
+            "host-c3": ("boundary", "pass"),
         }
         return json.dumps(
             {
@@ -454,10 +454,10 @@ class _PostVerifierRepairClient:
                         "candidate_id": candidate_id,
                         "claim_id": claim_id,
                         "obligation_ids": [
-                            f"{candidate_id}:{claim_id}",
+                            f"{candidate_id}:{kind}",
                         ],
                         "status": status,
-                        "public_rationale": f"{claim_id}:{status}",
+                        "public_rationale": f"{kind}:{status}",
                         "missing_condition": (
                             "justify the conclusion"
                             if status == "fail"
@@ -465,7 +465,7 @@ class _PostVerifierRepairClient:
                         ),
                         "counterexample_summary": "",
                     }
-                    for claim_id, status in statuses.items()
+                    for claim_id, (kind, status) in statuses.items()
                 ]
             }
         )
@@ -482,7 +482,24 @@ class _PostVerifierRepairClient:
             )
         elif system.startswith("You are RepairAgent"):
             role = "RepairAgent"
-            response = self._candidate(repaired=True)
+            response = json.dumps(
+                {
+                    "replacement_claims": [
+                        {
+                            "claim_id": "host-c2",
+                            "statement": "Therefore x equals x.",
+                            "depends_on": ["host-c1"],
+                            "check_type": "sufficiency",
+                            "importance": "critical",
+                        }
+                    ],
+                    "final_answer": "QED",
+                    "public_solution_steps": [
+                        "Equality is reflexive, so x=x."
+                    ],
+                    "unresolved_obligations": [],
+                }
+            )
         else:
             role = "PrimarySolver"
             response = self._candidate(repaired=False)

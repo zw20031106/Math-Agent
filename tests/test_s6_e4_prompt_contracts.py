@@ -68,12 +68,12 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
     )
     expected_versions = {
         "router_planner": "5",
-        "primary_solver": "11",
-        "alternative_solver": "9",
+        "primary_solver": "12",
+        "alternative_solver": "11",
         "lemma_curator": "5",
         "repair": "7",
-        "verifier_skeptic": "7",
-        "finalizer": "5",
+        "verifier_skeptic": "8",
+        "finalizer": "6",
     }
     for role in roles:
         contract = loader.load(role)
@@ -86,7 +86,8 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
         assert "The compiler supplies exactly one" in body
         assert "Host owns" in body
         assert "hidden chain-of-thought" not in body
-        assert "The final answer must" in body
+        assert "optional exposition" not in body
+        assert "\\boxed" not in body
         assert "solution_text" not in body
         assert "public_solution_steps" not in body
 
@@ -112,10 +113,10 @@ def test_solver_runtime_prompt_uses_method_as_a_diversity_signal():
     assert "Required core method family: direct-deduction." in rendered
     assert "diversity signal" in rendered
     assert "when possible" not in rendered.lower()
-    assert "Only those two fields are required" in rendered
-    assert "Encode the exact final answer as \\boxed{...}." in rendered
+    assert rendered.count("Exact JSON schema example:") == 1
+    assert "Candidate response mode is answer_only" in rendered
     assert "final_answer" in rendered
-    assert "solution_text" in rendered
+    assert '"check"' in rendered
 
 
 def test_solution_parser_classifies_json_failure_and_contract_incompleteness():
@@ -174,8 +175,8 @@ def test_solution_parser_normalizes_only_approved_unambiguous_aliases():
     )
 
     assert candidate.parse_status == "strict_json"
-    assert candidate.claims[0].claim_id == "c1"
-    assert candidate.method_steps[0].claim_ids == ["c1"]
+    assert candidate.claims[0].claim_id == "host-c1"
+    assert candidate.method_steps[0].claim_ids == ["host-c1"]
     assert {
         "structured_method_steps:alias_normalized:method_steps",
         "public_steps:alias_normalized:public_solution_steps",
@@ -212,7 +213,43 @@ class _ProbeClient:
             messages[-1]["content"],
         )
         assert match is not None
-        return json.dumps(_complete_payload(match.group(1)), ensure_ascii=False)
+        method = match.group(1)
+        system = messages[0]["content"]
+        step = {
+            "statement": "Establish the requested result from the conditions.",
+            "claim_kind": "reasoning",
+            "depends_on": [],
+        }
+        if "Candidate response mode is proof_full" in system:
+            payload = {
+                "final_answer": "1",
+                "method": method,
+                "proof_steps": [
+                    step,
+                    {
+                        **step,
+                        "statement": "Therefore the stated conclusion follows.",
+                        "depends_on": [0],
+                    },
+                ],
+                "open_conditions": [],
+            }
+        elif "Candidate response mode is worked_solution" in system:
+            payload = {
+                "final_answer": "1",
+                "method": method,
+                "steps": [step],
+                "uncertainties": [],
+            }
+        else:
+            payload = {
+                "final_answer": "1",
+                "check": {
+                    "statement": step["statement"],
+                    "claim_kind": "reasoning",
+                },
+            }
+        return json.dumps(payload, ensure_ascii=False)
 
 
 def test_fixed_20_case_live_probe_runner_meets_all_contract_thresholds():

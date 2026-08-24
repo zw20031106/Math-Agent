@@ -40,11 +40,9 @@ class _TwoCandidateClient(FakeClient):
         )
         if messages[0]["content"].startswith("You are AlternativeSolver"):
             payload["final_answer"] = "3"
-            payload["solution_text"] = "ALTERNATIVE_PUBLIC_STEP gives $3$."
-            payload["public_solution_steps"] = [
-                "ALTERNATIVE_PUBLIC_STEP gives $3$."
-            ]
-            payload["claims"][0]["statement"] = "The alternative result is $3$."
+            steps = payload.get("proof_steps", payload.get("steps", []))
+            for step in steps:
+                step["statement"] = "ALTERNATIVE_PUBLIC_STEP gives $3$."
         return json.dumps(payload, ensure_ascii=False)
 
 
