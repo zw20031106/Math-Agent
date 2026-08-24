@@ -22,6 +22,8 @@ _ROLE_ACTIONS = {
     "RepairAgent": frozenset({"continue_reasoning", "request_tool_check", "send_message", "complete", "abstain"}),
     "LLMFinalizer": frozenset({"send_message", "complete", "abstain"}),
 }
+_BUSINESS_MESSAGE_TYPES = frozenset({"progress_shared"})
+_BUSINESS_RECIPIENT_ROLES = frozenset(_ROLE_ACTIONS)
 
 
 class ActionRegistry:
@@ -38,6 +40,27 @@ class ActionRegistry:
     def resolve(self, context: TurnContext, payload: AgentTurnPayload) -> ActionHandler:
         if payload.action not in self.actions_for(context.role):
             raise ValueError("Agent Action is not authorized for this role")
+        if payload.action == "send_message":
+            if len(payload.outbound_intents) != 1:
+                raise ValueError("send_message requires one business intent")
+            intent = payload.outbound_intents[0]
+            if set(intent) != {"recipient_role", "message_type"}:
+                raise ValueError("send_message business intent fields are invalid")
+            recipient_role = str(intent["recipient_role"])
+            message_type = str(intent["message_type"])
+            if (
+                recipient_role not in _BUSINESS_RECIPIENT_ROLES
+                or message_type not in _BUSINESS_MESSAGE_TYPES
+            ):
+                raise ValueError("send_message business intent is not supported")
+            if payload.task_result_type != "ProgressArtifact":
+                raise ValueError("Agent Action task_result_type is inconsistent")
+            return ActionHandler(
+                payload.action,
+                "ProgressArtifact",
+                message_type,
+                recipient_role,
+            )
         routes = {
             "continue_reasoning": ("ProgressArtifact", "progress_shared", "RouterPlanner"),
             "request_lemma": ("ProgressArtifact", "lemma_requested", "LemmaCurator"),
@@ -51,7 +74,6 @@ class ActionRegistry:
                 context.recipient_role,
             ),
             "publish_rebuttal": ("RebuttalArtifact", "rebuttal_published", context.recipient_role),
-            "send_message": ("ProgressArtifact", "progress_shared", context.recipient_role),
             "request_peer_review": ("ProgressArtifact", "peer_review_requested", "VerifierSkeptic"),
             "abstain": ("CheckpointArtifact", "task_abstained", "RouterPlanner"),
             "complete": (context.artifact_type, context.message_type, context.recipient_role),

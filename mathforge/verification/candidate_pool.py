@@ -288,10 +288,16 @@ class CandidatePool:
                 and structural_same < 3
             )
             shared_context_hash = str(provenance.get("shared_context_hash", ""))
-            context_independence = not (
-                shared_context_hash
-                and shared_context_hash == other.shared_context_hash
-            )
+            branch_context_hash = str(provenance.get("branch_context_hash", ""))
+            if branch_context_hash and other.branch_context_hash:
+                context_independence = (
+                    branch_context_hash != other.branch_context_hash
+                )
+            else:
+                context_independence = not (
+                    shared_context_hash
+                    and shared_context_hash == other.shared_context_hash
+                )
             evidence_refs = {
                 str(item) for item in provenance.get("tool_evidence_refs", ())
             }

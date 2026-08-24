@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from hashlib import sha256
 import json
 
@@ -179,16 +179,6 @@ def build_effective_execution_plan(
         ordinal = role_ordinals.get(proposal.agent_role, 0) + 1
         role_ordinals[proposal.agent_role] = ordinal
         branch_id = f"{proposal.agent_role.casefold()}-{ordinal}"
-        context_payload = {
-            "plan_id": plan.plan_id,
-            "plan_version": plan.version,
-            "branch_id": branch_id,
-            "subgoal_ids": proposal.subgoal_ids,
-            "method_family": proposal.method_family,
-        }
-        branch_hash = sha256(
-            json.dumps(context_payload, sort_keys=True).encode("utf-8")
-        ).hexdigest()
         branches.append(
             EffectiveBranch(
                 branch_id,
@@ -198,7 +188,6 @@ def build_effective_execution_plan(
                 proposal.method_family,
                 plan.plan_id,
                 plan.version,
-                branch_context_hash=branch_hash,
             )
         )
     identity = sha256(
@@ -216,3 +205,39 @@ def build_effective_execution_plan(
         branches=tuple(branches),
         shared_lemma_policy="off_until_candidate_backbone",
     )
+
+
+def bind_execution_context_hashes(
+    effective: EffectiveExecutionPlan,
+    *,
+    shared_context: dict,
+    branch_contexts: dict[str, dict],
+) -> EffectiveExecutionPlan:
+    """Bind hashes to the exact public context payloads dispatched to branches."""
+
+    branch_ids = {item.branch_id for item in effective.branches}
+    if set(branch_contexts) != branch_ids:
+        raise ValueError("branch context payloads must cover the effective plan exactly")
+    shared_hash = _context_hash(shared_context)
+    return replace(
+        effective,
+        branches=tuple(
+            replace(
+                branch,
+                shared_context_hash=shared_hash,
+                branch_context_hash=_context_hash(branch_contexts[branch.branch_id]),
+            )
+            for branch in effective.branches
+        ),
+    )
+
+
+def _context_hash(payload: dict) -> str:
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return sha256(canonical.encode("utf-8")).hexdigest()

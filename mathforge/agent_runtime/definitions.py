@@ -54,80 +54,104 @@ class AgentRegistry:
     @classmethod
     def default(cls) -> "AgentRegistry":
         from mathforge.agent_runtime.action_registry import ActionRegistry
+        from mathforge.agent_runtime.permissions import permissions_for_role
+        from mathforge.agents.registry import PromptContractLoader
 
-        common_messages = tuple(sorted(MESSAGE_TYPES))
         actions = ActionRegistry()
-        common_read = tuple(sorted(ARTIFACT_TYPES))
+        contracts = PromptContractLoader()
+        delivery_only_messages = {
+            "PrimarySolver": {"audit_published", "rebuttal_published"},
+            "AlternativeSolver": {"audit_published", "rebuttal_published"},
+        }
+
+        def role_permissions(role: str) -> tuple[tuple[str, ...], ...]:
+            permissions = permissions_for_role(role)
+            return (
+                tuple(
+                    sorted(
+                        set().union(
+                            *(item.accepted_message_types for item in permissions)
+                        )
+                        | delivery_only_messages.get(role, set())
+                    )
+                ),
+                tuple(
+                    sorted(
+                        set().union(
+                            *(item.readable_artifact_types for item in permissions)
+                        )
+                    )
+                ),
+                tuple(
+                    sorted(
+                        set().union(
+                            *(item.writable_artifact_types for item in permissions)
+                        )
+                    )
+                ),
+            )
+
+        def build(
+            role: str,
+            modes: tuple[str, ...],
+            tasks: tuple[str, ...],
+            prompt_contract: str,
+        ) -> AgentDefinition:
+            messages, readable, writable = role_permissions(role)
+            return _definition(
+                role,
+                modes,
+                tasks,
+                messages,
+                readable,
+                writable,
+                tuple(sorted(actions.actions_for(role))),
+                prompt_contract,
+                contracts.load(prompt_contract).fields["version"],
+            )
+
         return cls(
             (
-                _definition(
+                build(
                     "RouterPlanner",
                     ("plan", "replan"),
                     ("route_and_plan", "replan"),
-                    common_messages,
-                    common_read,
-                    ("RouteArtifact", "PlanArtifact", "ProgressArtifact", "CheckpointArtifact"),
-                    tuple(sorted(actions.actions_for("RouterPlanner"))),
                     "router_planner",
                 ),
-                _definition(
+                build(
                     "PrimarySolver",
                     ("solve", "peer_review", "rebuttal"),
                     ("solve_primary", "continue_reasoning", "peer_review_candidate", "respond_to_peer_review", "solve_new_branch"),
-                    common_messages,
-                    common_read,
-                    ("ProgressArtifact", "CandidateArtifact", "ToolRequestArtifact", "PeerReviewArtifact", "RebuttalArtifact", "CheckpointArtifact"),
-                    tuple(sorted(actions.actions_for("PrimarySolver"))),
                     "primary_solver",
                 ),
-                _definition(
+                build(
                     "AlternativeSolver",
                     ("solve", "peer_review", "rebuttal"),
                     ("solve_alternative", "continue_reasoning", "peer_review_candidate", "respond_to_peer_review", "solve_new_branch"),
-                    common_messages,
-                    common_read,
-                    ("ProgressArtifact", "CandidateArtifact", "ToolRequestArtifact", "PeerReviewArtifact", "RebuttalArtifact", "CheckpointArtifact"),
-                    tuple(sorted(actions.actions_for("AlternativeSolver"))),
                     "alternative_solver",
                 ),
-                _definition(
+                build(
                     "LemmaCurator",
                     ("curate", "answer_request"),
                     ("curate_lemmas", "answer_lemma_request"),
-                    common_messages,
-                    common_read,
-                    ("LemmaArtifact", "ProgressArtifact", "CheckpointArtifact"),
-                    tuple(sorted(actions.actions_for("LemmaCurator"))),
                     "lemma_curator",
                 ),
-                _definition(
+                build(
                     "VerifierSkeptic",
                     ("cross_exam", "final_audit"),
                     ("cross_exam_candidates", "final_audit"),
-                    common_messages,
-                    common_read,
-                    ("PeerReviewArtifact", "CritiqueArtifact", "AuditArtifact", "ProgressArtifact", "CheckpointArtifact"),
-                    tuple(sorted(actions.actions_for("VerifierSkeptic"))),
                     "verifier_skeptic",
                 ),
-                _definition(
+                build(
                     "RepairAgent",
                     ("repair",),
                     ("repair_claims",),
-                    common_messages,
-                    common_read,
-                    ("RepairPatchArtifact", "RepairResultArtifact", "CandidateArtifact", "ProgressArtifact", "CheckpointArtifact"),
-                    tuple(sorted(actions.actions_for("RepairAgent"))),
                     "repair",
                 ),
-                _definition(
+                build(
                     "LLMFinalizer",
                     ("finalize",),
                     ("copy_finalize",),
-                    common_messages,
-                    common_read,
-                    ("DecisionArtifact", "CandidateArtifact", "ProgressArtifact", "CheckpointArtifact"),
-                    tuple(sorted(actions.actions_for("LLMFinalizer"))),
                     "finalizer",
                 ),
             )
@@ -152,16 +176,8 @@ def _definition(
     writable: tuple[str, ...],
     actions: tuple[str, ...],
     prompt_contract: str,
+    prompt_version: str,
 ) -> AgentDefinition:
-    prompt_versions = {
-        "RouterPlanner": "3",
-        "PrimarySolver": "9",
-        "AlternativeSolver": "7",
-        "LemmaCurator": "3",
-        "VerifierSkeptic": "5",
-        "RepairAgent": "5",
-        "LLMFinalizer": "3",
-    }
     return AgentDefinition(
         role=role,
         capabilities=("independent_model_turn", "artifact_publish", "message_send"),
@@ -172,7 +188,7 @@ def _definition(
         writable_artifact_types=writable,
         allowed_action_types=actions,
         prompt_contract=prompt_contract,
-        prompt_version=prompt_versions[role],
+        prompt_version=str(prompt_version),
         skill_roles=(role,),
         failure_policy="record_public_failure_and_return_control_to_host",
     )

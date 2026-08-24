@@ -71,10 +71,10 @@
         "mathforge/runtime.py"
       ],
       "expected_count": 8,
-        "version": "effective-agent-governance-3-0824-phase2",
-        "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
+      "version": "effective-agent-governance-4-0824-phase3",
+      "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "5cd86ae716ade39c63970711cac0b686cc32692fd126194555a629d639f29bcd"
+      "sha256": "f9d7f9104c83ce3adbb0c4f7875e660c0c119bda0c75825fa540442f0af97588"
     },
     {
       "id": "prompt-contracts",
@@ -219,10 +219,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 20,
-      "version": "verification-closure-18-0824-phase1",
-      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+      "version": "verification-closure-19-0824-phase3",
+      "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
         "review_date": "2026-08-24",
-      "sha256": "5e779752fe19fa67faa7d2d4f6affa3aff1e6703209885f4dffd55a1c66a6c8f"
+      "sha256": "233f26c3e360a9ae7f4ee5b7af06dff1b1860ef554222f03b63677da671c8c8a"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -250,10 +250,10 @@
         "mathforge/verification/verification_closure.py"
       ],
       "expected_count": 20,
-      "version": "phase-f6-agent-protocol-10-0824-phase2",
-      "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
+      "version": "phase-f6-agent-protocol-11-0824-phase3",
+      "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "9021776dab8802075fe55ba1f93770183ce245de06e7e9844bf16d6547df7cb7"
+      "sha256": "486ddb73186a0a02e3179f3d7ddd73219bf45f80bd4654a2008030b772d9d8f3"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -274,10 +274,10 @@
         "mathforge/output/loop_health.py"
       ],
       "expected_count": 13,
-      "version": "phase-f7-runtime-8-0824-phase1",
-      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+      "version": "phase-f7-runtime-9-0824-phase3",
+      "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "f896beee7b042c4db84bc9c4aa9b0409baef87c97ac83531a522096136d45959"
+      "sha256": "586a916d1fb894f6311196c318668651b329a8ba1f38ae485211064cd0bd4713"
     },
     {
       "id": "reviewed-method-cards",
@@ -346,10 +346,10 @@
         "scripts/run_case_outputs.py"
       ],
       "expected_count": 14,
-      "version": "provider-controls-5-p1",
-      "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
+      "version": "provider-controls-6-0824-phase3",
+      "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "6ad439dced2d1fa913365d6798e41ed288a59bd97692e7fc9f493dad8a50deff"
+      "sha256": "e76d8ed80d6771ed2d19144a01f0cbc0cc8835fc55849c01a33b037da4506d35"
     },
     {
       "id": "phase7-live-calibration",
@@ -397,10 +397,10 @@
         "mathforge/verification/verification_v2.py"
       ],
       "expected_count": 15,
-      "version": "review-repair-communication-audit-2.2-0824-phase2",
-      "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
+      "version": "review-repair-communication-audit-2.3-0824-phase3",
+      "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "464a4720aa95e2181cd191a489da8b2c9cf9f697ae16170bfbc8d75fbb9c6ba0"
+      "sha256": "7fce09e6801412124d18c75bb39ea3a3072876ba260db7737975edc084b4295b"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -418,10 +418,10 @@
         "tests/test_phase9_scheduler_runtime.py"
       ],
       "expected_count": 10,
-      "version": "scheduler-runtime-2.2-0824-phase2",
-      "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
+      "version": "scheduler-runtime-2.3-0824-phase3",
+      "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "982479951eb25541032986b70f4c25a1e8adb6f8ee94ab89c4d0a974b94fe5da"
+      "sha256": "a76414d66489cd6f1c44e6beab89c3a029d0a7f33013f1fbb869ac4c8389ef39"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -443,10 +443,10 @@
         "tests/test_s6_e7_case_lifecycle.py"
       ],
       "expected_count": 14,
-      "version": "production-preflight-release-governance-1.2-0824-phase2",
-      "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
+      "version": "production-preflight-release-governance-1.3-0824-phase3",
+      "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "e62e90a01e291ab055f695f95589e8fb7f03bfbaebdbf110ceb3f7898dd52005"
+      "sha256": "4cf8972dfb5574477d8dcf725bcebb2efd3930ae43265740e7e8cd8c5f8931d3"
     },
     {
       "id": "router-e5-gold",

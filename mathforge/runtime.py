@@ -1051,6 +1051,33 @@ class MathForgeHarness:
                     trace,
                     role="AlternativeSolver",
                 )
+            effective = session.agent_runtime.effective_execution_plan
+            session.agent_runtime.bind_execution_contexts(
+                shared_context={
+                    "problem_ir": session.problem_ir.to_dict(),
+                    "route_plan": session.route_plan.to_dict(),
+                    "effective_plan_id": effective.plan_id,
+                    "effective_plan_version": effective.version,
+                },
+                branch_contexts={
+                    branch.branch_id: {
+                        "agent_role": branch.agent_role,
+                        "task_type": branch.task_type,
+                        "subgoal_ids": list(branch.subgoal_ids),
+                        "method_family": branch.method_family,
+                        "role_context": (
+                            solver_contexts[branch.agent_role].to_prompt_json()
+                            if branch.agent_role in solver_contexts
+                            else ""
+                        ),
+                        "skill_context": role_skill_contexts.get(
+                            branch.agent_role,
+                            "",
+                        ),
+                    }
+                    for branch in effective.branches
+                },
+            )
             self._transition(
                 session,
                 trace,
@@ -3323,6 +3350,7 @@ class MathForgeHarness:
                 "messages": [],
                 "threads": [],
                 "turn_lineage": [],
+                "protocol_sequence": [],
             },
         )
         terminalizer.safe(
@@ -4032,6 +4060,7 @@ class MathForgeHarness:
                         session,
                         trace,
                         branch,
+                        branches=branches,
                     )
                 branch.mode = "continue"
             if not cycle_advanced and all(
@@ -4409,13 +4438,8 @@ class MathForgeHarness:
                     "plan_id": session.agent_runtime.effective_execution_plan.plan_id,
                     "plan_version": session.agent_runtime.effective_execution_plan.version,
                     "skill_set_hash": self._skills.fingerprint,
-                    "shared_context_hash": "",
-                    "branch_context_hash": semantic_fingerprint(
-                        {
-                            "candidate_id": candidate.candidate_id,
-                            "method": candidate.planned_method_family,
-                        }
-                    ),
+                    "shared_context_hash": lineage["shared_context_hash"],
+                    "branch_context_hash": lineage["branch_context_hash"],
                     "lemma_ids": (),
                     "tool_evidence_refs": (),
                 })
@@ -4877,6 +4901,8 @@ class MathForgeHarness:
         session,
         trace: TraceBuilder,
         branch: _AutonomousBranch,
+        *,
+        branches: list[_AutonomousBranch] | None = None,
     ) -> None:
         previous = session.agent_plan
         try:
@@ -4935,6 +4961,66 @@ class MathForgeHarness:
                 plan=session.agent_plan,
                 candidate_limit=session.route_plan.candidate_count,
             )
+            active_branches = list(branches or (branch,))
+            effective = session.agent_runtime.effective_execution_plan
+            by_role: dict[str, list[_AutonomousBranch]] = {}
+            for active_branch in active_branches:
+                by_role.setdefault(active_branch.role, []).append(active_branch)
+            session.agent_runtime.bind_execution_contexts(
+                shared_context={
+                    "problem_ir": session.problem_ir.to_dict(),
+                    "route_plan": session.route_plan.to_dict(),
+                    "effective_plan_id": effective.plan_id,
+                    "effective_plan_version": effective.version,
+                },
+                branch_contexts={
+                    spec.branch_id: {
+                        "agent_role": spec.agent_role,
+                        "task_type": spec.task_type,
+                        "subgoal_ids": list(spec.subgoal_ids),
+                        "method_family": spec.method_family,
+                        "role_context": (
+                            by_role[spec.agent_role][0].context_view.to_prompt_json()
+                            if spec.agent_role in by_role
+                            and by_role[spec.agent_role][0].context_view is not None
+                            else ""
+                        ),
+                        "skill_context": (
+                            by_role[spec.agent_role][0].skill_context
+                            if spec.agent_role in by_role
+                            else ""
+                        ),
+                    }
+                    for spec in effective.branches
+                },
+            )
+            barrier = session.agent_runtime.replan_barrier
+            required_agent_ids = set(
+                barrier["required_agent_ids"] if barrier is not None else ()
+            )
+            acknowledged_agent_ids: set[str] = set()
+            for active_branch in active_branches:
+                try:
+                    agent_id = session.agent_runtime.agent_id_for(
+                        active_branch.role,
+                        active_branch.candidate_id,
+                    )
+                except KeyError:
+                    continue
+                if agent_id in required_agent_ids:
+                    session.agent_runtime.acknowledge_replan(
+                        agent_id,
+                        session.agent_plan.version,
+                    )
+                    acknowledged_agent_ids.add(agent_id)
+            if branches is None:
+                for agent_id in sorted(required_agent_ids - acknowledged_agent_ids):
+                    session.agent_runtime.acknowledge_replan(
+                        agent_id,
+                        session.agent_plan.version,
+                    )
+            if barrier is not None:
+                session.agent_runtime.resume_replan()
         except Exception as error:
             trace.add(
                 "agent_replan_completed",

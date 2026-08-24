@@ -16,8 +16,10 @@ from mathforge.agent_runtime.execution_plan import (
     EffectiveExecutionPlan,
     ReplanBarrier,
     admit_router_plan,
+    bind_execution_context_hashes,
     build_effective_execution_plan,
 )
+from mathforge.agent_runtime.permissions import permission_for
 from mathforge.agent_runtime.state import AgentInstance, AgentStateRegistry, AgentTaskRegistry, TERMINAL_AGENT_STATES
 from mathforge.harness.cancellation import CancellationToken
 
@@ -66,11 +68,24 @@ class SessionAgentRuntime:
         self._effective_execution_plan: EffectiveExecutionPlan | None = None
         self._host_admitted_plan = None
         self._replan_barrier: ReplanBarrier | None = None
+        self._plan_artifact_by_version: dict[int, str] = {}
+        self._protocol_event_sequence = 0
+        self._protocol_events: list[dict[str, Any]] = []
         self._actions = ActionRegistry()
         self._agent_action_turns = False
         self._cancellation_token: CancellationToken | None = None
         self._released = False
         self._lock = RLock()
+
+    def _record_protocol_event(self, event_type: str, **details: Any) -> None:
+        self._protocol_event_sequence += 1
+        self._protocol_events.append(
+            {
+                "sequence": self._protocol_event_sequence,
+                "event_type": str(event_type),
+                **details,
+            }
+        )
 
     def bind_cancellation_token(self, token: CancellationToken) -> None:
         with self._lock:
@@ -128,17 +143,41 @@ class SessionAgentRuntime:
             raise RuntimeError("EffectiveExecutionPlan is not bound")
         return self._effective_execution_plan
 
+    def bind_execution_contexts(
+        self,
+        *,
+        shared_context: dict[str, Any],
+        branch_contexts: dict[str, dict[str, Any]],
+    ) -> EffectiveExecutionPlan:
+        with self._lock:
+            self._ensure_active()
+            self._effective_execution_plan = bind_execution_context_hashes(
+                self.effective_execution_plan,
+                shared_context=shared_context,
+                branch_contexts=branch_contexts,
+            )
+            return self._effective_execution_plan
+
     def acknowledge_replan(self, agent_id: str, version: int) -> None:
         with self._lock:
             if self._replan_barrier is None:
                 raise RuntimeError("no replan barrier is active")
             self._replan_barrier.acknowledge(agent_id, version)
+            self._record_protocol_event(
+                "replan_acknowledged",
+                agent_id=agent_id,
+                plan_version=version,
+            )
 
     def resume_replan(self) -> None:
         with self._lock:
             if self._replan_barrier is None:
                 raise RuntimeError("no replan barrier is active")
             self._replan_barrier.resume()
+            self._record_protocol_event(
+                "replan_resumed",
+                plan_version=self._replan_barrier.to_version,
+            )
 
     @property
     def replan_barrier(self) -> dict[str, Any] | None:
@@ -165,6 +204,12 @@ class SessionAgentRuntime:
             if router_context is None:
                 router = self._ensure_agent("RouterPlanner", "fallback")
                 task = self.tasks.create("route_and_plan", router.agent_id)
+                self._record_protocol_event(
+                    "task_assigned",
+                    task_id=task.task_id,
+                    task_type=task.task_type,
+                    agent_id=router.agent_id,
+                )
                 self._sequence += 1
                 router_context = TurnContext(
                     router.agent_id,
@@ -206,6 +251,7 @@ class SessionAgentRuntime:
                 },
                 parent_artifact_ids=(route_artifact.artifact_id,),
             )
+            self._plan_artifact_by_version[plan.version] = plan_artifact.artifact_id
             for artifact in (route_artifact, plan_artifact):
                 self.tasks.append_output(router_context.task_id, artifact.artifact_id)
                 self.agents.append(
@@ -213,38 +259,72 @@ class SessionAgentRuntime:
                     "output_artifact_ids",
                     artifact.artifact_id,
                 )
-            recipient = self._ensure_agent("PrimarySolver", "primary-1")
-            pair = tuple(sorted((router_context.agent_id, recipient.agent_id)))
-            thread_id = self._thread_keys.get(pair)
-            if not thread_id:
-                thread_id = self.mailbox.create_thread(
-                    (router_context.agent_id, recipient.agent_id)
-                ).thread_id
-                self._thread_keys[pair] = thread_id
-            message = self.mailbox.send(
-                thread_id=thread_id,
-                sender_agent_id=router_context.agent_id,
-                recipient_agent_id=recipient.agent_id,
-                task_id=router_context.task_id,
-                message_type="plan_published",
-                artifact_ids=(
-                    route_artifact.artifact_id,
-                    plan_artifact.artifact_id,
-                ),
-                public_summary=(
-                    f"Router published authoritative plan {plan.plan_id} "
-                    f"from {plan.source}"
-                ),
-                reply_to_message_id=self.mailbox.latest_message_id(thread_id),
-            )
+                self._record_protocol_event(
+                    "artifact_published",
+                    artifact_id=artifact.artifact_id,
+                    artifact_type=artifact.artifact_type,
+                    producer_agent_id=artifact.producer_agent_id,
+                    task_id=artifact.task_id,
+                    turn_id=artifact.turn_id,
+                )
+            recipients: list[AgentInstance] = []
+            role_ordinals: dict[str, int] = {}
+            for branch in self.effective_execution_plan.solver_branches:
+                ordinal = role_ordinals.get(branch.agent_role, 0) + 1
+                role_ordinals[branch.agent_role] = ordinal
+                descriptor = (
+                    f"primary-{ordinal}"
+                    if branch.agent_role == "PrimarySolver"
+                    else f"alternative-{ordinal}"
+                )
+                recipients.append(self._ensure_agent(branch.agent_role, descriptor))
             if self._replan_barrier is not None:
-                for agent_id in self._replan_barrier.required_agent_ids:
-                    self._replan_barrier.acknowledge(agent_id, plan.version)
-                self._replan_barrier.resume()
+                known = {item.agent_id for item in recipients}
+                recipients.extend(
+                    self.agents.instance(agent_id)
+                    for agent_id in self._replan_barrier.required_agent_ids
+                    if agent_id not in known
+                )
+            messages = []
+            for recipient in recipients:
+                pair = tuple(sorted((router_context.agent_id, recipient.agent_id)))
+                thread_id = self._thread_keys.get(pair)
+                if not thread_id:
+                    thread_id = self.mailbox.create_thread(
+                        (router_context.agent_id, recipient.agent_id)
+                    ).thread_id
+                    self._thread_keys[pair] = thread_id
+                message = self.mailbox.send(
+                    thread_id=thread_id,
+                    sender_agent_id=router_context.agent_id,
+                    recipient_agent_id=recipient.agent_id,
+                    task_id=router_context.task_id,
+                    message_type="plan_published",
+                    artifact_ids=(
+                        route_artifact.artifact_id,
+                        plan_artifact.artifact_id,
+                    ),
+                    public_summary=(
+                        f"Router published authoritative plan {plan.plan_id} "
+                        f"from {plan.source}"
+                    ),
+                    reply_to_message_id=self.mailbox.latest_message_id(thread_id),
+                )
+                messages.append(message)
+                self._record_protocol_event(
+                    "message_sent",
+                    message_id=message.message_id,
+                    thread_id=message.thread_id,
+                    sender_agent_id=message.sender_agent_id,
+                    recipient_agent_id=message.recipient_agent_id,
+                    message_type=message.message_type,
+                    artifact_ids=list(message.artifact_ids),
+                )
             return {
                 "route_artifact_id": route_artifact.artifact_id,
                 "plan_artifact_id": plan_artifact.artifact_id,
-                "plan_message_id": message.message_id,
+                "plan_message_id": messages[0].message_id,
+                "plan_message_ids": [item.message_id for item in messages],
                 "effective_plan_id": self.effective_execution_plan.plan_id,
                 "effective_plan_version": self.effective_execution_plan.version,
                 "host_admitted_plan_id": self._host_admitted_plan.plan_id,
@@ -286,7 +366,21 @@ class SessionAgentRuntime:
         )
         self.agents.create(instance)
         self._agent_keys[key] = agent_id
+        self._record_protocol_event(
+            "agent_created",
+            agent_id=instance.agent_id,
+            role=instance.role,
+            mode=instance.mode,
+            descriptor=instance.descriptor,
+        )
         return instance
+
+    def agent_id_for(self, role: str, descriptor: str) -> str:
+        with self._lock:
+            try:
+                return self._agent_keys[(str(role), str(descriptor))]
+            except KeyError as error:
+                raise KeyError("Agent identity is not active in this session") from error
 
     def begin_model_turn(
         self,
@@ -340,18 +434,28 @@ class SessionAgentRuntime:
                     mode=requested_mode,
                 )
             )
+            if role in {"PrimarySolver", "AlternativeSolver"}:
+                self._ensure_current_plan_delivery(instance)
             input_artifact_ids = tuple(
                 dict.fromkeys(
                     (
                         *input_artifact_ids,
                         *self.mailbox.pending_artifacts_for_recipient(
-                            instance.agent_id
+                            instance.agent_id,
+                            message_types=frozenset({"plan_published"}),
                         ),
                     )
                 )
             )
             task_type = _TASK_BY_ROLE[role]
-            plan_id, plan_version, subgoal_ids, method_family = self._task_plan(role, descriptor)
+            (
+                plan_id,
+                plan_version,
+                subgoal_ids,
+                method_family,
+                shared_context_hash,
+                branch_context_hash,
+            ) = self._task_plan(role, descriptor)
             artifact_type, message_type, recipient_role = _OUTPUT_BY_ROLE[role]
             mode = instance.mode
             recipient_agent_id = ""
@@ -390,6 +494,39 @@ class SessionAgentRuntime:
                 task_type = "solve_new_branch"
             if mode not in self.definitions.get(role).allowed_modes:
                 raise ValueError("Agent collaboration mode is not allowed")
+            phase_permission = permission_for(role, task_type)
+            input_artifact_ids = tuple(
+                dict.fromkeys(
+                    (
+                        *input_artifact_ids,
+                        *self.mailbox.pending_artifacts_for_recipient(
+                            instance.agent_id,
+                            message_types=phase_permission.accepted_message_types,
+                        ),
+                    )
+                )
+            )
+            for artifact_id in input_artifact_ids:
+                artifact = self.artifacts.get(artifact_id)
+                if artifact.artifact_type not in phase_permission.readable_artifact_types:
+                    raise PermissionError(
+                        f"{role} phase cannot read {artifact.artifact_type}"
+                    )
+            prior_agent_turn = any(
+                item.agent_id == instance.agent_id
+                for item in self._turn_contexts.values()
+            )
+            required_plan_artifact_id = self._plan_artifact_by_version.get(
+                plan_version,
+                "",
+            )
+            if (
+                role in {"PrimarySolver", "AlternativeSolver"}
+                and not prior_agent_turn
+                and required_plan_artifact_id
+                and required_plan_artifact_id not in input_artifact_ids
+            ):
+                raise RuntimeError("first Solver Turn must consume PlanArtifact")
             key = (
                 instance.agent_id,
                 task_type,
@@ -407,6 +544,15 @@ class SessionAgentRuntime:
                     input_artifact_ids=tuple(input_artifact_ids),
                 ).task_id
                 self._task_keys[key] = task_id
+                task = self.tasks.get(task_id)
+                self._record_protocol_event(
+                    "task_assigned",
+                    task_id=task.task_id,
+                    task_type=task.task_type,
+                    agent_id=task.assigned_agent_id,
+                    plan_id=task.plan_id,
+                    plan_version=task.plan_version,
+                )
             if turn_kind == "solver_progress":
                 artifact_type, message_type, recipient_role = "ProgressArtifact", "progress_shared", "RouterPlanner"
             self._sequence += 1
@@ -431,15 +577,81 @@ class SessionAgentRuntime:
                 reply_to_message_id,
                 close_thread_after_publish,
                 plan_version,
+                shared_context_hash,
+                branch_context_hash,
             )
             self._turn_contexts[turn_id] = context
             self._turns[turn_id] = TurnLineage(instance.agent_id, task_id, turn_id)
-            self.mailbox.consume_for_turn(
+            receipts = self.mailbox.consume_for_turn(
                 consumer_agent_id=instance.agent_id,
                 turn_id=turn_id,
                 input_artifact_ids=tuple(input_artifact_ids),
+                accepted_message_types=phase_permission.accepted_message_types,
+            )
+            for receipt in receipts:
+                self._record_protocol_event(
+                    "message_consumed",
+                    receipt_id=receipt.receipt_id,
+                    message_id=receipt.message_id,
+                    consumer_agent_id=receipt.consumer_agent_id,
+                    turn_id=receipt.turn_id,
+                    artifact_ids=list(receipt.artifact_ids),
+                )
+            self._record_protocol_event(
+                "model_turn_started",
+                turn_id=turn_id,
+                agent_id=instance.agent_id,
+                task_id=task_id,
+                plan_id=plan_id,
+                plan_version=plan_version,
             )
             return context
+
+    def _ensure_current_plan_delivery(self, recipient: AgentInstance) -> None:
+        plan = self._effective_execution_plan
+        if plan is None:
+            return
+        plan_artifact_id = self._plan_artifact_by_version.get(plan.version, "")
+        if not plan_artifact_id:
+            return
+        if any(
+            message["recipient_agent_id"] == recipient.agent_id
+            and message["message_type"] == "plan_published"
+            and plan_artifact_id in message["artifact_ids"]
+            for message in self.mailbox.snapshot()["messages"]
+        ):
+            return
+        plan_artifact = self.artifacts.get(plan_artifact_id)
+        route_artifact_ids = tuple(
+            artifact_id
+            for artifact_id in plan_artifact.parent_artifact_ids
+            if self.artifacts.get(artifact_id).artifact_type == "RouteArtifact"
+        )
+        sender = self.agents.instance(plan_artifact.producer_agent_id)
+        pair = tuple(sorted((sender.agent_id, recipient.agent_id)))
+        thread_id = self._thread_keys.get(pair)
+        if not thread_id:
+            thread_id = self.mailbox.create_thread(pair).thread_id
+            self._thread_keys[pair] = thread_id
+        message = self.mailbox.send(
+            thread_id=thread_id,
+            sender_agent_id=sender.agent_id,
+            recipient_agent_id=recipient.agent_id,
+            task_id=plan_artifact.task_id,
+            message_type="plan_published",
+            artifact_ids=(*route_artifact_ids, plan_artifact_id),
+            public_summary=f"Router delivered active plan version {plan.version}",
+            reply_to_message_id=self.mailbox.latest_message_id(thread_id),
+        )
+        self._record_protocol_event(
+            "message_sent",
+            message_id=message.message_id,
+            thread_id=message.thread_id,
+            sender_agent_id=message.sender_agent_id,
+            recipient_agent_id=message.recipient_agent_id,
+            message_type=message.message_type,
+            artifact_ids=list(message.artifact_ids),
+        )
 
     def _collaboration_turn_route(
         self,
@@ -501,17 +713,17 @@ class SessionAgentRuntime:
         self,
         role: str,
         descriptor: str,
-    ) -> tuple[str, int, tuple[str, ...], str]:
+    ) -> tuple[str, int, tuple[str, ...], str, str, str]:
         plan = self._effective_execution_plan
         if plan is None or role == "RouterPlanner":
-            return "", 0, (), ""
+            return "", 0, (), "", "", ""
         proposals = [
             branch
             for branch in plan.branches
             if branch.agent_role == role
         ]
         if not proposals:
-            return plan.plan_id, plan.version, (), ""
+            return plan.plan_id, plan.version, (), "", "", ""
         if descriptor.startswith("new-branch-"):
             used_methods = {
                 context.method_family
@@ -527,18 +739,33 @@ class SessionAgentRuntime:
                 ),
                 proposals[-1],
             )
-            return plan.plan_id, plan.version, proposal.subgoal_ids, proposal.method_family
+            return (
+                plan.plan_id,
+                plan.version,
+                proposal.subgoal_ids,
+                proposal.method_family,
+                proposal.shared_context_hash,
+                proposal.branch_context_hash,
+            )
         index = 0
         if role == "AlternativeSolver":
             match = re.search(r"(\d+)$", descriptor)
             if match:
                 index = max(0, int(match.group(1)) - 1)
         proposal = proposals[min(index, len(proposals) - 1)]
-        return plan.plan_id, plan.version, proposal.subgoal_ids, proposal.method_family
+        return (
+            plan.plan_id,
+            plan.version,
+            proposal.subgoal_ids,
+            proposal.method_family,
+            proposal.shared_context_hash,
+            proposal.branch_context_hash,
+        )
 
     def mark_dispatched(self, turn_id: str, *, budget_snapshot: dict[str, Any] | None = None) -> None:
         with self._lock:
             context = self._turn_contexts[turn_id]
+            self._reject_stale_solver_turn(context)
             state = next(item["state"] for item in self.agents.snapshot() if item["agent_id"] == context.agent_id)
             if state["status"] != "running":
                 self.agents.transition(context.agent_id, "running")
@@ -546,6 +773,12 @@ class SessionAgentRuntime:
             current = next(item["state"] for item in self.agents.snapshot() if item["agent_id"] == context.agent_id)
             self.agents.update(context.agent_id, model_call_count=current["model_call_count"] + 1, budget_snapshot=dict(budget_snapshot or {}))
             self._turns[turn_id] = replace(self._turns[turn_id], status="dispatched")
+            self._record_protocol_event(
+                "model_turn_dispatched",
+                turn_id=turn_id,
+                agent_id=context.agent_id,
+                task_id=context.task_id,
+            )
 
     def complete_model_turn(
         self,
@@ -560,6 +793,7 @@ class SessionAgentRuntime:
         with self._lock:
             self._ensure_active()
             context = self._turn_contexts[turn_id]
+            self._reject_stale_solver_turn(context)
             recovery = dict(recovery_metadata or {})
             digest = recovery.get("response_sha256") or sha256(
                 response.encode("utf-8")
@@ -605,6 +839,15 @@ class SessionAgentRuntime:
                 artifact_type = context.artifact_type
                 message_type = context.message_type
                 recipient_role = context.recipient_role
+            phase_permission = permission_for(context.role, context.task_type)
+            if payload.action not in phase_permission.allowed_action_types:
+                raise PermissionError("Agent phase cannot perform Action")
+            if artifact_type not in phase_permission.writable_artifact_types:
+                raise PermissionError(
+                    f"{context.role} phase cannot write {artifact_type}"
+                )
+            if message_type not in phase_permission.outbound_message_types:
+                raise PermissionError("Agent phase cannot send message type")
             previous = self.tasks.get(context.task_id).output_artifact_ids
             artifact_payload = payload.to_dict()
             if artifact_type == "CandidateArtifact":
@@ -657,6 +900,14 @@ class SessionAgentRuntime:
             )
             self.tasks.append_output(context.task_id, artifact.artifact_id)
             self.agents.append(context.agent_id, "output_artifact_ids", artifact.artifact_id)
+            self._record_protocol_event(
+                "artifact_published",
+                artifact_id=artifact.artifact_id,
+                artifact_type=artifact.artifact_type,
+                producer_agent_id=artifact.producer_agent_id,
+                task_id=artifact.task_id,
+                turn_id=artifact.turn_id,
+            )
             recipient = (
                 self.agents.instance(context.recipient_agent_id)
                 if context.recipient_agent_id
@@ -681,6 +932,15 @@ class SessionAgentRuntime:
                     or self.mailbox.latest_message_id(thread_id)
                 ),
             )
+            self._record_protocol_event(
+                "message_sent",
+                message_id=message.message_id,
+                thread_id=message.thread_id,
+                sender_agent_id=message.sender_agent_id,
+                recipient_agent_id=message.recipient_agent_id,
+                message_type=message.message_type,
+                artifact_ids=list(message.artifact_ids),
+            )
             if artifact_type == "PeerReviewArtifact":
                 self._review_thread_by_artifact[artifact.artifact_id] = thread_id
             if context.close_thread_after_publish:
@@ -696,6 +956,15 @@ class SessionAgentRuntime:
                 self.tasks.transition(context.task_id, "ready")
             self.agents.transition(context.agent_id, "ready")
             self._turns[turn_id] = replace(self._turns[turn_id], artifact_id=artifact.artifact_id, message_id=message.message_id, status="completed")
+            self._record_protocol_event(
+                "model_turn_completed",
+                turn_id=turn_id,
+                agent_id=context.agent_id,
+                task_id=context.task_id,
+                artifact_id=artifact.artifact_id,
+                message_id=message.message_id,
+                status="completed",
+            )
             return {
                 "agent_id": context.agent_id,
                 "task_id": context.task_id,
@@ -704,6 +973,17 @@ class SessionAgentRuntime:
                 "message_id": message.message_id,
                 "thread_id": thread_id,
             }
+
+    def _reject_stale_solver_turn(self, context: TurnContext) -> None:
+        if context.role not in {"PrimarySolver", "AlternativeSolver"}:
+            return
+        current = self._effective_execution_plan
+        if (
+            current is not None
+            and context.plan_version
+            and context.plan_version != current.version
+        ):
+            raise RuntimeError("stale Solver Turn cannot mutate protocol state")
 
     @staticmethod
     def _mailbox_descriptor(role: str, context: TurnContext) -> str:
@@ -782,6 +1062,14 @@ class SessionAgentRuntime:
                 self.agents.transition(context.agent_id, "ready", failure_code=failure_code)
                 self.tasks.transition(context.task_id, "ready")
             self._turns[turn_id] = replace(self._turns[turn_id], status="failed", failure_code=str(failure_code))
+            self._record_protocol_event(
+                "model_turn_completed",
+                turn_id=turn_id,
+                agent_id=context.agent_id,
+                task_id=context.task_id,
+                status="failed",
+                failure_code=str(failure_code),
+            )
 
     def relay_turn_artifact(
         self,
@@ -797,6 +1085,9 @@ class SessionAgentRuntime:
             lineage = self._turns[turn_id]
             if not lineage.artifact_id:
                 raise ValueError("completed Turn has no Artifact to relay")
+            phase_permission = permission_for(context.role, context.task_type)
+            if message_type not in phase_permission.outbound_message_types:
+                raise PermissionError("Agent phase cannot relay message type")
             recipient = self._ensure_agent(
                 recipient_role,
                 self._mailbox_descriptor(recipient_role, context),
@@ -817,6 +1108,15 @@ class SessionAgentRuntime:
                 artifact_ids=(lineage.artifact_id,),
                 public_summary=public_summary,
                 reply_to_message_id=self.mailbox.latest_message_id(thread_id),
+            )
+            self._record_protocol_event(
+                "message_sent",
+                message_id=message.message_id,
+                thread_id=message.thread_id,
+                sender_agent_id=message.sender_agent_id,
+                recipient_agent_id=message.recipient_agent_id,
+                message_type=message.message_type,
+                artifact_ids=list(message.artifact_ids),
             )
             return message.message_id
 
@@ -841,11 +1141,18 @@ class SessionAgentRuntime:
             if not artifacts:
                 raise KeyError("Candidate publication lineage is unavailable")
             artifact = artifacts[-1]
+            context = self._turn_contexts.get(artifact["turn_id"])
             return {
                 "candidate_id": str(candidate_id),
                 "author_agent_id": artifact["producer_agent_id"],
                 "source_turn_id": artifact["turn_id"],
                 "candidate_artifact_id": artifact["artifact_id"],
+                "shared_context_hash": (
+                    context.shared_context_hash if context is not None else ""
+                ),
+                "branch_context_hash": (
+                    context.branch_context_hash if context is not None else ""
+                ),
             }
 
     def publish_deterministic_decision(
@@ -875,6 +1182,15 @@ class SessionAgentRuntime:
                     "status": "committed",
                 },
                 parent_artifact_ids=tuple(dict.fromkeys(parents)),
+            )
+            self._record_protocol_event(
+                "artifact_published",
+                artifact_id=artifact.artifact_id,
+                artifact_type=artifact.artifact_type,
+                producer_agent_id="",
+                producer_kind=artifact.producer_kind,
+                task_id="",
+                turn_id="",
             )
             return artifact.to_dict()
 
@@ -920,6 +1236,17 @@ class SessionAgentRuntime:
                         target,
                         failure_code=("" if target == "completed" else target),
                     )
+            for row in self.agents.snapshot():
+                state = row["state"]
+                self._record_protocol_event(
+                    "agent_stopped",
+                    agent_id=row["agent_id"],
+                    role=row["role"],
+                    mode=row["mode"],
+                    status=state["status"],
+                    model_call_count=state["model_call_count"],
+                    failure_code=state["failure_code"],
+                )
             artifacts = self.artifacts.snapshot()
             mailbox_snapshot = self.mailbox.snapshot()
             turns = [item.to_dict() for item in self._turns.values()]
@@ -985,6 +1312,7 @@ class SessionAgentRuntime:
                     ],
                 },
                 "artifacts": artifacts, "messages": mailbox_snapshot["messages"], "message_consumptions": mailbox_snapshot["message_consumptions"], "threads": mailbox_snapshot["threads"], "turn_lineage": turns,
+                "protocol_sequence": [dict(item) for item in self._protocol_events],
             }
 
     def release(self) -> None:
@@ -999,6 +1327,9 @@ class SessionAgentRuntime:
             self._turns.clear()
             self._turn_contexts.clear()
             self._review_thread_by_artifact.clear()
+            self._plan_artifact_by_version.clear()
+            self._protocol_events.clear()
+            self._protocol_event_sequence = 0
             self._authoritative_plan = None
             self._agent_action_turns = False
             self._cancellation_token = None

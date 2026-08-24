@@ -333,6 +333,8 @@ class TurnContext:
     reply_to_message_id: str = ""
     close_thread_after_publish: bool = False
     plan_version: int = 0
+    shared_context_hash: str = ""
+    branch_context_hash: str = ""
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -355,6 +357,8 @@ class TurnContext:
             "reply_to_message_id": self.reply_to_message_id,
             "close_thread_after_publish": self.close_thread_after_publish,
             "plan_version": self.plan_version,
+            "shared_context_hash": self.shared_context_hash,
+            "branch_context_hash": self.branch_context_hash,
         }
 
 

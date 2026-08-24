@@ -914,19 +914,16 @@ class OfficialClientProvider:
             messages,
             configured_max_output_tokens=effective_max_tokens,
         )
-        try:
-            protocol_turn = (
-                protocol_runtime.begin_model_turn(
-                    stage=stage,
-                    turn_kind=active_turn_kind,
-                    agent_hint=agent_id or "",
-                    input_artifact_ids=tuple(input_artifact_ids),
-                )
-                if protocol_runtime is not None
-                else None
+        protocol_turn = (
+            protocol_runtime.begin_model_turn(
+                stage=stage,
+                turn_kind=active_turn_kind,
+                agent_hint=agent_id or "",
+                input_artifact_ids=tuple(input_artifact_ids),
             )
-        except (KeyError, RuntimeError, TypeError, ValueError):
-            protocol_turn = None
+            if protocol_runtime is not None
+            else None
+        )
         allocation_payload = {
             **allocation.to_dict(),
             "configured_output_tokens": max_tokens,

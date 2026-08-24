@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Completed the 2026-08-24 remediation Phase 3 least-privilege and real-Agent
+  communication work. Added an executable role/task-phase permission matrix
+  for Artifact reads and writes, Actions, inbound message consumption, and
+  outbound message types. Router plans are broadcast to every admitted Solver,
+  dynamically created Solver branches receive the active PlanArtifact, and a
+  Solver's first Turn cannot run without consuming it. Replans now remain
+  paused until each live Solver explicitly acknowledges the new version;
+  publication no longer fabricates ACKs, and stale Solver Turns cannot commit.
+  `send_message` now requires one supported business routing intent. Mailbox
+  delivery is phase-filtered so concurrent reviews cannot leak an unrelated
+  branch's pending Artifact into a Turn. Shared and branch context hashes are
+  computed from the exact public payloads dispatched to Solver branches and
+  carried into Candidate provenance. Agent lifecycle projection now follows a
+  single Host sequence instead of regrouping events by object type, and Prompt
+  versions are loaded from contract frontmatter rather than hard-coded. Added
+  permission-overreach, candidate-isolation, plan-consumption, message-routing,
+  explicit-replan-ACK, stale-Turn, context-hash, temporal-order, and contract-
+  version regression gates.
 - Completed the 2026-08-24 remediation Phase 2 Turn/Candidate protocol work.
   Each compiled model Turn now names one authoritative output schema. Candidate
   wire profiles are selected only from ProblemIR response mode: answer-only

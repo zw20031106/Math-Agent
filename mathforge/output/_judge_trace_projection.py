@@ -44,6 +44,7 @@ JUDGE_EVENT_STAGES = {
     "message_sent": "communication",
     "message_delivered": "communication",
     "message_consumed": "communication",
+    "replan_acknowledged": "communication",
     "agent_stopped": "agent_lifecycle",
     "candidate_pool_initialized": "peer_review",
     "peer_review_completed": "peer_review",
@@ -634,6 +635,23 @@ def project_judge_trace(
                 for item in (protocol or {}).get("threads", [])
                 if isinstance(item, dict)
             ],
+            "protocol_sequence": [
+                _select(
+                    item,
+                    (
+                        "sequence",
+                        "event_type",
+                        "agent_id",
+                        "task_id",
+                        "turn_id",
+                        "artifact_id",
+                        "message_id",
+                        "plan_version",
+                    ),
+                )
+                for item in (protocol or {}).get("protocol_sequence", [])
+                if isinstance(item, dict)
+            ],
         },
     )
     for lifecycle_name in (
@@ -645,6 +663,7 @@ def project_judge_trace(
         "message_sent",
         "message_delivered",
         "message_consumed",
+        "replan_acknowledged",
         "repair_committed",
         "repair_rolled_back",
         "agent_stopped",

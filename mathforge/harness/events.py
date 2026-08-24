@@ -32,6 +32,7 @@ EVENT_STAGES = {
     "message_sent": "communication",
     "message_delivered": "communication",
     "message_consumed": "communication",
+    "replan_acknowledged": "communication",
     "agent_stopped": "agent_lifecycle",
     "retrieval_completed": "retrieval",
     "frozen_lemma_cache": "retrieval",

@@ -16,6 +16,15 @@ class AgentEventProjector:
         *,
         repair_lineage: Iterable[dict[str, Any]] = (),
     ) -> list[tuple[str, dict[str, Any]]]:
+        protocol_sequence = list(snapshot.get("protocol_sequence", ()))
+        if protocol_sequence:
+            events = self._project_protocol_sequence(protocol_sequence)
+            for item in repair_lineage:
+                if bool(item.get("rolled_back")):
+                    events.append(("repair_rolled_back", self._repair_event(item)))
+                elif item.get("proposed_candidate_id"):
+                    events.append(("repair_committed", self._repair_event(item)))
+            return events
         events: list[tuple[str, dict[str, Any]]] = []
         agents = list(snapshot.get("agents", ()))
         tasks = sorted(
@@ -156,6 +165,48 @@ class AgentEventProjector:
                     },
                 )
             )
+        return events
+
+    @staticmethod
+    def _project_protocol_sequence(
+        protocol_sequence: list[dict[str, Any]],
+    ) -> list[tuple[str, dict[str, Any]]]:
+        public_event_types = {
+            "agent_created",
+            "task_assigned",
+            "model_turn_started",
+            "model_turn_completed",
+            "artifact_published",
+            "message_sent",
+            "message_consumed",
+            "replan_acknowledged",
+            "agent_stopped",
+        }
+        events: list[tuple[str, dict[str, Any]]] = []
+        for item in sorted(
+            protocol_sequence,
+            key=lambda value: int(value.get("sequence", 0)),
+        ):
+            event_type = str(item.get("event_type", ""))
+            if event_type not in public_event_types:
+                continue
+            details = {
+                key: value
+                for key, value in item.items()
+                if key not in {"event_type", "sequence"}
+            }
+            details["protocol_sequence"] = int(item.get("sequence", 0))
+            events.append((event_type, details))
+            if event_type == "message_sent":
+                events.append(
+                    (
+                        "message_delivered",
+                        {
+                            **details,
+                            "delivery_status": "accepted_by_session_mailbox",
+                        },
+                    )
+                )
         return events
 
     @staticmethod

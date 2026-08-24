@@ -150,6 +150,8 @@ class SessionMailbox:
     def pending_artifacts_for_recipient(
         self,
         recipient_agent_id: str,
+        *,
+        message_types: frozenset[str] | None = None,
     ) -> tuple[str, ...]:
         with self._lock:
             return tuple(
@@ -161,6 +163,10 @@ class SessionMailbox:
                     )
                     if message.recipient_agent_id == recipient_agent_id
                     and message.message_id not in self._consumed_message_ids
+                    and (
+                        message_types is None
+                        or message.message_type in message_types
+                    )
                     for artifact_id in message.artifact_ids
                 )
             )
@@ -171,6 +177,7 @@ class SessionMailbox:
         consumer_agent_id: str,
         turn_id: str,
         input_artifact_ids: tuple[str, ...],
+        accepted_message_types: frozenset[str] | None = None,
     ) -> tuple[MessageConsumptionReceipt, ...]:
         """Acknowledge only Messages actually supplied to their named consumer."""
 
@@ -186,6 +193,13 @@ class SessionMailbox:
                     continue
                 if not set(message.artifact_ids) <= supplied:
                     continue
+                if (
+                    accepted_message_types is not None
+                    and message.message_type not in accepted_message_types
+                ):
+                    raise PermissionError(
+                        "Agent phase cannot consume message type"
+                    )
                 receipt_id = f"receipt-{self.session_id[:8]}-{len(self._receipts) + 1:04d}"
                 receipt = MessageConsumptionReceipt(
                     receipt_id,
