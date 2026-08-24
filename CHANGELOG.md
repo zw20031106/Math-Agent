@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Implemented the 2026-08-24 remediation Phase 0 evidence freeze and official
+  case-audit gate. The frozen candidate now records the clean parent commit and
+  config, Prompt, Skill, and 171-file competition-source fingerprints. The
+  supplied official log is retained only as aggregate diagnostic evidence
+  because its commit is unavailable locally and it lacks current fingerprints
+  and per-case lineage; no active baseline was fabricated. Added a strict
+  ten-label case taxonomy, complete model-call timelines, Candidate lineage,
+  deterministic non-proof scoring, independent two-review proof adjudication,
+  and activation gates for official origin, exact fingerprints, complete
+  records, and trace/call/candidate lineage.
 - Completed the 2026-08-11 audit remediation Phase P4 runtime-slimming work
   while retaining the required LLM Router. Competition no longer runs the
   optional deterministic shadow path, and disabled RAG, frozen-lemma, MCP, and

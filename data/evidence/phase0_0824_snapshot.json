@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0",
+  "phase": "0824-phase0",
+  "captured_at": "2026-08-24",
+  "baseline_candidate": {
+    "git_commit": "100133435fde1db2bdcd6f62a047437f40de9719",
+    "code_dirty": false,
+    "source_scope": "main.py,llm_client.py,user_agent.py,mathforge/**/*.py",
+    "source_file_count": 171,
+    "source_sha256": "c8a0aedfd223df3d298b96a9adaa64bf7c402b558721ff2d96001f1e940248c6",
+    "config_sha256": "bdd551096a16da41211718c85fba0387a4e09e0eb01025458cbe0a27df327b51",
+    "prompt_sha256": "b5d88dba68b48e07bd8d98a9e38c061aad3382b597a855f99bcf37a6dfd3f2f0",
+    "skill_sha256": "9136a10c054c5732bb647f94edb86d5fd1f379e01fbffc4b4de6e02e36f2d609"
+  },
+  "case_failure_taxonomy": [
+    "parser_error",
+    "router_error",
+    "solver_wrong",
+    "protocol_invalid",
+    "truncated",
+    "provider_timeout",
+    "candidate_rejected",
+    "wrong_arbitration",
+    "trace_invalid",
+    "fallback"
+  ],
+  "official_evidence_inventory": [
+    {
+      "id": "official-log-2e87215a-20260811",
+      "source_name": "eval_log_2e87215a108649b08cd784f8ba81adaa.log",
+      "source_bytes": 25867,
+      "source_sha256": "a3de40f66e39169bf51b52b1519566f2cc9dcdeb1d9ff0aecd1b66b75d67c7f5",
+      "git_commit": "d3210e5074c141f58142f4aa48d1ed75f0666411",
+      "classification": "diagnostic-only",
+      "eligible_for_active_baseline": false,
+      "summary": {
+        "case_count": 112,
+        "correct": 8,
+        "incorrect": 21,
+        "invalid": 83,
+        "score_percent": 7.14286,
+        "request_count": 869,
+        "truncated_count": 673
+      },
+      "reasons": [
+        "the evaluated commit object is unavailable in the current repository",
+        "the log is not bound to the current config, prompt, skill, or source fingerprints",
+        "the aggregate log does not contain per-case inputs, outputs, candidate lineage, or model-call timelines",
+        "the aggregate log cannot satisfy proof double-review requirements"
+      ]
+    }
+  ],
+  "active_baseline_id": null,
+  "active_baseline_status": "unavailable-no-current-fingerprint-bound-per-case-official-export",
+  "required_next_evidence": [
+    "a clean official-platform export evaluated from the frozen baseline candidate",
+    "one complete record per case with full internal audit trace and final public output",
+    "two independent signed reviews for every proof case and a third adjudication on disagreement"
+  ],
+  "privacy": {
+    "contains_credentials": false,
+    "contains_absolute_paths": false,
+    "contains_private_reasoning_transcripts": false
+  }
+}

@@ -418,10 +418,10 @@
         "tests/test_phase9_scheduler_runtime.py"
       ],
       "expected_count": 10,
-      "version": "scheduler-runtime-2.0-phase9-0812-p4",
-      "engineering_reviewer": "codex-0812-p4-audit",
-      "review_date": "2026-08-12",
-      "sha256": "e7e36d544e53f1214b65e2fcb8a52e1a3f7953b4136da668dcb56369f6f9ef90"
+      "version": "scheduler-runtime-2.0-phase9-0824-phase0",
+      "engineering_reviewer": "codex-0824-phase0-evidence-audit",
+      "review_date": "2026-08-24",
+      "sha256": "608bcbe79d1b9cef19d9c4ff57aef321bafd152c73b4ea159cb3f5dc135539ea"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -443,10 +443,10 @@
         "tests/test_s6_e7_case_lifecycle.py"
       ],
       "expected_count": 14,
-      "version": "production-preflight-release-governance-1.0-phase10-0812-p4",
-      "engineering_reviewer": "codex-0812-p4-audit",
-      "review_date": "2026-08-12",
-      "sha256": "51d9464f0f69f5bf412a3b71d63f855267620143b810739e9b3b2af3cf0b8de5"
+      "version": "production-preflight-release-governance-1.0-phase10-0824-phase0",
+      "engineering_reviewer": "codex-0824-phase0-evidence-audit",
+      "review_date": "2026-08-24",
+      "sha256": "2841b7b9a7fee81f0f861a16b384cc82038d261807cbf8a692a2132810a678c6"
     },
     {
       "id": "router-e5-gold",
