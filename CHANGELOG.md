@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Completed the 2026-08-24 remediation Phase 4 executable TaskGraph work.
+  Task nodes can now bind host operations without leaking callables into the
+  public graph, dependency-ready waves are grouped deterministically, optional
+  nodes are pruned and rewired before admission, and bounded-worker P95 is
+  estimated from the actual scheduler capacity.  Scheduler generations reject
+  late results, graph runs expose terminal node states, and autonomous Solver
+  exploration and candidate synthesis now use the same scheduler wave service
+  with public state transitions and parallelism evidence.  Added graph binding,
+  pruning, worker-P95, generation-token, and execution regression gates.
 - Completed the 2026-08-24 remediation Phase 3 least-privilege and real-Agent
   communication work. Added an executable role/task-phase permission matrix
   for Artifact reads and writes, Actions, inbound message consumption, and

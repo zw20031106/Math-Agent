@@ -343,7 +343,10 @@ class MathForgeHarness:
         self._final_proof_status = FinalProofStatusService()
         self._agent_event_projector = AgentEventProjector()
         self._scheduler_flow = SchedulerFlow(
-            max_workers=min(2, self._config.model_max_concurrency)
+            max_workers=min(
+                self._config.case_max_concurrency,
+                self._config.model_max_concurrency,
+            )
         )
         self._reasoning_state_compressor = ReasoningStateCompressor(
             self._context_budget.token_counter
@@ -3849,21 +3852,54 @@ class MathForgeHarness:
             branches,
             session.problem_ir.response_mode,
         )
+        budget_snapshot = session.budget.snapshot()
+        scheduler_graph, pruned_scheduler_nodes = (
+            self._scheduler_flow.prune_infeasible_optional(
+                scheduler_graph,
+                remaining_calls=budget_snapshot.remaining_calls,
+                remaining_seconds=budget_snapshot.remaining_seconds,
+            )
+        )
+        scheduler_graph_payload = scheduler_graph.to_dict()
+        scheduler_graph_payload["task_graph_schema_version"] = (
+            scheduler_graph_payload.pop("schema_version")
+        )
         trace.add(
             "scheduler_task_graph_created",
-            **scheduler_graph.to_dict(),
+            **scheduler_graph_payload,
+            pruned_optional_nodes=list(pruned_scheduler_nodes),
+            worker_count=self._scheduler_flow.max_workers,
+            parallel_critical_path_p95_seconds=round(
+                scheduler_graph.critical_path_p95_for_workers(
+                    self._scheduler_flow.max_workers
+                ),
+                6,
+            ),
             release_threshold_seconds=self._config.hard_deadline_seconds,
             p95_within_release_threshold=(
-                scheduler_graph.critical_path_p95
+                scheduler_graph.critical_path_p95_for_workers(
+                    self._scheduler_flow.max_workers
+                )
                 <= self._config.hard_deadline_seconds
             ),
         )
+        for node_id in pruned_scheduler_nodes:
+            trace.add(
+                "scheduler_node_state",
+                graph_id=scheduler_graph.graph_id,
+                node_id=node_id,
+                status="skipped",
+                generation=0,
+                accepted=True,
+                error_code="infeasible_optional_node",
+            )
 
         action_turns = 0
         progress_turns = 0
         stall_stops = 0
         while any(branch.status == "exploring" for branch in branches):
             cycle_advanced = False
+            progress_tasks = []
             for branch in branches:
                 if branch.status != "exploring":
                     continue
@@ -3915,39 +3951,85 @@ class MathForgeHarness:
                     branch.status = "ready_to_synthesize"
                     branch.stop_reason = "resource_governor_requested_synthesis"
                     continue
-                try:
+                def progress(active_branch=branch):
                     compressed = self._compress_reasoning_state(
-                        branch.state,
+                        active_branch.state,
                         trace,
                     )
-                    turn = self._solver_executor.execute_autonomous_progress(
-                        branch.solver,
+                    return self._solver_executor.execute_autonomous_progress(
+                        active_branch.solver,
                         SolverRequest(
-                            branch.candidate_id,
+                            active_branch.candidate_id,
                             session.problem_ir,
                             session.route_plan,
-                            branch.skill_context
+                            active_branch.skill_context
                             + self._autonomous_budget_context(
                                 session.budget.snapshot()
                             ),
-                            branch.method_family,
-                            branch.forbidden_method_families,
-                            branch.context_view,
+                            active_branch.method_family,
+                            active_branch.forbidden_method_families,
+                            active_branch.context_view,
                             compressed.prompt_json,
                         ),
                         session.budget,
-                        mode=branch.mode,
+                        mode=active_branch.mode,
                         temperature=(
                             self._config.primary_temperature
-                            if branch.role == "PrimarySolver"
+                            if active_branch.role == "PrimarySolver"
                             else max(self._config.primary_temperature, 0.35)
                         ),
                         max_tokens=self._config.primary_max_tokens,
-                        optional=branch.mode == "continue",
+                        optional=active_branch.mode == "continue",
                     )
-                except Exception as error:
+
+                progress_tasks.append((branch.candidate_id, progress))
+
+            if not progress_tasks:
+                break
+            trace.add(
+                "scheduler_wave_started",
+                graph_id=scheduler_graph.graph_id,
+                wave_kind="solver_exploration",
+                node_ids=[task_id for task_id, _ in progress_tasks],
+                parallel_group="solver-wave",
+                worker_count=self._scheduler_flow.max_workers,
+            )
+            progress_outcomes = self._scheduler_flow.run_parallel(
+                progress_tasks,
+                timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+                generation_scope=f"{scheduler_graph.graph_id}:explore",
+            )
+            branch_by_id = {branch.candidate_id: branch for branch in branches}
+            for outcome in progress_outcomes:
+                branch = branch_by_id[outcome.task_id]
+                trace.add(
+                    "scheduler_node_state",
+                    graph_id=scheduler_graph.graph_id,
+                    node_id=f"solve:{branch.candidate_id}",
+                    task_id=branch.candidate_id,
+                    status=(
+                        "completed"
+                        if outcome.error is None and outcome.accepted
+                        else "failed"
+                    ),
+                    generation=outcome.generation,
+                    accepted=outcome.accepted,
+                    elapsed_seconds=round(outcome.elapsed_seconds, 6),
+                    error_code=(
+                        "stale_generation"
+                        if not outcome.accepted
+                        else type(outcome.error).__name__
+                        if outcome.error is not None
+                        else ""
+                    ),
+                )
+                if outcome.error is not None or not outcome.accepted:
                     branch.status = "ready_to_synthesize"
-                    branch.stop_reason = self._reasoning_failure_code(error)
+                    branch.stop_reason = (
+                        "stale_scheduler_result"
+                        if not outcome.accepted
+                        else self._reasoning_failure_code(outcome.error)
+                    )
                     trace.add(
                         "autonomous_turn_failed",
                         agent_role=branch.role,
@@ -3957,6 +4039,7 @@ class MathForgeHarness:
                         next_action="synthesize_candidate",
                     )
                     continue
+                turn = outcome.value
                 action_turns += 1
                 progress_turns += 1
                 cycle_advanced = True
@@ -4063,6 +4146,27 @@ class MathForgeHarness:
                         branches=branches,
                     )
                 branch.mode = "continue"
+            trace.add(
+                "scheduler_wave_completed",
+                graph_id=scheduler_graph.graph_id,
+                wave_kind="solver_exploration",
+                node_ids=[outcome.task_id for outcome in progress_outcomes],
+                completed_count=sum(
+                    outcome.error is None and outcome.accepted
+                    for outcome in progress_outcomes
+                ),
+                failed_count=sum(
+                    outcome.error is not None or not outcome.accepted
+                    for outcome in progress_outcomes
+                ),
+                elapsed_seconds=round(
+                    max(
+                        (outcome.elapsed_seconds for outcome in progress_outcomes),
+                        default=0.0,
+                    ),
+                    6,
+                ),
+            )
             if not cycle_advanced and all(
                 branch.status != "exploring" for branch in branches
             ):
@@ -4169,9 +4273,18 @@ class MathForgeHarness:
 
             synthesis_tasks.append((branch.candidate_id, synthesize))
 
+        trace.add(
+            "scheduler_wave_started",
+            graph_id=scheduler_graph.graph_id,
+            wave_kind="candidate_synthesis",
+            node_ids=[task_id for task_id, _ in synthesis_tasks],
+            parallel_group="solver-wave",
+            worker_count=self._scheduler_flow.max_workers,
+        )
         synthesis_outcomes = self._scheduler_flow.run_parallel(
             synthesis_tasks,
             timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+            generation_scope=f"{scheduler_graph.graph_id}:synthesis",
         )
         branch_by_id = {branch.candidate_id: branch for branch in branches}
         trace.add(
@@ -4179,8 +4292,50 @@ class MathForgeHarness:
             task_ids=[outcome.task_id for outcome in synthesis_outcomes],
             parallelism=min(
                 len(synthesis_outcomes),
-                2,
-                self._config.model_max_concurrency,
+                self._scheduler_flow.max_workers,
+            ),
+            elapsed_seconds=round(
+                max(
+                    (outcome.elapsed_seconds for outcome in synthesis_outcomes),
+                    default=0.0,
+                ),
+                6,
+            ),
+        )
+        for outcome in synthesis_outcomes:
+            trace.add(
+                "scheduler_node_state",
+                graph_id=scheduler_graph.graph_id,
+                node_id=f"solve:{outcome.task_id}",
+                task_id=outcome.task_id,
+                status=(
+                    "completed"
+                    if outcome.error is None and outcome.accepted
+                    else "failed"
+                ),
+                generation=outcome.generation,
+                accepted=outcome.accepted,
+                elapsed_seconds=round(outcome.elapsed_seconds, 6),
+                error_code=(
+                    "stale_generation"
+                    if not outcome.accepted
+                    else type(outcome.error).__name__
+                    if outcome.error is not None
+                    else ""
+                ),
+            )
+        trace.add(
+            "scheduler_wave_completed",
+            graph_id=scheduler_graph.graph_id,
+            wave_kind="candidate_synthesis",
+            node_ids=[outcome.task_id for outcome in synthesis_outcomes],
+            completed_count=sum(
+                outcome.error is None and outcome.accepted
+                for outcome in synthesis_outcomes
+            ),
+            failed_count=sum(
+                outcome.error is not None or not outcome.accepted
+                for outcome in synthesis_outcomes
             ),
             elapsed_seconds=round(
                 max(
@@ -4192,8 +4347,10 @@ class MathForgeHarness:
         )
         for outcome in synthesis_outcomes:
             branch = branch_by_id[outcome.task_id]
-            if outcome.error is not None:
+            if outcome.error is not None or not outcome.accepted:
                 reason = self._reasoning_failure_code(outcome.error)
+                if not outcome.accepted:
+                    reason = "stale_scheduler_result"
                 failures.append(BranchFailure(branch.candidate_id, reason))
                 trace.add(
                     "candidate_generation_failed",

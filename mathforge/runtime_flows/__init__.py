@@ -5,6 +5,8 @@ from mathforge.runtime_flows.final_flow import FinalProofStatusService
 from mathforge.runtime_flows.session_flow import PublicContractGuard
 from mathforge.runtime_flows.scheduler_flow import (
     ClosureAdmission,
+    GraphRunResult,
+    NodeExecution,
     SchedulerFlow,
     TaskGraph,
     TaskNode,
@@ -16,6 +18,8 @@ __all__ = [
     "FinalProofStatusService",
     "PublicContractGuard",
     "ClosureAdmission",
+    "GraphRunResult",
+    "NodeExecution",
     "SchedulerFlow",
     "TaskGraph",
     "TaskNode",
