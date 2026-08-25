@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
 
@@ -9,6 +10,7 @@ class ReferenceFragment:
     relative_path: str
     text: str
     truncated: bool
+    sha256: str = ""
 
 
 class ReferenceLoader:
@@ -26,5 +28,11 @@ class ReferenceLoader:
             raise ValueError("only references/ and assets/ may be disclosed")
         if not requested.is_file():
             raise FileNotFoundError(relative_path)
-        text = requested.read_text(encoding="utf-8")
-        return ReferenceFragment(relative_path, text[:max_chars], len(text) > max_chars)
+        raw = requested.read_bytes()
+        text = raw.decode("utf-8")
+        return ReferenceFragment(
+            relative_path,
+            text[:max_chars],
+            len(text) > max_chars,
+            sha256(raw).hexdigest(),
+        )

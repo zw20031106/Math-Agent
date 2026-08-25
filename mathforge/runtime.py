@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 from dataclasses import dataclass, replace
 from collections import OrderedDict
 import json
@@ -9,6 +9,7 @@ from time import perf_counter
 
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.skills.registry import SkillRegistry
+from mathforge.skills.runtime import SkillRuntime
 from mathforge.skills.selector import DynamicSkillSelector
 from mathforge.agents.router_planner import RouterPlanner, method_families_for
 from mathforge.config import HarnessConfig, load_competition_config
@@ -100,6 +101,7 @@ from mathforge.parsing.problem_parser import ProblemParser
 from mathforge.parsing.answer_salvage import salvage_any_answer
 from mathforge.parsing.solution_parser import SolutionParser
 from mathforge.tools.executor import ToolExecutor
+from mathforge.tools.registry import ToolRegistry
 from mathforge.harness.tool_feedback import ToolFeedbackController
 from mathforge.verification.evidence import (
     EvidenceLedger,
@@ -207,6 +209,7 @@ _PUBLIC_METADATA_KEYS = (
     "problem_type",
     "answer_type",
     "response_mode",
+    "skill_reference_requests",
 )
 _MISSING_METADATA_ID = object()
 
@@ -299,16 +302,26 @@ class MathForgeHarness:
         self._contracts = PromptContractLoader()
         self._context_route_stage = ContextRouteStage(
             RouterPlanner(contracts=self._contracts),
-            RoleContextFactory(),
+            RoleContextFactory(
+                token_counter=self._context_budget.token_counter,
+            ),
         )
         self._skills = SkillRegistry()
-        self._dynamic_skills = DynamicSkillSelector(self._skills)
+        self._tool_registry = ToolRegistry()
+        self._skill_runtime = SkillRuntime(self._skills, self._tool_registry)
+        self._dynamic_skills = DynamicSkillSelector(
+            self._skills,
+            runtime=self._skill_runtime,
+        )
         self._solver_executor = SolverExecutor(self._provider, self._solution_parser)
         self._candidate_orchestrator = CandidateOrchestrator(
             self._solver_executor,
             self._contracts,
         )
-        self._tool_executor = ToolExecutor(use_mcp=self._config.use_mcp)
+        self._tool_executor = ToolExecutor(
+            self._tool_registry,
+            use_mcp=self._config.use_mcp,
+        )
         self._tool_feedback = ToolFeedbackController(self._tool_executor)
         self._arbitration = ArbitrationPolicy(self._tool_executor)
         self._lemma_loop = VerifiedLemmaLoop()
@@ -625,6 +638,10 @@ class MathForgeHarness:
             )
             session.problem_ir.validate()
             blackboard = MemoryBlackboard(session.working_memory)
+            skill_check_plans: dict[str, Any] = {}
+            reference_fragments: dict[str, list[Any]] = {}
+            reference_disclosures: list[dict[str, Any]] = []
+            memory_summary_ids: list[str] = []
             if self._shadow_executor is not None:
                 shadow_outcome = problem_memo.get_or_compute(
                     "l0:deterministic_shadow",
@@ -874,17 +891,63 @@ class MathForgeHarness:
                 plan=session.agent_plan,
                 candidate_limit=session.route_plan.candidate_count,
             )
+            skill_check_plans = self._skill_runtime.check_plans(
+                session.route_plan.selected_skills
+            )
+            hook_tools = [
+                tool
+                for plan in skill_check_plans.values()
+                if plan.admitted
+                for tool in plan.selected_tools
+            ]
+            session.route_plan = replace(
+                session.route_plan,
+                selected_tools=list(
+                    dict.fromkeys(
+                        (*session.route_plan.selected_tools, *hook_tools)
+                    )
+                ),
+            )
+            reference_fragments, reference_disclosures = (
+                self._disclose_skill_references(
+                    safe_metadata,
+                    session.route_plan.selected_skills,
+                )
+            )
+            route_summary_id = self._publish_host_summary(
+                blackboard,
+                "route_plan",
+                {
+                    "plan_id": session.agent_plan.plan_id,
+                    "plan_version": session.agent_plan.version,
+                    "primary_subject": session.route_plan.primary_subject,
+                    "risk_level": session.route_plan.risk_level,
+                    "candidate_count": session.route_plan.candidate_count,
+                    "selected_skills": list(session.route_plan.selected_skills),
+                    "selected_tools": list(session.route_plan.selected_tools),
+                    "skill_check_status": {
+                        name: plan.status
+                        for name, plan in skill_check_plans.items()
+                    },
+                },
+            )
+            if route_summary_id:
+                memory_summary_ids.append(route_summary_id)
             skill_compositions = (
                 {
                     role: self._dynamic_skills.compose_for_role(
                         session.problem_ir,
                         role=role,
                         route_skill_names=(
-                            session.route_plan.selected_skills
+                            self._skill_names_for_role(
+                                session.route_plan.selected_skills,
+                                role,
+                            )
                         ),
                         max_chars=self._config.skill_char_budget,
                         state=session.reasoning_state,
                         selection_context="initial",
+                        reference_fragments=reference_fragments,
                     )
                     for role in _SKILL_RUNTIME_ROLES
                 }
@@ -996,6 +1059,11 @@ class MathForgeHarness:
                 subject_candidates=session.problem_ir.subject_candidates,
                 selected_skills=session.route_plan.selected_skills,
                 selected_tools=session.route_plan.selected_tools,
+                skill_check_plans=[
+                    plan.to_dict() for plan in skill_check_plans.values()
+                ],
+                reference_disclosures=reference_disclosures,
+                memory_summary_ids=list(memory_summary_ids),
                 method_families=session.route_plan.method_families,
                 routing_reasons=self._context_route_stage.routing_reasons(
                     session.problem_ir,
@@ -1037,6 +1105,8 @@ class MathForgeHarness:
                 trace,
                 skill_compositions,
                 selection_context="initial",
+                skill_check_plans=skill_check_plans,
+                reference_disclosures=reference_disclosures,
             )
             trace.add(
                 "resource_plan_created",
@@ -1509,6 +1579,24 @@ class MathForgeHarness:
                 for candidate_id, claims in repair_triggers.items()
                 if claims
             }
+            evidence_summary_id = self._publish_host_summary(
+                blackboard,
+                "evidence_summary",
+                {
+                    "candidate_ids": [
+                        candidate.candidate_id for candidate in active_candidates
+                    ],
+                    "evidence_count": len(session.evidence),
+                    "hard_failure_count": sum(
+                        1
+                        for record in session.evidence
+                        if is_fatal_hard_failure(record)
+                    ),
+                    "repair_candidate_count": len(repair_triggers),
+                },
+            )
+            if evidence_summary_id:
+                memory_summary_ids.append(evidence_summary_id)
             postcheck_failure_codes = tuple(
                 dict.fromkeys(
                     (
@@ -1538,12 +1626,16 @@ class MathForgeHarness:
                         session.problem_ir,
                         role=role,
                         route_skill_names=(
-                            session.route_plan.selected_skills
+                            self._skill_names_for_role(
+                                session.route_plan.selected_skills,
+                                role,
+                            )
                         ),
                         max_chars=self._config.skill_char_budget,
                         state=session.reasoning_state,
                         failure_codes=postcheck_failure_codes,
                         selection_context="candidate_tool_feedback",
+                        reference_fragments=reference_fragments,
                     )
                     for role in _SKILL_RUNTIME_ROLES
                 }
@@ -1557,6 +1649,8 @@ class MathForgeHarness:
                     trace,
                     postcheck_skills,
                     selection_context="candidate_tool_feedback",
+                    skill_check_plans=skill_check_plans,
+                    reference_disclosures=reference_disclosures,
                 )
             lemma_eligible, lemma_reasons = self._lemma_eligibility(
                 session,
@@ -5584,6 +5678,8 @@ class MathForgeHarness:
         compositions,
         *,
         selection_context: str,
+        skill_check_plans: dict[str, Any] | None = None,
+        reference_disclosures: list[dict[str, Any]] | None = None,
     ) -> None:
         trace.add(
             "skills_selected",
@@ -5596,6 +5692,12 @@ class MathForgeHarness:
                     "rank": decision.rank,
                     "score": decision.score,
                     "reason": ";".join(decision.reasons),
+                    "admission_status": decision.admission_status,
+                    "required_capabilities": list(
+                        decision.required_capabilities
+                    ),
+                    "verification_hooks": list(decision.verification_hooks),
+                    "reference_hashes": list(decision.reference_hashes),
                     "included_sections": list(
                         decision.included_sections
                     ),
@@ -5613,14 +5715,105 @@ class MathForgeHarness:
                         "rank": decision.rank,
                         "score": decision.score,
                         "reasons": list(decision.reasons),
+                        "admission_status": decision.admission_status,
+                        "required_capabilities": list(
+                            decision.required_capabilities
+                        ),
+                        "verification_hooks": list(
+                            decision.verification_hooks
+                        ),
+                        "reference_hashes": list(decision.reference_hashes),
                     }
-                    for decision in composition.omitted
+                    for decision in composition.omitted[:16]
                 ]
                 for role, composition in compositions.items()
                 if composition.omitted
             },
+            omitted_counts={
+                role: len(composition.omitted)
+                for role, composition in compositions.items()
+                if composition.omitted
+            },
             skill_fingerprint=self._skills.fingerprint,
+            skill_check_plans=[
+                plan.to_dict()
+                for plan in (skill_check_plans or {}).values()
+            ],
+            reference_disclosures=list(reference_disclosures or []),
         )
+
+    def _skill_names_for_role(
+        self,
+        skill_names: list[str] | tuple[str, ...],
+        role: str,
+    ) -> list[str]:
+        if role != "AlternativeSolver":
+            return list(dict.fromkeys(skill_names))
+        return self._skill_runtime.alternative_skill_names(skill_names)
+
+    def _disclose_skill_references(
+        self,
+        metadata: dict[str, Any],
+        selected_skill_names: Iterable[str],
+    ) -> tuple[dict[str, list[Any]], list[dict[str, Any]]]:
+        allowed = set(str(item) for item in selected_skill_names)
+        requests = metadata.get("skill_reference_requests", [])
+        if not isinstance(requests, list):
+            return {}, []
+        disclosed: dict[str, list[Any]] = {}
+        records: list[dict[str, Any]] = []
+        for raw_request in requests[:16]:
+            if not isinstance(raw_request, str) or "::" not in raw_request:
+                continue
+            skill_name, relative_path = raw_request.split("::", 1)
+            skill_name = skill_name.strip()
+            relative_path = relative_path.strip()
+            if skill_name not in allowed or not relative_path:
+                records.append(
+                    {
+                        "skill_name": skill_name,
+                        "relative_path": relative_path,
+                        "status": "not_selected",
+                    }
+                )
+                continue
+            try:
+                fragment = self._skill_runtime.disclose_reference(
+                    skill_name,
+                    relative_path,
+                    max_chars=min(2000, max(256, self._config.skill_char_budget // 4)),
+                )
+            except (FileNotFoundError, ValueError):
+                records.append(
+                    {
+                        "skill_name": skill_name,
+                        "relative_path": relative_path,
+                        "status": "rejected",
+                    }
+                )
+                continue
+            disclosed.setdefault(skill_name, []).append(fragment)
+            records.append(
+                {
+                    "skill_name": skill_name,
+                    "relative_path": fragment.relative_path,
+                    "sha256": fragment.sha256,
+                    "truncated": fragment.truncated,
+                    "status": "disclosed",
+                }
+            )
+        return disclosed, records
+
+    def _publish_host_summary(
+        self,
+        blackboard: MemoryBlackboard,
+        summary_type: str,
+        payload: dict[str, Any],
+    ) -> str:
+        if not self._config.enable_memory:
+            return ""
+        item = blackboard.publish_host_summary(summary_type, payload)
+        return item.item_id
 
     @staticmethod
     def _reasoning_failure_code(error: Exception) -> str:
@@ -5778,6 +5971,21 @@ class MathForgeHarness:
             self._config.raw_context_max_chars,
             max(256, contract_budget // 2),
         )
+        available_context_tokens = max(
+            256,
+            self._config.model_context_window_tokens
+            - self._config.context_safety_margin_tokens,
+        )
+        # The character contract is the role-local prompt envelope; the token
+        # budget is the model-window admission envelope.  Keeping the latter
+        # at the available window avoids rejecting CJK/LaTeX views merely
+        # because their token/character ratio differs from the fallback
+        # estimator, while still enforcing the real model limit.
+        token_budget = available_context_tokens
+        core_token_budget = min(
+            token_budget,
+            max(2048, (token_budget * 3) // 4),
+        )
         use_all_candidates = candidates is None
         selected_candidates = (
             list(session.candidates) if use_all_candidates else list(candidates)
@@ -5817,6 +6025,8 @@ class MathForgeHarness:
                 raw_store=session.raw_context_store,
                 memory_categories=memory_categories,
                 public_metadata=session.metadata,
+                max_tokens=token_budget,
+                core_token_budget=core_token_budget,
             )
         except ContextBudgetExceeded:
             trace.add(
@@ -5832,6 +6042,10 @@ class MathForgeHarness:
             snapshot_id=view.snapshot_id,
             chars=view.char_count,
             max_chars=view.max_chars,
+            tokens=view.token_count,
+            token_budget=view.token_budget,
+            core_tokens=view.core_token_count,
+            core_token_budget=view.core_token_budget,
         )
         return view
 

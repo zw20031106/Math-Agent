@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Completed the 2026-08-25 remediation Phase 8 Skill/Context/Memory work.
+  The legacy and V3 Skill selectors now share one implementation.  Skill
+  packages undergo Host capability admission, declared verification hooks are
+  converted into a bounded check plan, and AlternativeSolver receives the
+  declared alternative method branch.  References are disclosed only on an
+  explicit selected-Skill request and carry source hashes.  Role Contexts now
+  record and enforce token budgets alongside character budgets while preserving
+  an explicit non-compressible core.  Memory is either disabled or receives
+  only bounded Host-approved route/evidence summaries.  Skill ablation now
+  requires real paired ON/OFF observations, derives correctness from outputs,
+  and reports Wilson confidence intervals, unpaired cases, and failure strata;
+  manual `skill_on_correct` labels are rejected.  Added Phase 8 admission,
+  reference, context, memory, and paired-evaluation regression coverage.
 - Completed the 2026-08-24 remediation Phase 7 verification-closure work.
   Evidence, proof obligations, repair transactions, version-matched audits,
   completion status, arbitration, and public trace now share one

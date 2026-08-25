@@ -55,7 +55,7 @@
       "version": "skill-runtime-3.0-phase4",
       "engineering_reviewer": "codex-0809-phase4-skill-audit",
       "review_date": "2026-08-09",
-      "sha256": "f5508c3c6a6a20bf2a9880a1b55104baa24f18d7f32a722e25b12477c0333b6f"
+      "sha256": "7d6767932cdc2039221b26a10768ae532953916d1820d7adff0ae9ee43311d65"
     },
     {
       "id": "phase5-effective-agent-governance",
@@ -74,7 +74,7 @@
       "version": "effective-agent-governance-4-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "4fc9a710956c614eb9ed98daf9efdfc716498bfea83e34c5b15a3ecd94254151"
+      "sha256": "3cb08518d314c3d5192733a1a86ef49b8dbb07bf87b41dc3ad51ef449c0a92d6"
     },
     {
       "id": "prompt-contracts",
@@ -177,7 +177,7 @@
       "version": "dynamic-skill-selection-1",
       "engineering_reviewer": "codex-phase5-feedback-audit",
       "review_date": "2026-07-30",
-      "sha256": "5e501738888e6f7cca4d0c7faf168bba7c8ead969db9ba70a3af612abada4fa8"
+      "sha256": "38af65548534040fc9d7b939761d37c49e62853f707d1a557f5807e27bf58562"
     },
     {
       "id": "typed-lemma-feedback",
@@ -222,7 +222,7 @@
       "version": "verification-closure-19-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
         "review_date": "2026-08-24",
-      "sha256": "229afadf09c733671be9260ce17b03d40a83bdcfa2abbc7bc324e5e363b9b72c"
+      "sha256": "01bc6e02eeb4a2682fb44442469751ea4538f96056f62893bff8baa7d3f9751d"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -253,7 +253,7 @@
       "version": "phase-f6-agent-protocol-11-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "75e471f790389dd4328660d3ec541d0669c44e829841a326a68c7b99c2d46968"
+      "sha256": "591b5721e4121bfb33b3de27ed2a34bfe836d1112e0841f312e927a6cc5e2618"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -277,7 +277,7 @@
       "version": "phase-f7-runtime-9-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "3d719fafd7f4d0af50617ed5a66b724ab16562e622c9875e1eb937dda717b771"
+      "sha256": "71e4fb3855bfde53a454064cab2830b01af4bd085fa990d8cd0ca4e95061e44a"
     },
     {
       "id": "reviewed-method-cards",
@@ -349,7 +349,7 @@
       "version": "provider-controls-6-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "58e0fd002ca02e117a1eba76790a5a05eb2627269318495cef6d3dcbc951ca36"
+      "sha256": "9c802b15a6fac312a6d13cbff9b59f13277d5700faed16c1a6c376560c09212c"
     },
     {
       "id": "phase7-live-calibration",
@@ -400,7 +400,34 @@
       "version": "review-repair-communication-audit-2.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "8c273f329827e74933a39e810b90ad0837b3f2a3eb334b65316e56205806d3bf"
+      "sha256": "a820488f2f407d4eba61378082bf8ad29819825f91b0599fb74d3b7dfbe95eaa"
+    },
+    {
+      "id": "phase8-skill-context-memory",
+      "kind": "file_set",
+      "paths": [
+        "CHANGELOG.md",
+        "mathforge/agents/skill_selector.py",
+        "mathforge/context/compressor.py",
+        "mathforge/context/role_views.py",
+        "mathforge/context/snapshots.py",
+        "mathforge/harness/stages.py",
+        "mathforge/memory/blackboard.py",
+        "mathforge/memory/policies.py",
+        "mathforge/runtime.py",
+        "mathforge/skills/__init__.py",
+        "mathforge/skills/evaluation.py",
+        "mathforge/skills/reference_loader.py",
+        "mathforge/skills/runtime.py",
+        "mathforge/skills/selector.py",
+        "tests/test_phase4_skill_packages.py",
+        "tests/test_phase8_skill_context_memory.py"
+      ],
+      "expected_count": 16,
+      "version": "skill-context-memory-1-0825-phase8",
+      "engineering_reviewer": "codex-0825-phase8-skill-context-memory",
+      "review_date": "2026-08-25",
+      "sha256": "c0df9411418b1f224c165ae6db1ee3a8d5ffc3ab3aa80abac8d8daa05b2d5405"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -421,7 +448,7 @@
       "version": "scheduler-runtime-2.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "79eb6fdb1e68df7550ce6eede10a0daade2476f8771648f598128f3a901d436c"
+      "sha256": "b8bb10a5adba648bd0c4d6962392dad2764b972e02e3e322000d2ff060a905c8"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -446,7 +473,7 @@
       "version": "production-preflight-release-governance-1.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "b77f0626c4d26e4f09a6fecd051a7fc75ba04dec1faa285f4533656547202869"
+      "sha256": "154744a655ee9e0ed67fecb975b6c1e4d2cff459819ba9bdd1fa35232575a8d2"
     },
     {
       "id": "router-e5-gold",

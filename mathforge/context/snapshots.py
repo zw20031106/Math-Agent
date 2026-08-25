@@ -40,6 +40,10 @@ class RoleContextView:
     snapshot_id: str
     payload: dict[str, Any]
     max_chars: int
+    token_count: int = 0
+    token_budget: int = 0
+    core_token_count: int = 0
+    core_token_budget: int = 0
 
     @property
     def char_count(self) -> int:
@@ -74,4 +78,8 @@ class RoleContextView:
             "payload": dict(self.payload),
             "max_chars": self.max_chars,
             "char_count": self.char_count,
+            "token_count": self.token_count,
+            "token_budget": self.token_budget,
+            "core_token_count": self.core_token_count,
+            "core_token_budget": self.core_token_budget,
         }

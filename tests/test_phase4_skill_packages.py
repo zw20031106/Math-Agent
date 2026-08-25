@@ -97,26 +97,55 @@ def test_skill_gate_reports_selection_tokens_and_scoped_on_off_ablation():
     report = evaluate_contract_canary(
         [
             {
+                "case_id": "case-1",
+                "skill_enabled": True,
                 "selected": ["quadratic-completion"],
-                "expected": ["quadratic-completion"],
-                "skill_on_correct": True,
-                "skill_off_correct": False,
-                "tokens_added": 312,
+                "expected_skills": ["quadratic-completion"],
+                "actual": "2",
+                "expected_answer": "2",
+                "answer_type": "integer",
+                "tokens": 312,
             },
             {
+                "case_id": "case-1",
+                "skill_enabled": False,
+                "selected": [],
+                "expected_skills": ["quadratic-completion"],
+                "actual": "1",
+                "expected_answer": "2",
+                "answer_type": "integer",
+                "tokens": 0,
+            },
+            {
+                "case_id": "case-2",
+                "skill_enabled": True,
                 "selected": ["rouche-zero-count"],
-                "expected": ["rouche-zero-count"],
-                "skill_on_correct": True,
-                "skill_off_correct": True,
-                "tokens_added": 388,
+                "expected_skills": ["rouche-zero-count"],
+                "actual": "3",
+                "expected_answer": "3",
+                "answer_type": "integer",
+                "tokens": 388,
+            },
+            {
+                "case_id": "case-2",
+                "skill_enabled": False,
+                "selected": [],
+                "expected_skills": ["rouche-zero-count"],
+                "actual": "3",
+                "expected_answer": "3",
+                "answer_type": "integer",
+                "tokens": 0,
             },
         ]
     )
 
-    assert report.evidence_scope == "synthetic_contract_canary"
+    assert report.evidence_scope == "paired_real_runs"
     assert report.selection_precision == 1.0
     assert report.selection_recall == 1.0
     assert report.skill_on_accuracy == 1.0
     assert report.skill_off_accuracy == 0.5
     assert report.accuracy_delta == 0.5
     assert report.tokens_added == 700
+    assert report.pair_count == 2
+    assert report.on_ci95[0] <= report.skill_on_accuracy <= report.on_ci95[1]
+    assert report.failure_strata["skill_off"]["integer_mismatch"] == 1

@@ -248,6 +248,8 @@ class ContextRouteStage:
         raw_store: RawContextStore | None = None,
         memory_categories: set[str] | frozenset[str] | None = None,
         public_metadata: dict | None = None,
+        max_tokens: int | None = None,
+        core_token_budget: int | None = None,
     ) -> RoleContextView:
         return self._contexts.build(
             problem=problem,
@@ -262,4 +264,6 @@ class ContextRouteStage:
             raw_store=raw_store,
             memory_categories=memory_categories,
             public_metadata=public_metadata,
+            max_tokens=max_tokens,
+            core_token_budget=core_token_budget,
         )
