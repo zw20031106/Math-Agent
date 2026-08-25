@@ -120,7 +120,7 @@ def test_hard_failure_always_finalizes_as_failed():
     assert final.status == "failed"
 
 
-def test_complete_audited_covers_every_required_obligation():
+def test_audit_cannot_override_open_proof_full_derivation():
     candidate = _candidate()
     obligation = _obligation()
     decision = ProofCompletionGate().evaluate(
@@ -149,7 +149,8 @@ def test_complete_audited_covers_every_required_obligation():
         audits=[audit],
         response_mode="proof_full",
     )
-    assert final.status == "complete_audited"
+    assert final.status == "incomplete"
+    assert final.terminal_closure is False
     assert final.audit_id == "audit-1"
 
 

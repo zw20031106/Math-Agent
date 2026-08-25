@@ -1574,6 +1574,7 @@ class MathSession:
     critiques: list[Any] = field(default_factory=list)
     audits: list[Any] = field(default_factory=list)
     repair_lineage: list[dict[str, Any]] = field(default_factory=list)
+    verification_closures: dict[str, Any] = field(default_factory=dict)
     evidence: list[EvidenceRecord] = field(default_factory=list)
     problem_obligations: list[ProofObligation] = field(default_factory=list)
     proof_obligations: dict[str, list[ProofObligation]] = field(default_factory=dict)
@@ -1654,6 +1655,14 @@ class MathSession:
                 for item in self.audits
             ],
             "repair_lineage": [dict(item) for item in self.repair_lineage],
+            "verification_closures": {
+                candidate_id: (
+                    item.to_dict()
+                    if hasattr(item, "to_dict")
+                    else dict(item)
+                )
+                for candidate_id, item in self.verification_closures.items()
+            },
             "evidence": [record.to_dict() for record in self.evidence],
             "problem_obligations": [
                 obligation.to_dict()

@@ -84,7 +84,58 @@ def build_claim_evidence_graph(
                         "claim_supports_claim",
                     )
                 )
-
+        # Public semantic steps are first-class graph nodes.  The Host maps
+        # them to real Claim IDs; an unmapped step remains visible as an
+        # evidence gap instead of being counted as proof progress.
+        claim_ids = {claim.claim_id for claim in candidate.claims}
+        for index, public_step in enumerate(candidate.public_solution_steps):
+            text = str(public_step).strip()
+            if not text:
+                continue
+            referenced = (
+                candidate.method_steps[index].claim_ids
+                if index < len(candidate.method_steps)
+                else []
+            )
+            mapped_claim_ids = [
+                claim_id for claim_id in referenced if claim_id in claim_ids
+            ]
+            if not mapped_claim_ids and index < len(candidate.claims):
+                if candidate.claims[index].statement.strip() == text:
+                    mapped_claim_ids = [candidate.claims[index].claim_id]
+            mapped_obligation_ids = sorted(
+                obligation.obligation_id
+                for obligation in proof_obligations.get(candidate.candidate_id, [])
+                if set(obligation.source_claim_ids).intersection(mapped_claim_ids)
+            )
+            step_node_id = _semantic_step_node_id(candidate.candidate_id, index)
+            nodes.append(
+                {
+                    "id": step_node_id,
+                    "kind": "semantic_step",
+                    "candidate_id": candidate.candidate_id,
+                    "step_index": index,
+                    "text": text,
+                    "mapped_claim_ids": sorted(set(mapped_claim_ids)),
+                    "mapped_obligation_ids": mapped_obligation_ids,
+                    "mapped": bool(mapped_claim_ids),
+                }
+            )
+            edges.append(
+                _edge(candidate_node_id, step_node_id, "candidate_has_semantic_step")
+            )
+            for claim_id in sorted(set(mapped_claim_ids)):
+                edges.append(
+                    _edge(step_node_id, _claim_node_id(candidate.candidate_id, claim_id), "step_maps_to_claim")
+                )
+            for obligation_id in mapped_obligation_ids:
+                edges.append(
+                    _edge(
+                        step_node_id,
+                        _obligation_node_id(obligation_id),
+                        "step_addresses_obligation",
+                    )
+                )
     for record in sorted(evidence_items, key=lambda item: item.evidence_id):
         evidence_node_id = _evidence_node_id(record.evidence_id)
         nodes.append(
@@ -165,7 +216,7 @@ def build_claim_evidence_graph(
 
     node_kinds = {
         kind: sum(node["kind"] == kind for node in nodes)
-        for kind in ("candidate", "claim", "evidence", "obligation")
+        for kind in ("candidate", "semantic_step", "claim", "evidence", "obligation")
     }
     evidence_statuses = {
         status: sum(
@@ -202,6 +253,10 @@ def _claim_node_id(candidate_id: str, claim_id: str) -> str:
 
 def _evidence_node_id(evidence_id: str) -> str:
     return f"evidence:{evidence_id}"
+
+
+def _semantic_step_node_id(candidate_id: str, index: int) -> str:
+    return f"step:{candidate_id}:{index}"
 
 
 def _obligation_node_id(obligation_id: str) -> str:

@@ -28,6 +28,7 @@ class CompletionDecision:
     supporting_evidence_ids: list[str] = field(default_factory=list)
     terminal_closure: bool = False
     assurance_reasons: list[str] = field(default_factory=list)
+    verification_closure: object | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -53,6 +54,9 @@ class ProofCompletionGate:
         obligations: list[ProofObligation],
         *,
         response_mode: str = "answer_only",
+        audits=(),
+        repaired: bool = False,
+        repair_lineage=(),
     ) -> CompletionDecision:
         own_evidence = [
             record
@@ -81,7 +85,15 @@ class ProofCompletionGate:
                     if obligation.required and obligation.status != "satisfied"
                 }
             )
-            closure = assess_verification(candidate, own_evidence, obligations)
+            closure = assess_verification(
+                candidate,
+                own_evidence,
+                obligations,
+                audits=audits,
+                response_mode=response_mode,
+                repaired=repaired,
+                repair_lineage=repair_lineage,
+            )
             return _decision(
                 candidate,
                 "failed",
@@ -194,7 +206,15 @@ class ProofCompletionGate:
                 if set(unresolved) == set(model_reviewed)
                 else "incomplete"
             )
-        closure = assess_verification(candidate, own_evidence, obligations)
+        closure = assess_verification(
+            candidate,
+            own_evidence,
+            obligations,
+            audits=audits,
+            response_mode=response_mode,
+            repaired=repaired,
+            repair_lineage=repair_lineage,
+        )
         return _decision(
             candidate,
             status,
@@ -219,6 +239,10 @@ def _decision(
     evidence_tier: str,
     closure,
 ) -> CompletionDecision:
+    # ``VerificationClosure`` is the sole terminal authority.  The legacy
+    # arguments remain in the function signature for trace compatibility, but
+    # consumers must never observe a status that disagrees with the closure.
+    status = closure.completion_status
     return CompletionDecision(
         candidate_id=candidate.candidate_id,
         status=status,
@@ -237,4 +261,5 @@ def _decision(
         supporting_evidence_ids=list(closure.supporting_evidence_ids),
         terminal_closure=closure.terminal_closure,
         assurance_reasons=list(closure.reasons),
+        verification_closure=closure,
     )

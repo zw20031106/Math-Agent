@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 
 from mathforge.verification.completion import CompletionDecision
+from mathforge.verification.verification_v2 import VerificationClosure, assess_verification
 
 
 PROOF_STATUSES = frozenset(
@@ -20,6 +21,7 @@ class FinalProofStatus:
     degraded: bool = False
     assurance_level: str = "candidate_valid"
     terminal_closure: bool = False
+    verification_closure: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -42,14 +44,35 @@ class FinalProofStatusService:
         audits: Iterable[Any] = (),
         repaired: bool = False,
         response_mode: str = "answer_only",
+        evidence: Iterable[Any] = (),
+        repair_lineage: Iterable[dict[str, Any]] = (),
+        closure: VerificationClosure | None = None,
     ) -> FinalProofStatus:
         candidate_id = str(candidate.candidate_id)
+
+        if closure is None:
+            closure = getattr(decision, "verification_closure", None)
+        # Runtime passes the post-audit closure explicitly so every downstream
+        # consumer observes the same immutable snapshot.  Only legacy callers
+        # that omit it need a local reconstruction from evidence.
+        if closure is None and evidence:
+            closure = assess_verification(
+                candidate,
+                evidence,
+                obligations,
+                audits=audits,
+                response_mode=response_mode,
+                repaired=repaired,
+                repair_lineage=repair_lineage,
+            )
 
         def status(
             value: str,
             reason: str,
             audit_id: str = "",
             degraded: bool = False,
+            assurance_level: str | None = None,
+            terminal_closure: bool | None = None,
         ) -> FinalProofStatus:
             return FinalProofStatus(
                 candidate_id,
@@ -57,13 +80,24 @@ class FinalProofStatusService:
                 reason,
                 audit_id,
                 degraded,
-                decision.assurance_level,
-                decision.terminal_closure,
+                assurance_level or (
+                    closure.assurance_level
+                    if closure is not None
+                    else decision.assurance_level
+                ),
+                terminal_closure
+                if terminal_closure is not None
+                else (
+                    closure.terminal_closure
+                    if closure is not None
+                    else decision.terminal_closure
+                ),
+                closure.to_dict() if closure is not None else None,
             )
 
-        if decision.status == "failed":
+        if closure is not None and closure.completion_status == "failed":
             return status("failed", "hard_evidence_failed")
-        if not self._proof_shape_complete(candidate, response_mode):
+        if not self._proof_shape_complete(candidate, response_mode, closure):
             return status(
                 "incomplete",
                 "proof_full_steps_missing",
@@ -84,12 +118,32 @@ class FinalProofStatusService:
             ),
             None,
         )
+        if closure is not None and closure.audit_id:
+            matching_audit = next(
+                (
+                    item
+                    for item in reversed(tuple(audits))
+                    if str(getattr(item, "audit_id", "")) == closure.audit_id
+                ),
+                matching_audit,
+            )
         if matching_audit is not None:
             if matching_audit.status == "failed":
                 return status(
                     "failed",
                     "final_audit_failed",
                     str(matching_audit.audit_id),
+                )
+            if (
+                matching_audit.status in {"complete_audited", "complete_hard"}
+                and closure is not None
+                and not closure.terminal_closure
+            ):
+                return status(
+                    "incomplete",
+                    "audit_complete_but_terminal_closure_open",
+                    str(matching_audit.audit_id),
+                    degraded=True,
                 )
             if (
                 matching_audit.status == "complete_audited"
@@ -102,6 +156,8 @@ class FinalProofStatusService:
                     "complete_audited",
                     "version_matched_audit_complete",
                     str(matching_audit.audit_id),
+                    assurance_level="audited",
+                    terminal_closure=True,
                 )
             if (
                 matching_audit.status == "complete_hard"
@@ -114,6 +170,8 @@ class FinalProofStatusService:
                     "complete_hard",
                     "hard_evidence_and_audit_complete",
                     str(matching_audit.audit_id),
+                    assurance_level="tool_supported",
+                    terminal_closure=True,
                 )
             return status(
                 "incomplete",
@@ -122,6 +180,18 @@ class FinalProofStatusService:
                 degraded=True,
             )
 
+        if closure is not None and closure.completion_status == "complete_audited":
+            return status(
+                "complete_audited",
+                "verification_closure_audited",
+                closure.audit_id,
+            )
+        if closure is not None and closure.completion_status == "complete_hard" and closure.terminal_closure:
+            return status(
+                "complete_hard",
+                "verification_closure_terminal",
+                closure.audit_id,
+            )
         if repaired:
             return status(
                 "incomplete",
@@ -140,12 +210,26 @@ class FinalProofStatusService:
         )
 
     @staticmethod
-    def _proof_shape_complete(candidate: Any, response_mode: str) -> bool:
+    def _proof_shape_complete(
+        candidate: Any,
+        response_mode: str,
+        closure: VerificationClosure | None = None,
+    ) -> bool:
         if str(response_mode) != "proof_full":
+            return bool(str(candidate.final_answer).strip())
+        # Prefer the shared semantic closure when available; merely repeating
+        # an answer twice is not a proof.
+        if closure is not None and closure.derivation_quality == "complete":
             return bool(str(candidate.final_answer).strip())
         steps = [
             str(item).strip()
             for item in getattr(candidate, "public_solution_steps", ())
             if str(item).strip()
         ]
-        return bool(str(candidate.final_answer).strip()) and len(steps) >= 2
+        if len(steps) < 2:
+            return False
+        answer = " ".join(str(candidate.final_answer).split()).casefold()
+        return bool(str(candidate.final_answer).strip()) and any(
+            " ".join(step.split()).casefold() != answer
+            for step in steps
+        )

@@ -240,29 +240,32 @@ class ClaimEvidenceVerifier:
             )
             if not request.ready:
                 claim.verification_state = ClaimVerificationState.UNKNOWN.value
-                if request.status != "unsupported" or claim.check_type.strip().lower() != "reasoning":
-                    try:
-                        record = ledger.record_unknown_check(
-                            candidate_id=candidate.candidate_id,
-                            claim_id=claim.claim_id,
-                            check_suggestion=claim.check_type,
-                            tool_name=request.tool_name,
-                            request_status=request.status,
-                            validation_errors=request.validation_errors,
-                            reason={
-                                "route_not_selected": "check not selected by route",
-                                "argument_unavailable": (
-                                    "safe argument reconstruction unavailable"
-                                ),
-                                "schema_invalid": "tool input schema invalid",
-                            }.get(
-                                request.status,
-                                "unsupported check suggestion",
+                # Unsupported narrative/reasoning checks are still evidence:
+                # silently dropping them made an unverified Claim look as if
+                # it had never been assessed.  The explicit unknown record is
+                # consumed by VerificationClosure and remains non-fatal.
+                try:
+                    record = ledger.record_unknown_check(
+                        candidate_id=candidate.candidate_id,
+                        claim_id=claim.claim_id,
+                        check_suggestion=claim.check_type,
+                        tool_name=request.tool_name,
+                        request_status=request.status,
+                        validation_errors=request.validation_errors,
+                        reason={
+                            "route_not_selected": "check not selected by route",
+                            "argument_unavailable": (
+                                "safe argument reconstruction unavailable"
                             ),
-                        )
-                    except BudgetExceeded:
-                        break
-                    records.append(record)
+                            "schema_invalid": "tool input schema invalid",
+                        }.get(
+                            request.status,
+                            "unsupported check suggestion",
+                        ),
+                    )
+                except BudgetExceeded:
+                    break
+                records.append(record)
                 continue
             tool_name = request.tool_name
             arguments = request.arguments

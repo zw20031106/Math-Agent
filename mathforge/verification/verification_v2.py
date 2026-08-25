@@ -9,14 +9,12 @@ evidence must all agree.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 
 from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProofObligation
-from mathforge.verification.capabilities import (
-    capability_satisfies_obligation,
-    derive_claim_kind,
-)
+from mathforge.verification.capabilities import capability_satisfies_obligation
 from mathforge.verification.evidence import (
     is_fatal_hard_failure,
     is_semantic_hard_pass,
@@ -52,6 +50,18 @@ class VerificationClosure:
     assurance_level: str
     terminal_closure: bool
     reasons: tuple[str, ...] = ()
+    # Versioned terminal metadata shared by completion, arbitration and trace.
+    completion_status: str = "incomplete"
+    candidate_version: int = 1
+    audit_id: str = ""
+    audit_status: str = ""
+    repaired: bool = False
+    repair_transaction_status: str = ""
+    active_evidence_ids: tuple[str, ...] = ()
+    semantic_step_count: int = 0
+    mapped_semantic_step_count: int = 0
+    derivation_quality: str = "unknown"
+    required_coverage: float = 0.0
 
     @property
     def hard_verified(self) -> bool:
@@ -76,6 +86,7 @@ class VerificationClosure:
             "supported_obligation_ids",
             "supporting_evidence_ids",
             "reasons",
+            "active_evidence_ids",
         ):
             payload[name] = list(payload[name])
         payload["hard_verified"] = self.hard_verified
@@ -197,7 +208,7 @@ def _formal_support(
     return all(item.obligation_id in evidence_obligations for item in required)
 
 
-def _audit_matches(candidate: CandidateSolution, audits: Iterable[Any]) -> bool:
+def _matching_audit(candidate: CandidateSolution, audits: Iterable[Any]) -> Any | None:
     for audit in reversed(tuple(audits)):
         if (
             str(getattr(audit, "candidate_id", "")) == candidate.candidate_id
@@ -207,8 +218,74 @@ def _audit_matches(candidate: CandidateSolution, audits: Iterable[Any]) -> bool:
             and not getattr(audit, "open_obligation_ids", ())
             and bool(getattr(audit, "coverage_complete", True))
         ):
-            return True
-    return False
+            return audit
+    return None
+
+
+def _audit_matches(candidate: CandidateSolution, audits: Iterable[Any]) -> bool:
+    return _matching_audit(candidate, audits) is not None
+
+
+def _semantic_step_quality(
+    candidate: CandidateSolution,
+    *,
+    response_mode: str,
+) -> tuple[int, int, str]:
+    """Measure public derivation coverage without counting answer echoes.
+
+    The model supplies public step text and the Host owns Claim/MethodStep
+    identifiers.  A step is mapped only when its referenced Claim exists (or
+    when the Host can prove a one-to-one statement match), so a parser-created
+    ``Final answer: ...`` line cannot masquerade as reasoning.
+    """
+
+    steps = [
+        str(item).strip()
+        for item in candidate.public_solution_steps
+        if str(item).strip()
+    ]
+    claim_ids = {claim.claim_id for claim in candidate.claims}
+    mapped = 0
+    for index, step in enumerate(steps):
+        explicit = (
+            candidate.method_steps[index].claim_ids
+            if index < len(candidate.method_steps)
+            else []
+        )
+        if explicit and set(explicit) <= claim_ids:
+            mapped += 1
+            continue
+        if (
+            index < len(candidate.claims)
+            and candidate.claims[index].statement.strip() == step
+        ):
+            mapped += 1
+
+    answer = " ".join(str(candidate.final_answer).split()).casefold()
+    answer_only_prefix = re.compile(
+        r"^(?:final\s+answer|answer|答案)\s*[:：]?\s*", re.IGNORECASE
+    )
+    answer_only = bool(steps) and all(
+        answer_only_prefix.sub("", step).strip().casefold() == answer
+        for step in steps
+    )
+    # Legacy fixtures may contain public steps and Claims but no explicit
+    # MethodStep metadata.  The Host's positional projection is the only safe
+    # compatibility mapping in that case; a claimless answer remains
+    # answer-only and cannot pass this branch.
+    if not candidate.method_steps and len(steps) >= 2 and candidate.claims and not answer_only:
+        mapped = len(steps)
+    if not steps or answer_only:
+        quality = "answer_only"
+    elif mapped == len(steps) and candidate.claims:
+        quality = "complete"
+    elif mapped:
+        quality = "partial"
+    else:
+        quality = "answer_only"
+    if response_mode == "proof_full" and (len(steps) < 2 or quality != "complete"):
+        quality = "partial" if steps else "answer_only"
+    return len(steps), mapped, quality
 
 
 def assess_verification(
@@ -218,6 +295,9 @@ def assess_verification(
     *,
     audits: Iterable[Any] = (),
     independently_corroborated: bool = False,
+    response_mode: str = "answer_only",
+    repaired: bool = False,
+    repair_lineage: Iterable[dict[str, Any]] = (),
 ) -> VerificationClosure:
     """Assess the candidate using only terminal-closure evidence."""
 
@@ -228,13 +308,13 @@ def assess_verification(
         if record.candidate_id == candidate.candidate_id
         and record.transaction_status == "active"
     ]
+    semantic_step_count, mapped_semantic_step_count, derivation_quality = (
+        _semantic_step_quality(candidate, response_mode=response_mode)
+    )
     conclusion_id = resolve_conclusion_claim_id(candidate)
     closure = critical_dependency_closure(candidate, conclusion_id)
     closure_set = set(closure)
     claim_by_id = {claim.claim_id: claim for claim in candidate.claims}
-    for claim in candidate.claims:
-        if claim.claim_kind == "unknown":
-            claim.claim_kind = derive_claim_kind(claim.check_type)
 
     required = [item for item in obligations_list if item.required]
     required_ids = tuple(item.obligation_id for item in required)
@@ -268,6 +348,13 @@ def assess_verification(
     answer_contract_valid = candidate_valid and bool(
         candidate.final_answer.strip() and candidate.answer_type.strip()
     )
+    repair_status = ""
+    for lineage in reversed(tuple(repair_lineage)):
+        if not isinstance(lineage, dict):
+            continue
+        if str(lineage.get("proposed_candidate_id", "")) == candidate.candidate_id:
+            repair_status = str(lineage.get("transaction_status", ""))
+            break
     reasons: list[str] = []
     if not conclusion_id:
         reasons.append("conclusion_claim_missing_or_ambiguous")
@@ -277,6 +364,10 @@ def assess_verification(
         reasons.append("unmapped_required_obligation")
     if fatal_closure:
         reasons.append("critical_closure_hard_failure")
+    if repair_status in {"rolled_back", "rejected"}:
+        reasons.append("repair_transaction_inactive")
+    if response_mode == "proof_full" and derivation_quality != "complete":
+        reasons.append("proof_full_derivation_incomplete")
     if any(
         claim_by_id[claim_id].status == "rejected"
         for claim_id in closure_set
@@ -313,27 +404,48 @@ def assess_verification(
     if tool_supported:
         assurance = "tool_supported"
 
+    matching_audit = _matching_audit(candidate, audits)
     audited = bool(
         answer_contract_valid
         and closure
         and not unmapped
-        and _audit_matches(candidate, audits)
+        and matching_audit is not None
     )
     if audited:
         assurance = "audited"
     if _formal_support(own_evidence, closure_set, required):
         assurance = "formally_verified"
 
+    proof_shape_terminal = not (
+        response_mode == "proof_full" and derivation_quality != "complete"
+    )
     terminal = bool(
         conclusion_id
         and closure
         and not unmapped
+        and repair_status not in {"rolled_back", "rejected"}
+        and proof_shape_terminal
         and (
             tool_supported
             or audited
             or assurance == "formally_verified"
         )
     )
+    if fatal_closure or repair_status in {"rolled_back", "rejected"}:
+        completion_status = "failed"
+    elif response_mode == "proof_full" and derivation_quality != "complete":
+        completion_status = "incomplete"
+    elif audited:
+        completion_status = "complete_audited"
+    elif tool_supported or assurance == "formally_verified":
+        completion_status = "complete_hard"
+    elif not required and answer_contract_valid:
+        # Compatibility status for answer-only candidates.  The assurance and
+        # terminal flags remain authoritative about mathematical closure.
+        completion_status = "complete_hard"
+    else:
+        completion_status = "incomplete"
+
     return VerificationClosure(
         candidate_id=candidate.candidate_id,
         conclusion_claim_id=conclusion_id,
@@ -346,6 +458,31 @@ def assess_verification(
         assurance_level=assurance,
         terminal_closure=terminal,
         reasons=tuple(dict.fromkeys(reasons)),
+        completion_status=completion_status,
+        candidate_version=int(candidate.version),
+        audit_id=(
+            str(getattr(matching_audit, "audit_id", ""))
+            if matching_audit is not None
+            else ""
+        ),
+        audit_status=(
+            str(getattr(matching_audit, "status", ""))
+            if matching_audit is not None
+            else ""
+        ),
+        repaired=bool(repaired),
+        repair_transaction_status=repair_status,
+        active_evidence_ids=tuple(
+            sorted(record.evidence_id for record in own_evidence)
+        ),
+        semantic_step_count=semantic_step_count,
+        mapped_semantic_step_count=mapped_semantic_step_count,
+        derivation_quality=derivation_quality,
+        required_coverage=(
+            len(set(supported)) / len(required_ids)
+            if required_ids
+            else 1.0
+        ),
     )
 
 
@@ -355,4 +492,5 @@ __all__ = [
     "assess_verification",
     "critical_dependency_closure",
     "resolve_conclusion_claim_id",
+    "_semantic_step_quality",
 ]

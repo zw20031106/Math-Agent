@@ -22,7 +22,10 @@ from mathforge.verification.methods import (
     candidate_method_signature,
     method_contract_valid,
 )
-from mathforge.verification.verification_v2 import assess_verification
+from mathforge.verification.verification_v2 import (
+    VerificationClosure,
+    assess_verification,
+)
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,12 @@ class CandidateRank:
     review_support: int
     soft_score: int
     deterministic_tie_break: str
+    closure_status: str = "incomplete"
+    terminal_closure: bool = False
+    derivation_quality: str = "unknown"
+    parse_tier: str = "rejected"
+    degraded: bool = False
+    semantic_coverage: float = 0.0
 
     @property
     def substantive_key(self) -> tuple:
@@ -43,13 +52,38 @@ class CandidateRank:
             "hard_evidence": 0,
             "independent_corroboration": 1,
             "model_review": 2,
-            "not_required": 3,
-            "incomplete": 4,
+            # A candidate with no obligation/evidence is less informative
+            # than one that was actively reviewed but remains incomplete.
+            "incomplete": 3,
+            "not_required": 4,
         }.get(self.evidence_tier, 4)
+        closure_rank = {
+            "complete_audited": 0,
+            "complete_hard": 1,
+            "incomplete": 3,
+            "failed": 4,
+        }.get(self.closure_status, 3)
+        derivation_rank = {
+            "complete": 0,
+            "partial": 1,
+            "answer_only": 2,
+            "unknown": 3,
+        }.get(self.derivation_quality, 3)
+        parse_rank = {
+            "strict": 0,
+            "recovered": 1,
+            "answer_recovered": 2,
+            "rejected": 3,
+        }.get(self.parse_tier, 3)
         return (
             self.hard_fail_count,
             tier_rank,
+            closure_rank,
+            derivation_rank,
+            parse_rank,
+            int(self.degraded),
             -self.required_coverage,
+            -self.semantic_coverage,
             -self.answer_consistency,
             -self.independent_agreement,
             -self.review_support,
@@ -71,6 +105,12 @@ class CandidateRank:
             "review_support": self.review_support,
             "soft_score": self.soft_score,
             "deterministic_tie_break": self.deterministic_tie_break,
+            "closure_status": self.closure_status,
+            "terminal_closure": self.terminal_closure,
+            "derivation_quality": self.derivation_quality,
+            "parse_tier": self.parse_tier,
+            "degraded": self.degraded,
+            "semantic_coverage": self.semantic_coverage,
             "substantive_key": list(self.substantive_key),
             "lexicographic_key": list(self.lexicographic_key),
         }
@@ -85,6 +125,7 @@ class ArbitrationResult:
     disagreement_pairs: list[tuple[str, str]]
     used_llm_arbiter: bool = False
     tie_break_reason: str = "evidence_rank"
+    targeted_check_required: bool = False
 
 
 class ArbitrationPolicy:
@@ -100,6 +141,10 @@ class ArbitrationPolicy:
         llm_arbiter: Callable[[list[CandidateSolution]], str] | None = None,
         budget: CallBudget | None = None,
         problem: ProblemIR | None = None,
+        verification_closures: dict[str, VerificationClosure] | None = None,
+        audits=(),
+        response_mode: str | None = None,
+        repair_lineage=(),
     ) -> ArbitrationResult:
         if not candidates:
             raise ValueError("at least one candidate is required")
@@ -116,8 +161,21 @@ class ArbitrationPolicy:
             for cluster in clusters
             for candidate_id in cluster
         }
+        effective_response_mode = response_mode or (
+            problem.response_mode if problem is not None else "answer_only"
+        )
+        closures = verification_closures or {}
         ranks = [
-            self._rank(candidate, evidence, obligations.get(candidate.candidate_id, []), cluster_by_id)
+            self._rank(
+                candidate,
+                evidence,
+                obligations.get(candidate.candidate_id, []),
+                cluster_by_id,
+                closure=closures.get(candidate.candidate_id),
+                audits=audits,
+                response_mode=effective_response_mode,
+                repair_lineage=repair_lineage,
+            )
             for candidate in candidates
         ]
         ranks.sort(key=lambda rank: rank.lexicographic_key)
@@ -129,6 +187,7 @@ class ArbitrationPolicy:
         ]
         used_llm = False
         selected_id = ranks[0].candidate_id
+        targeted_check_required = False
         tie_break_reason = (
             "evidence_rank"
             if len(tied_ids) == 1
@@ -142,6 +201,20 @@ class ArbitrationPolicy:
                 selected_id = proposed
                 used_llm = True
                 tie_break_reason = "llm_arbiter"
+        elif len(tied_ids) > 1:
+            # A digest is only a reproducible ordering.  For semantic
+            # Candidates expose that a targeted verifier/new branch is still
+            # required; legacy answer-only fixtures retain the old reason.
+            targeted_check_required = any(
+                candidate_by_id[item].claims
+                or candidate_by_id[item].public_solution_steps
+                for item in tied_ids
+            )
+            tie_break_reason = (
+                "targeted_check_required"
+                if targeted_check_required
+                else "public_content_digest"
+            )
         selected = next(candidate for candidate in candidates if candidate.candidate_id == selected_id)
         return ArbitrationResult(
             selected,
@@ -151,6 +224,7 @@ class ArbitrationPolicy:
             equivalence.disagreement_pairs,
             used_llm,
             tie_break_reason,
+            targeted_check_required,
         )
 
     @staticmethod
@@ -159,6 +233,11 @@ class ArbitrationPolicy:
         evidence: list[EvidenceRecord],
         obligations: list[ProofObligation],
         clusters: dict[str, list[CandidateSolution]],
+        *,
+        closure: VerificationClosure | None = None,
+        audits=(),
+        response_mode: str = "answer_only",
+        repair_lineage=(),
     ) -> CandidateRank:
         own_evidence = [
             record
@@ -214,12 +293,18 @@ class ArbitrationPolicy:
             and record.payload.get("review_target_ids")
             for record in own_evidence
         )
-        closure = assess_verification(
+        closure = closure or assess_verification(
             candidate,
             own_evidence,
             obligations,
+            audits=audits,
             independently_corroborated=bool(independent_agreement),
+            response_mode=response_mode,
+            repair_lineage=repair_lineage,
         )
+        # Completion status after Final Audit is authoritative even when the
+        # obligation objects still carry the pre-audit ``unresolved`` state.
+        coverage = closure.required_coverage
         if required and closure.hard_verified:
             evidence_tier = "hard_evidence"
         elif required and coverage == 1.0 and not candidate.claims:
@@ -255,6 +340,11 @@ class ArbitrationPolicy:
             evidence_tier = "model_review"
         else:
             evidence_tier = "incomplete"
+        semantic_coverage = (
+            closure.mapped_semantic_step_count / closure.semantic_step_count
+            if closure.semantic_step_count
+            else 0.0
+        )
         return CandidateRank(
             candidate_id=candidate.candidate_id,
             hard_fail_count=hard_fails,
@@ -265,6 +355,12 @@ class ArbitrationPolicy:
             review_support=review_support,
             soft_score=soft_score,
             deterministic_tie_break=_candidate_digest(candidate),
+            closure_status=closure.completion_status,
+            terminal_closure=closure.terminal_closure,
+            derivation_quality=closure.derivation_quality,
+            parse_tier=candidate.parse_tier,
+            degraded=bool(candidate.degraded),
+            semantic_coverage=semantic_coverage,
         )
 
 

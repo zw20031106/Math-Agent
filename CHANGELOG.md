@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Completed the 2026-08-24 remediation Phase 7 verification-closure work.
+  Evidence, proof obligations, repair transactions, version-matched audits,
+  completion status, arbitration, and public trace now share one
+  `VerificationClosure` snapshot.  Final Audit is followed by a fresh
+  closure recomputation; repaired candidates carry version and transaction
+  state, unsupported reasoning checks emit explicit unknown evidence, and
+  proof-full candidates cannot become complete without mapped public
+  derivation.  Arbitration now gates hard failures and ranks closure,
+  derivation quality, parse tier, degradation, and coverage before a digest;
+  substantive ties expose a targeted-check requirement instead of claiming
+  that a hash is mathematically superior.  Added closure, audit-version,
+  unknown-evidence, ranking, and trace regression coverage.
 - Completed the 2026-08-24 remediation Phase 6 candidate cross-review and
   independence work. CandidatePool and runtime review selection now preserve
   every candidate by `candidate_id`/`branch_id`, including multiple

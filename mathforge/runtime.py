@@ -2553,6 +2553,13 @@ class MathForgeHarness:
                     session.evidence,
                     session.proof_obligations.get(item.candidate_id, []),
                     response_mode=session.problem_ir.response_mode,
+                    audits=session.audits,
+                    repaired=any(
+                        lineage.get("proposed_candidate_id") == item.candidate_id
+                        and not bool(lineage.get("rolled_back"))
+                        for lineage in session.repair_lineage
+                    ),
+                    repair_lineage=session.repair_lineage,
                 )
                 for item in viable
             ]
@@ -2606,6 +2613,16 @@ class MathForgeHarness:
                                     [],
                                 )
                             ],
+                            "best_available_state": (
+                                "terminal_closed"
+                                if decision.terminal_closure
+                                else (
+                                    "not_disproved"
+                                    if decision.assurance_level
+                                    in {"not_disproved", "independently_corroborated"}
+                                    else "incomplete"
+                                )
+                            ),
                         }
                         for decision in completion_decisions
                     ],
@@ -2643,6 +2660,42 @@ class MathForgeHarness:
                     ledger,
                     role_skill_contexts.get("VerifierSkeptic", ""),
                 )
+            # Final Audit may close a finding or certify a repaired version.
+            # Recompute the one authoritative closure after that point; do
+            # not let Arbitration or FinalStatus consume the pre-audit view.
+            completion_decisions = [
+                self._proof_stage.evaluate(
+                    item,
+                    session.evidence,
+                    session.proof_obligations.get(item.candidate_id, []),
+                    response_mode=session.problem_ir.response_mode,
+                    audits=session.audits,
+                    repaired=any(
+                        lineage.get("proposed_candidate_id") == item.candidate_id
+                        and not bool(lineage.get("rolled_back"))
+                        for lineage in session.repair_lineage
+                    ),
+                    repair_lineage=session.repair_lineage,
+                )
+                for item in viable
+            ]
+            session.verification_closures = {
+                decision.candidate_id: decision.verification_closure
+                for decision in completion_decisions
+                if decision.verification_closure is not None
+            }
+            trace.add(
+                "verification_closure_recomputed",
+                reason="final_audit_and_active_transactions_included",
+                closures={
+                    candidate_id: closure.to_dict()
+                    for candidate_id, closure in session.verification_closures.items()
+                },
+            )
+            completion_status_by_id = {
+                decision.candidate_id: decision.status
+                for decision in completion_decisions
+            }
             decision_by_id = {
                 item.candidate_id: item for item in completion_decisions
             }
@@ -2671,6 +2724,9 @@ class MathForgeHarness:
                     audits=session.audits,
                     repaired=repaired,
                     response_mode=session.problem_ir.response_mode,
+                    evidence=session.evidence,
+                    repair_lineage=session.repair_lineage,
+                    closure=decision.verification_closure,
                 )
                 completion_status_by_id[item.candidate_id] = final_status.status
                 final_proof_statuses.append(final_status.to_dict())
@@ -2760,23 +2816,60 @@ class MathForgeHarness:
             if len(viable) == 1:
                 candidate = viable[0]
                 single_decision = decision_by_id.get(candidate.candidate_id)
+                single_closure = (
+                    single_decision.verification_closure
+                    if single_decision is not None
+                    else session.verification_closures.get(candidate.candidate_id)
+                )
                 single_terminal = bool(
-                    single_decision is not None
-                    and single_decision.hard_verified
+                    single_closure is not None
+                    and single_closure.terminal_closure
                 )
                 ranking = [candidate.candidate_id]
                 single_coverage = (
-                    1.0
-                    if single_terminal
+                    single_closure.required_coverage
+                    if single_closure is not None
                     else 0.0
                 )
-                single_tier = "hard_evidence" if single_terminal else "incomplete"
+                single_tier = (
+                    "hard_evidence"
+                    if single_terminal
+                    else "incomplete"
+                )
                 single_tier_rank = {
                     "hard_evidence": 0,
                     "independent_corroboration": 1,
                     "model_review": 2,
                     "incomplete": 3,
                 }[single_tier]
+                single_closure_rank = {
+                    "complete_audited": 0,
+                    "complete_hard": 1,
+                    "incomplete": 3,
+                    "failed": 4,
+                }.get(
+                    single_closure.completion_status
+                    if single_closure is not None
+                    else "incomplete",
+                    3,
+                )
+                single_derivation_rank = {
+                    "complete": 0,
+                    "partial": 1,
+                    "answer_only": 2,
+                    "unknown": 3,
+                }.get(
+                    single_closure.derivation_quality
+                    if single_closure is not None
+                    else "unknown",
+                    3,
+                )
+                single_parse_rank = {
+                    "strict": 0,
+                    "recovered": 1,
+                    "answer_recovered": 2,
+                    "rejected": 3,
+                }.get(candidate.parse_tier, 3)
                 single_review_support = sum(
                     1
                     if record.status == "pass"
@@ -2806,13 +2899,37 @@ class MathForgeHarness:
                             else "candidate_valid"
                         ),
                         "terminal_closure": single_terminal,
+                        "closure_status": (
+                            single_closure.completion_status
+                            if single_closure is not None
+                            else "incomplete"
+                        ),
+                        "derivation_quality": (
+                            single_closure.derivation_quality
+                            if single_closure is not None
+                            else "unknown"
+                        ),
+                        "parse_tier": candidate.parse_tier,
+                        "degraded": bool(candidate.degraded),
+                        "semantic_coverage": (
+                            single_closure.mapped_semantic_step_count
+                            / single_closure.semantic_step_count
+                            if single_closure is not None
+                            and single_closure.semantic_step_count
+                            else 0.0
+                        ),
                         "review_support": single_review_support,
                         "soft_score": 0,
                         "deterministic_tie_break": single_digest,
                         "substantive_key": [
                             0,
                             single_tier_rank,
+                            single_closure_rank,
+                            single_derivation_rank,
+                            single_parse_rank,
+                            int(candidate.degraded),
                             -single_coverage,
+                            0,
                             -1,
                             0,
                             -single_review_support,
@@ -2821,7 +2938,12 @@ class MathForgeHarness:
                         "lexicographic_key": [
                             0,
                             single_tier_rank,
+                            single_closure_rank,
+                            single_derivation_rank,
+                            single_parse_rank,
+                            int(candidate.degraded),
                             -single_coverage,
+                            0,
                             -1,
                             0,
                             -single_review_support,
@@ -2843,6 +2965,10 @@ class MathForgeHarness:
                     session.proof_obligations,
                     budget=session.budget,
                     problem=session.problem_ir,
+                    verification_closures=session.verification_closures,
+                    audits=session.audits,
+                    response_mode=session.problem_ir.response_mode,
+                    repair_lineage=session.repair_lineage,
                 )
                 candidate = arbitration.selected
                 ranking = [
@@ -2858,11 +2984,15 @@ class MathForgeHarness:
                 )
                 used_llm_arbiter = arbitration.used_llm_arbiter
                 tie_break_reason = arbitration.tie_break_reason
+                targeted_check_required = arbitration.targeted_check_required
                 selection_mode = "multi_candidate_arbitration"
+            if len(viable) == 1:
+                targeted_check_required = False
             selection_reason = (
                 "prefer hard evidence, independent corroboration, and "
-                "targeted model review in that order; exact substantive "
-                "ties use a stable public-content digest"
+                "targeted model review in that order; parse/derivation "
+                "quality and closure are ranked before a stable digest; "
+                "a digest never claims mathematical superiority"
             )
             trace.add(
                 "candidate_arbitrated",
@@ -2877,6 +3007,25 @@ class MathForgeHarness:
                 ),
                 selection_reason=selection_reason,
                 tie_break_reason=tie_break_reason,
+                targeted_check_required=targeted_check_required,
+                selected_verification_closure=(
+                    session.verification_closures.get(candidate.candidate_id).to_dict()
+                    if session.verification_closures.get(candidate.candidate_id)
+                    is not None
+                    else {}
+                ),
+                best_available_state=(
+                    "terminal_closed"
+                    if session.verification_closures.get(candidate.candidate_id)
+                    and session.verification_closures[candidate.candidate_id].terminal_closure
+                    else (
+                        "not_disproved"
+                        if session.verification_closures.get(candidate.candidate_id)
+                        and session.verification_closures[candidate.candidate_id].assurance_level
+                        in {"not_disproved", "independently_corroborated"}
+                        else "incomplete"
+                    )
+                ),
                 selected_verification_status=completion_status_by_id.get(
                     candidate.candidate_id,
                     "incomplete",
@@ -3232,15 +3381,31 @@ class MathForgeHarness:
                         ),
                         None,
                     )
+                salvage_closure = session.verification_closures.get(
+                    selected_candidate_id
+                )
+                salvage_state = (
+                    "terminal_closed"
+                    if salvage_closure is not None
+                    and salvage_closure.terminal_closure
+                    else (
+                        "not_disproved"
+                        if salvage_closure is not None
+                        and salvage_closure.assurance_level
+                        in {"not_disproved", "independently_corroborated"}
+                        else "incomplete"
+                    )
+                )
                 terminalizer.safe(
                     "salvaged_candidate_trace",
                     lambda: trace.add(
                         "candidate_salvaged",
                         candidate_id=selected_candidate_id,
-                        checkpoint=last_safe_checkpoint,
-                        reason="downstream_failure_preserved_unrefuted_candidate",
-                        error_code=error_code,
-                        public_solution={
+                         checkpoint=last_safe_checkpoint,
+                         reason="downstream_failure_preserved_unrefuted_candidate",
+                         error_code=error_code,
+                         best_available_state=salvage_state,
+                         public_solution={
                             "public_solution_steps": list(
                                 last_safe_candidate.public_solution_steps
                             ),
@@ -3274,9 +3439,15 @@ class MathForgeHarness:
                             ranking=[selected_candidate_id],
                             viable_candidates=[selected_candidate_id],
                             rejected_candidates=[],
-                            selection_mode="degraded_candidate_salvage",
-                            selected_verification_status="best_available",
-                        ),
+                             selection_mode="degraded_candidate_salvage",
+                             selected_verification_status="best_available",
+                             best_available_state=salvage_state,
+                             selected_verification_closure=(
+                                 salvage_closure.to_dict()
+                                 if salvage_closure is not None
+                                 else {}
+                             ),
+                         ),
                         None,
                     )
                 if "final_answer_selected" not in existing_events:
@@ -3288,9 +3459,10 @@ class MathForgeHarness:
                             selection_reason=(
                                 "last safe candidate retained after downstream "
                                 "failure"
-                            ),
-                            verification_status="best_available",
-                            selected_source=last_safe_candidate.source,
+                             ),
+                             verification_status="best_available",
+                             best_available_state=salvage_state,
+                             selected_source=last_safe_candidate.source,
                             selection_quality="degraded_candidate_salvage",
                             public_solution={
                                 "solution_text": last_safe_candidate.solution_text,
@@ -6746,6 +6918,11 @@ class MathForgeHarness:
                     "candidate_id": candidate.candidate_id,
                     "version": candidate.version,
                     "status": status,
+                    "verification_closure": (
+                        session.verification_closures[candidate.candidate_id].to_dict()
+                        if candidate.candidate_id in session.verification_closures
+                        else {}
+                    ),
                     "reason_codes": sorted(set(reasons)),
                     "hard_failure_evidence_ids": hard_failures,
                     "claims": [

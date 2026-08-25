@@ -148,12 +148,18 @@ class ProofStage:
         obligations: list[ProofObligation],
         *,
         response_mode: str = "answer_only",
+        audits=(),
+        repaired: bool = False,
+        repair_lineage=(),
     ) -> CompletionDecision:
         return self._completion_gate.evaluate(
             candidate,
             evidence,
             obligations,
             response_mode=response_mode,
+            audits=audits,
+            repaired=repaired,
+            repair_lineage=repair_lineage,
         )
 
 

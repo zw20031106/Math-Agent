@@ -21,6 +21,7 @@ def test_claim_tools_bind_evidence_and_update_status():
     assert [(record.claim_id, record.status) for record in records] == [
         ("good", "pass"),
         ("bad", "fail"),
+        ("narrative", "unknown"),
     ]
     assert records[0].capability == "equality.symbolic_under_domain"
     assert candidate.claims[0].status == "verified"

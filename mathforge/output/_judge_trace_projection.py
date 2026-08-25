@@ -67,6 +67,7 @@ JUDGE_EVENT_STAGES = {
     "evidence_summary": "evidence",
     "proof_completion_summary": "verification",
     "proof_status_finalized": "verification",
+    "verification_closure_recomputed": "verification",
     "decision_summary": "arbitration",
     "candidate_arbitrated": "arbitration",
     "decision_committed": "arbitration",
@@ -95,6 +96,7 @@ _PROTECTED_EVENTS = frozenset(
         "tool_feedback_completed",
         "evidence_summary",
         "proof_completion_summary",
+        "verification_closure_recomputed",
         "new_branch_completed",
         "final_audit_completed",
         "decision_summary",
@@ -845,6 +847,7 @@ def project_judge_trace(
         "final_audit_started",
         "final_audit_completed",
         "audit_reentry_decision",
+        "verification_closure_recomputed",
         "decision_committed",
     ):
         for event in by_name.get(event_name, []):
