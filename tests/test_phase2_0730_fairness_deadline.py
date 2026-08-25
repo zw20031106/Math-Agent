@@ -115,7 +115,7 @@ def test_repair_reverify_requires_one_atomic_time_reserve():
         ("repair", "verifier"),
         60.0,
     )
-    assert required == 450.0
+    assert required == 366.0
     assert not stage_sequence_feasible(
         ("repair", "verifier"),
         remaining_seconds=required - 0.001,
@@ -147,7 +147,7 @@ def test_bound_case_and_effective_queue_policy_are_recorded_per_call():
 
     record = budget.model_call_records[0]
     assert budget.scheduler_case_id == session.session_id
-    assert record["stage_p95_seconds"] == 210.0
+    assert record["stage_p95_seconds"] == 180.0
     assert record["effective_queue_budget_seconds"] == 15.0
     assert budget.to_dict()["scheduler_case_bound"] is True
     assert budget.to_dict()["provider_scheduler_peak"] == 1

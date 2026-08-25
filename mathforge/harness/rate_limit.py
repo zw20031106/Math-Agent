@@ -102,6 +102,26 @@ class WeightedRollingRateLimiter:
                     return True
             return False
 
+    def abandon_committed(self, reservation: RateReservation) -> bool:
+        """Remove a committed reservation when dispatch never started.
+
+        Thread creation can fail after the admission transaction is committed
+        but before the injected client is entered.  That is distinct from a
+        normal transport completion, so the reservation must be removed
+        without pretending that a physical attempt occurred.
+        """
+
+        with self._condition:
+            for index, item in enumerate(self._events):
+                if item.token != reservation.token:
+                    continue
+                del self._events[index]
+                self._committed.discard(reservation.token)
+                self._condition.notify_all()
+                return True
+            self._committed.discard(reservation.token)
+            return False
+
     def reconcile(self, reservation: RateReservation, actual_weight: int) -> bool:
         """Replace a committed worst-case reservation with observed attempts."""
 

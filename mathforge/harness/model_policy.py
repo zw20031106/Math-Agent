@@ -10,6 +10,10 @@ PROVIDER_CALL_GRACE_SECONDS = 15.0
 PROVIDER_CALL_TIMEOUT_SECONDS = (
     PROVIDER_HTTP_TIMEOUT_SECONDS + PROVIDER_CALL_GRACE_SECONDS
 )
+# A stage timeout is a caller-visible boundary.  A small grace window lets a
+# response which completed at the boundary be observed without turning the
+# remainder of the case deadline into an implicit provider wait.
+PROVIDER_TAIL_GRACE_SECONDS = 0.1
 
 _DEFAULT_STAGE_EXECUTION_POLICY = {
     "router": {"max_tokens": 8192, "timeout_seconds": 180.0, "minimum_start_window_seconds": 30.0},
@@ -46,13 +50,19 @@ _STAGE_P95_SECONDS = {
     "router": 100.0,
     "replan": 100.0,
     "solver_progress": 150.0,
-    "solver_candidate_standard": 210.0,
-    "solver_compact_synthesis": 210.0,
+    # Archived 88-case canaries observed primary/alternative p95 values of
+    # 147.18/139.37 seconds.  The standard and compact budgets round that
+    # envelope up to 180 seconds (roughly a 20% jitter margin).
+    "solver_candidate_standard": 180.0,
+    "solver_compact_synthesis": 180.0,
     "solver_candidate_proof": 240.0,
     "lemma_curator": 180.0,
     "peer_review": 150.0,
-    "verifier": 150.0,
-    "repair": 180.0,
+    # The same canaries observed verifier p95 at 150.61 seconds; keep the
+    # rounded 180-second envelope.  Repair has one observed 72.08-second
+    # sample and therefore uses a conservative 90-second provisional value.
+    "verifier": 180.0,
+    "repair": 90.0,
     "finalizer": 90.0,
 }
 _DEFAULT_STAGE_P95_SECONDS = 180.0
@@ -128,7 +138,7 @@ def effective_call_timeout(
 
 
 def stage_p95_seconds(stage: str) -> float:
-    """Return the frozen initial healthy-service p95 estimate for a stage."""
+    """Return the current canary-calibrated healthy-service p95 estimate."""
 
     return _STAGE_P95_SECONDS.get(
         normalize_turn_kind(stage),

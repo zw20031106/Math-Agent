@@ -83,6 +83,7 @@ class HarnessConfig:
     model_call_start_margin_seconds: float = 135.0
     outer_platform_limit_seconds: float = 1200.0
     model_queue_budget_seconds: float = 15.0
+    provider_tail_grace_seconds: float = 0.1
     max_background_model_tails: int = 16
     late_result_registry_max_entries: int = 64
     # Zero defers eviction to TraceBuilder's hard safety ceiling and the
@@ -296,6 +297,7 @@ class HarnessConfig:
             "deterministic_finalize_reserve_seconds",
             "outer_platform_limit_seconds",
             "model_queue_budget_seconds",
+            "provider_tail_grace_seconds",
             "max_tool_seconds",
             "experimental_proof_timeout_seconds",
         )

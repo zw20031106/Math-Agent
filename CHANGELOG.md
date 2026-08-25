@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Completed the 2026-08-25 remediation Phase 9 Provider/timeout/resource
+  work.  Stage timeout is now the actual caller-visible boundary with only a
+  100 ms tail grace; late physical calls are bounded, case-isolated, and
+  released from provider finally paths.  Scheduler waves propagate the case
+  cancellation token, invalidate pending generations on timeout, and shut
+  down their executor in finally so late workers cannot commit stale state.
+  Competition remains at case concurrency 3, model concurrency 6, RPM 200,
+  and a three-attempt weighted reservation; background tails are capped at
+  six.  Standard/compact Solver P95 reservation was recalibrated to 180 s
+  from the archived canary distribution while proof output remains at the
+  40K-token / 240 s safety envelope.  Added boundary, isolation, cancellation,
+  generation-fence, and resource-release regression coverage.
 - Completed the 2026-08-25 remediation Phase 8 Skill/Context/Memory work.
   The legacy and V3 Skill selectors now share one implementation.  Skill
   packages undergo Host capability admission, declared verification hooks are

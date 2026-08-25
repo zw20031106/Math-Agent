@@ -278,6 +278,7 @@ class MathForgeHarness:
             ),
             max_background_tails=self._config.max_background_model_tails,
             late_registry_limit=self._config.late_result_registry_max_entries,
+            tail_grace_seconds=self._config.provider_tail_grace_seconds,
         )
         self._model_gate = gate
         self._raw_response_lock = Lock()
@@ -4309,6 +4310,7 @@ class MathForgeHarness:
                 timeout_seconds=session.budget.deadline.remaining_for_model_call(),
                 generation_scope=f"{scheduler_graph.graph_id}:explore",
                 preserve_start_order=True,
+                cancellation_token=session.budget.cancellation_token,
             )
             branch_by_id = {branch.candidate_id: branch for branch in branches}
             for outcome in progress_outcomes:
@@ -4598,6 +4600,7 @@ class MathForgeHarness:
             synthesis_tasks,
             timeout_seconds=session.budget.deadline.remaining_for_model_call(),
             generation_scope=f"{scheduler_graph.graph_id}:synthesis",
+            cancellation_token=session.budget.cancellation_token,
         )
         branch_by_id = {branch.candidate_id: branch for branch in branches}
         trace.add(
@@ -5102,6 +5105,7 @@ class MathForgeHarness:
             generation_scope=(
                 f"peer-review:{session.agent_runtime.effective_execution_plan.plan_id}"
             ),
+            cancellation_token=session.budget.cancellation_token,
         )
         trace.add(
             "parallel_review_wave_completed",

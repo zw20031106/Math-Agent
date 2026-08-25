@@ -16,6 +16,7 @@ from mathforge.harness.errors import ModelTransportError
 from mathforge.harness.cancellation import CancellationToken
 from mathforge.harness.model_policy import (
     PROVIDER_CALL_TIMEOUT_SECONDS,
+    PROVIDER_TAIL_GRACE_SECONDS,
     effective_call_timeout,
     effective_output_tokens,
     feasible_queue_budget,
@@ -158,6 +159,7 @@ class ModelCallGate:
         transport_attempt_reservation: int = 3,
         max_background_tails: int | None = None,
         late_registry_limit: int = 64,
+        tail_grace_seconds: float = PROVIDER_TAIL_GRACE_SECONDS,
         circuit_cooldown_seconds: float = 60.0,
         clock: Callable[[], float] = monotonic,
     ) -> None:
@@ -174,6 +176,8 @@ class ModelCallGate:
             )
         if late_registry_limit < 1:
             raise ValueError("late_registry_limit must be positive")
+        if tail_grace_seconds < 0:
+            raise ValueError("tail_grace_seconds must be nonnegative")
         if circuit_cooldown_seconds <= 0:
             raise ValueError("circuit_cooldown_seconds must be positive")
         self._max_concurrency = int(max_concurrency)
@@ -185,6 +189,7 @@ class ModelCallGate:
         )
         self._max_background_tails = tail_limit
         self._late_registry_limit = int(late_registry_limit)
+        self._tail_grace_seconds = float(tail_grace_seconds)
         self._circuit_cooldown_seconds = float(circuit_cooldown_seconds)
         self._clock = clock
         self._health_lock = Lock()
@@ -369,7 +374,14 @@ class ModelCallGate:
                 if not dispatch_completed:
                     self._admission.release(lease, dispatched=False)
                     self._abandon_half_open_probe(case_key, half_open_probe)
-        self._admission.commit(lease)
+        # Once committed, the worker owns the lease and releases it from its
+        # finally block.  Keep the start path guarded as well so a thread
+        # creation failure cannot strand scheduler, agent, or RPM capacity.
+        try:
+            self._admission.commit(lease)
+        except BaseException:
+            self._admission.release(lease, dispatched=False)
+            raise
 
         def invoke() -> None:
             try:
@@ -417,11 +429,19 @@ class ModelCallGate:
                         if health is not None:
                             health.discarded_cancelled_results += 1
 
-        Thread(
+        worker = Thread(
             target=invoke,
             name="mathforge-model-call",
             daemon=True,
-        ).start()
+        )
+        try:
+            worker.start()
+        except BaseException:
+            # ``invoke`` never ran, so the committed reservation must be
+            # released as an undispatched lease.  This is the only path in
+            # which the worker's finally block cannot perform the release.
+            self._admission.release(lease, dispatched=False)
+            raise
         wait_started = perf_counter()
         while True:
             remaining_wait = execution_timeout - (perf_counter() - wait_started)
@@ -443,21 +463,27 @@ class ModelCallGate:
                 )
                 raise ModelCallRejected("case_cancelled", dispatched=True)
         if not done.is_set():
-            late_wait_started = perf_counter()
-            late_wait_budget = max(0.0, deadline.remaining_for_model_call())
+            # Never spend the remainder of the case deadline waiting for a
+            # provider thread.  The stage timeout is the caller-visible
+            # boundary; only this short grace can convert a boundary race
+            # into an observed response.  A physical tail is then isolated in
+            # the per-case registry and cannot publish into this solve.
+            late_wait_budget = min(
+                self._tail_grace_seconds,
+                max(0.0, deadline.remaining_for_model_call()),
+            )
+            late_wait_deadline = perf_counter() + late_wait_budget
             while late_wait_budget > 0 and not done.is_set():
-                remaining_late_wait = late_wait_budget - (
-                    perf_counter() - late_wait_started
-                )
-                if remaining_late_wait <= 0 or done.wait(
-                    min(0.05, remaining_late_wait)
-                ):
-                    break
                 if (
                     cancellation_token is not None
                     and cancellation_token.is_cancelled
                 ):
                     break
+                done.wait(min(0.01, late_wait_budget))
+                late_wait_budget = max(
+                    0.0,
+                    late_wait_deadline - perf_counter(),
+                )
         if not done.is_set():
             with state_lock:
                 already_completed = state["completed"]
@@ -466,7 +492,10 @@ class ModelCallGate:
                     self._register_tail(case_key, call_index)
             if not already_completed:
                 if background_tail_callback is not None:
-                    background_tail_callback("started")
+                    try:
+                        background_tail_callback("started")
+                    except (KeyError, RuntimeError, TypeError, ValueError):
+                        pass
                 execution_elapsed = perf_counter() - execution_started
                 self._emit_timing(
                     timing_callback,
@@ -510,6 +539,8 @@ class ModelCallGate:
                 "state": health.state,
                 "active_tails": health.active_tails,
                 "peak_tails": health.peak_tails,
+                "tail_grace_seconds": self._tail_grace_seconds,
+                "late_registry_limit": self._late_registry_limit,
                 "circuit_trips": health.circuit_trips,
                 "fast_failures": health.fast_failures,
                 "ordinary_failure_count": health.ordinary_failure_count,
@@ -602,6 +633,10 @@ class ModelCallGate:
     @property
     def transport_attempt_reservation(self) -> int:
         return self._admission.transport_attempt_reservation
+
+    @property
+    def tail_grace_seconds(self) -> float:
+        return self._tail_grace_seconds
 
     @staticmethod
     def _raise_if_cancelled(
@@ -950,6 +985,7 @@ class OfficialClientProvider:
             "transport_attempt_reservation": (
                 self._gate.transport_attempt_reservation
             ),
+            "provider_tail_grace_seconds": self._gate.tail_grace_seconds,
             "transport_attempt_observability": "pending",
             "stage_p95_seconds": stage_p95_seconds(active_turn_kind),
             "effective_queue_budget_seconds": queue_budget,

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from threading import Barrier, Lock
+from threading import Barrier, Event, Lock
+from time import perf_counter, sleep
 
 import pytest
 
 from mathforge.agent_runtime.call_ledger import CallLedger
 from mathforge.config import load_competition_config
+from mathforge.harness.cancellation import CancellationToken
+from mathforge.harness.deadline import DeadlineController
+from mathforge.harness.provider import ModelCallGate
 from mathforge.runtime_flows.scheduler_flow import SchedulerFlow, TaskGraph, TaskNode
 
 
@@ -196,6 +200,85 @@ def test_competition_resource_boundaries_remain_frozen_for_phase9():
     config = load_competition_config()
 
     assert config.case_max_concurrency == 3
-    assert config.model_max_concurrency <= 6
-    assert config.model_requests_per_minute <= 200
+    assert config.model_max_concurrency == 6
+    assert config.model_requests_per_minute == 200
     assert config.max_inflight_calls_per_agent == 1
+    assert config.transport_attempt_reservation == 3
+    assert config.max_background_model_tails == 6
+    assert config.provider_tail_grace_seconds == pytest.approx(0.1)
+    assert config.stage_execution_policy["solver_candidate_standard"][
+        "max_tokens"
+    ] == 32768
+    assert config.stage_execution_policy["solver_candidate_proof"][
+        "max_tokens"
+    ] == 40960
+
+
+def test_provider_timeout_is_a_stage_boundary_with_isolated_short_tail():
+    release = Event()
+    gate = ModelCallGate(
+        2,
+        max_background_tails=2,
+        tail_grace_seconds=0.01,
+    )
+    deadline = DeadlineController(
+        soft_deadline_seconds=1.0,
+        exploration_deadline_seconds=1.0,
+        hard_deadline_seconds=1.0,
+        deterministic_finalize_reserve_seconds=0.01,
+        model_call_start_margin_seconds=0.0,
+    )
+
+    started = perf_counter()
+    with pytest.raises(Exception) as captured:
+        gate.call(
+            lambda: (release.wait(1.0), "late")[1],
+            case_id="case-a",
+            deadline=deadline,
+            stage_timeout_seconds=0.02,
+        )
+    elapsed = perf_counter() - started
+
+    assert captured.value.code == "model_response_deadline_exceeded"
+    assert elapsed < 0.12
+    assert gate.health_snapshot("case-a")["active_tails"] == 1
+    # A late tail from case-a must not open or populate case-b's registry.
+    assert gate.call(lambda: "ok", case_id="case-b") == "ok"
+    assert gate.health_snapshot("case-b")["late_registry"] == []
+
+    release.set()
+    for _ in range(100):
+        if gate.health_snapshot("case-a")["active_tails"] == 0:
+            break
+        sleep(0.002)
+    assert gate.health_snapshot("case-a")["late_registry"][-1][
+        "completion_status"
+    ] == "completed"
+
+
+def test_wave_timeout_cancels_and_fences_pending_generation():
+    release = Event()
+    token = CancellationToken()
+    scheduler = SchedulerFlow(max_workers=2)
+
+    outcomes = scheduler.run_parallel(
+        (
+            ("slow", lambda: (release.wait(1.0), "late")[1]),
+            ("fast", lambda: (sleep(0.2), "late-fast")[1]),
+        ),
+        timeout_seconds=0.02,
+        generation_scope="phase9-fence",
+        cancellation_token=token,
+    )
+
+    assert token.is_cancelled
+    assert token.reason == "scheduler_wave_timeout"
+    assert all(not outcome.accepted for outcome in outcomes)
+    assert not scheduler.accepts_generation(
+        "slow",
+        next(outcome for outcome in outcomes if outcome.task_id == "slow").generation,
+        scope="phase9-fence",
+    )
+
+    release.set()
+    sleep(0.03)

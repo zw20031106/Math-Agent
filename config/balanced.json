@@ -46,6 +46,7 @@
   "model_call_start_margin_seconds": 10.0,
   "outer_platform_limit_seconds": 900.0,
   "model_queue_budget_seconds": 15.0,
+  "provider_tail_grace_seconds": 0.1,
   "max_background_model_tails": 3,
   "late_result_registry_max_entries": 64,
   "trace_max_chars": 12000,

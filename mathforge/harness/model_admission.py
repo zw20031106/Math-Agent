@@ -105,7 +105,13 @@ class ModelAdmissionController:
         observed_attempts: int | None = None,
     ) -> None:
         if not dispatched:
-            self._rate_limiter.refund(lease.rate_reservation)
+            refunded = self._rate_limiter.refund(lease.rate_reservation)
+            if not refunded:
+                # A commit may have succeeded immediately before thread
+                # creation failed.  No client.chat was entered in that case,
+                # so remove the committed reservation as an undispatched
+                # resource release rather than leaking RPM capacity.
+                self._rate_limiter.abandon_committed(lease.rate_reservation)
         elif observed_attempts is not None:
             self._rate_limiter.reconcile(
                 lease.rate_reservation,

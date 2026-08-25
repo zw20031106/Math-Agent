@@ -74,7 +74,7 @@
       "version": "effective-agent-governance-4-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "3cb08518d314c3d5192733a1a86ef49b8dbb07bf87b41dc3ad51ef449c0a92d6"
+      "sha256": "81626e03d3d9357d89e93bed0e34ddc5f74abd33590fd3aea3733da14de24fd4"
     },
     {
       "id": "prompt-contracts",
@@ -222,7 +222,7 @@
       "version": "verification-closure-19-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
         "review_date": "2026-08-24",
-      "sha256": "01bc6e02eeb4a2682fb44442469751ea4538f96056f62893bff8baa7d3f9751d"
+      "sha256": "a8c0748409ad5bf611a6952dce01435c5c77c29892fc317bc1a403c736390caa"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -253,7 +253,7 @@
       "version": "phase-f6-agent-protocol-11-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "591b5721e4121bfb33b3de27ed2a34bfe836d1112e0841f312e927a6cc5e2618"
+      "sha256": "0fa80012f09287f565d54361ee3cddb016bba472f26ebf8ccc507c6680c48509"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -277,7 +277,7 @@
       "version": "phase-f7-runtime-9-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "71e4fb3855bfde53a454064cab2830b01af4bd085fa990d8cd0ca4e95061e44a"
+      "sha256": "e8540157e26af2442e9efc9562726229782c9b363abdf63d9b6f4ffe89ab5d56"
     },
     {
       "id": "reviewed-method-cards",
@@ -349,7 +349,7 @@
       "version": "provider-controls-6-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "9c802b15a6fac312a6d13cbff9b59f13277d5700faed16c1a6c376560c09212c"
+      "sha256": "9afd5ce9d1d314daa814644972723a1c103fe25b4a13bef00ac8af73ff336e21"
     },
     {
       "id": "phase7-live-calibration",
@@ -364,7 +364,7 @@
       "version": "phase7-live-calibration-4-0812-p4",
       "engineering_reviewer": "codex-0812-p4-audit",
       "review_date": "2026-08-12",
-      "sha256": "69ea0721b7816f0c1ed65b983a8b9810f3b271124f5a018a9771bbdeee8dea42"
+      "sha256": "4b6aba8c95c7bf5dde0f1bfc8b516228d0594d65af8b289120a4644a28655e93"
     },
     {
       "id": "router-calibration",
@@ -400,7 +400,7 @@
       "version": "review-repair-communication-audit-2.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "a820488f2f407d4eba61378082bf8ad29819825f91b0599fb74d3b7dfbe95eaa"
+      "sha256": "1d2799d55524cb037cc8459d468e81ab5c2d620450c260d168669b86360b8141"
     },
     {
       "id": "phase8-skill-context-memory",
@@ -427,7 +427,7 @@
       "version": "skill-context-memory-1-0825-phase8",
       "engineering_reviewer": "codex-0825-phase8-skill-context-memory",
       "review_date": "2026-08-25",
-      "sha256": "c0df9411418b1f224c165ae6db1ee3a8d5ffc3ab3aa80abac8d8daa05b2d5405"
+      "sha256": "57329045ad745c91c3a5b3ccffdf9f08b98a59deb72481a450f88f6843e6b38d"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -448,7 +448,34 @@
       "version": "scheduler-runtime-2.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "b8bb10a5adba648bd0c4d6962392dad2764b972e02e3e322000d2ff060a905c8"
+      "sha256": "048c2c9eda655adc7a50040303bd8bef26fa6f4cedca264e9907ecee296681ba"
+    },
+    {
+      "id": "phase9-provider-resource-governance",
+      "kind": "file_set",
+      "paths": [
+        "CHANGELOG.md",
+        "docs/PHASE_9_PROVIDER_RESOURCE_EXECUTION_REPORT_2026-08-25.md",
+        "config/safe.json",
+        "config/balanced.json",
+        "config/competition.json",
+        "mathforge/config.py",
+        "mathforge/harness/model_admission.py",
+        "mathforge/harness/model_policy.py",
+        "mathforge/harness/provider.py",
+        "mathforge/harness/rate_limit.py",
+        "mathforge/runtime.py",
+        "mathforge/runtime_flows/scheduler_flow.py",
+        "tests/test_phase2_0730_fairness_deadline.py",
+        "tests/test_phase2_concurrency_lifecycle.py",
+        "tests/test_phase3_0811_provider_stability.py",
+        "tests/test_phase9_scheduler_runtime.py"
+      ],
+      "expected_count": 16,
+      "version": "provider-resource-governance-1-0825-phase9",
+      "engineering_reviewer": "codex-0825-phase9-provider-resource-governance",
+      "review_date": "2026-08-25",
+      "sha256": "2bf0de02cf6e05563097dc3a39f49f4db249733e1da81204433d3741c280ccc5"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -473,7 +500,7 @@
       "version": "production-preflight-release-governance-1.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "154744a655ee9e0ed67fecb975b6c1e4d2cff459819ba9bdd1fa35232575a8d2"
+      "sha256": "5a581e7f51c61dbebd2a52cb8f93de33dd663109e3355156fb7e51820b298fe4"
     },
     {
       "id": "router-e5-gold",

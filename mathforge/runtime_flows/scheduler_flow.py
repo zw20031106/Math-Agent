@@ -7,6 +7,8 @@ from threading import Event, Lock
 from time import perf_counter
 from typing import Callable, Iterable, Mapping, TypeVar
 
+from mathforge.harness.cancellation import CancellationToken
+from mathforge.harness.errors import ModelCallRejected
 from mathforge.harness.model_policy import stage_sequence_reserve_seconds
 
 
@@ -337,6 +339,11 @@ class SchedulerFlow:
         with self._generation_lock:
             return self._generations.get(key) == int(generation)
 
+    def invalidate_generation(self, task_id: str, *, scope: str = "") -> int:
+        """Fence a timed-out task so a late worker cannot be accepted."""
+
+        return self.issue_generation(task_id, scope=scope)
+
     def admit_closure(
         self,
         nodes: Iterable[TaskNode],
@@ -413,6 +420,7 @@ class SchedulerFlow:
         timeout_seconds: float | None = None,
         generation_scope: str = "",
         preserve_start_order: bool = False,
+        cancellation_token: CancellationToken | None = None,
     ) -> tuple[WaveOutcome, ...]:
         work = tuple(tasks)
         if not work:
@@ -426,20 +434,43 @@ class SchedulerFlow:
         }
 
         start_events = [Event() for _ in work]
+        first_invocation_started = Event()
 
         def invoke(
             index: int,
             task_id: str,
             operation: Callable[[], T],
         ) -> WaveOutcome:
-            if preserve_start_order and index:
-                start_events[index - 1].wait()
-            if preserve_start_order:
-                start_events[index].set()
+            # Preserve the first branch's completion-before-alternative
+            # contract without serialising all alternatives.  Additional
+            # branches remain a bounded parallel wave once branch zero has
+            # produced its first result.
+            if preserve_start_order and index > 0:
+                start_events[0].wait()
+            if index == 0:
+                first_invocation_started.set()
+            if (
+                cancellation_token is not None
+                and cancellation_token.is_cancelled
+            ):
+                if preserve_start_order and index == 0:
+                    start_events[0].set()
+                return WaveOutcome(
+                    task_id,
+                    None,
+                    ModelCallRejected(
+                        cancellation_token.reason or "case_cancelled"
+                    ),
+                    0.0,
+                    generations[task_id],
+                    False,
+                )
             started = perf_counter()
             try:
                 value = operation()
             except Exception as error:
+                if preserve_start_order and index == 0:
+                    start_events[0].set()
                 return WaveOutcome(
                     task_id,
                     None,
@@ -447,6 +478,8 @@ class SchedulerFlow:
                     perf_counter() - started,
                     generations[task_id],
                 )
+            if preserve_start_order and index == 0:
+                start_events[0].set()
             return WaveOutcome(
                 task_id,
                 value,
@@ -457,78 +490,109 @@ class SchedulerFlow:
 
         wall_started = perf_counter()
         ordered_outcomes: dict[str, WaveOutcome] = {}
-        work_offset = 0
+        workers = min(self._max_workers, len(work))
+        pool = ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="mathforge-runtime-wave",
+        )
+        future_by_task: dict[str, Future[WaveOutcome]] = {}
         if preserve_start_order:
             first_task_id, first_operation = work[0]
-            first_outcome = invoke(0, first_task_id, first_operation)
-            ordered_outcomes[first_task_id] = replace(
-                first_outcome,
-                accepted=self.accepts_generation(
-                    first_outcome.task_id,
-                    first_outcome.generation,
-                    scope=generation_scope,
-                ),
+            future_by_task[first_task_id] = pool.submit(
+                invoke,
+                0,
+                first_task_id,
+                first_operation,
             )
-            work_offset = 1
-
-        remaining_work = work[work_offset:]
-        workers = min(self._max_workers, len(remaining_work))
-        pool = (
-            ThreadPoolExecutor(
-                max_workers=workers,
-                thread_name_prefix="mathforge-runtime-wave",
-            )
-            if remaining_work
-            else None
-        )
-        futures: list[Future[WaveOutcome]] = []
-        if pool is not None:
-            futures = [
-                pool.submit(invoke, index, task_id, operation)
-                for index, (task_id, operation) in enumerate(
-                    remaining_work,
-                    start=work_offset,
+            # Do not submit the other branches until the deterministic first
+            # branch has entered the worker.  They then wait for its first
+            # operation to complete before joining the bounded wave; the
+            # first branch still runs in the pool, so the timeout is enforced.
+            first_invocation_started.wait()
+            for index, (task_id, operation) in enumerate(work[1:], start=1):
+                future_by_task[task_id] = pool.submit(
+                    invoke,
+                    index,
+                    task_id,
+                    operation,
                 )
-            ]
-        elapsed_before_wait = perf_counter() - wall_started
-        completed, pending = wait(
-            futures,
-            timeout=(
-                None
-                if timeout_seconds is None
-                else max(0.0, float(timeout_seconds) - elapsed_before_wait)
-            ),
-            return_when=ALL_COMPLETED,
+        else:
+            future_by_task = {
+                task_id: pool.submit(invoke, index, task_id, operation)
+                for index, (task_id, operation) in enumerate(work)
+            }
+        pending = set(future_by_task.values())
+        timed_out = False
+        cancelled = bool(
+            cancellation_token is not None
+            and cancellation_token.is_cancelled
         )
-        for future in completed:
-            outcome = future.result()
-            ordered_outcomes[outcome.task_id] = replace(
-                outcome,
-                accepted=self.accepts_generation(
-                    outcome.task_id,
-                    outcome.generation,
-                    scope=generation_scope,
-                ),
-            )
-        for future in pending:
-            future.cancel()
-            task_id = next(
-                task_id
-                for task_id, future_item in zip(
-                    (task_id for task_id, _ in remaining_work),
-                    futures,
+        try:
+            while pending and not timed_out and not cancelled:
+                elapsed = perf_counter() - wall_started
+                remaining = (
+                    None
+                    if timeout_seconds is None
+                    else max(0.0, float(timeout_seconds) - elapsed)
                 )
-                if future_item is future
-            )
-            ordered_outcomes[task_id] = WaveOutcome(
-                task_id,
-                None,
-                TimeoutError("parallel wave deadline reached"),
-                max(0.0, float(timeout_seconds or 0.0)),
-                generations[task_id],
-                False,
-            )
-        if pool is not None:
+                if remaining is not None and remaining <= 0:
+                    timed_out = True
+                    break
+                completed, pending = wait(
+                    pending,
+                    timeout=(
+                        0.05
+                        if remaining is None
+                        else min(0.05, remaining)
+                    ),
+                    return_when=ALL_COMPLETED,
+                )
+                for future in completed:
+                    outcome = future.result()
+                    ordered_outcomes[outcome.task_id] = replace(
+                        outcome,
+                        accepted=self.accepts_generation(
+                            outcome.task_id,
+                            outcome.generation,
+                            scope=generation_scope,
+                        ),
+                    )
+                cancelled = bool(
+                    cancellation_token is not None
+                    and cancellation_token.is_cancelled
+                )
+            if pending:
+                reason = (
+                    cancellation_token.reason
+                    if cancelled and cancellation_token is not None
+                    else "parallel wave deadline reached"
+                )
+                if not cancelled:
+                    timed_out = True
+                    if cancellation_token is not None:
+                        cancellation_token.cancel("scheduler_wave_timeout")
+                for task_id, future in future_by_task.items():
+                    if future not in pending:
+                        continue
+                    self.invalidate_generation(task_id, scope=generation_scope)
+                    future.cancel()
+                    ordered_outcomes[task_id] = WaveOutcome(
+                        task_id,
+                        None,
+                        (
+                            ModelCallRejected(reason)
+                            if cancelled
+                            else TimeoutError(reason)
+                        ),
+                        max(0.0, perf_counter() - wall_started),
+                        generations[task_id],
+                        False,
+                    )
+        finally:
+            # The executor is never allowed to own a reference to a case
+            # longer than the wave.  Running provider work is fenced and may
+            # finish in its own provider tail, but no scheduler future is
+            # retained by this flow.
             pool.shutdown(wait=False, cancel_futures=True)
         return tuple(
             ordered_outcomes.get(
@@ -551,6 +615,7 @@ class SchedulerFlow:
         initial_completed: Iterable[str] = (),
         prune_optional: Iterable[str] = (),
         timeout_seconds: float | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> GraphRunResult:
         """Execute bound graph operations wave-by-wave.
 
@@ -610,6 +675,7 @@ class SchedulerFlow:
                 tasks,
                 timeout_seconds=remaining,
                 generation_scope=graph.graph_id,
+                cancellation_token=cancellation_token,
             )
             for outcome in outcomes:
                 if not outcome.accepted:
