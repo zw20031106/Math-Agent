@@ -14,6 +14,8 @@ class ProgressGateDecision:
     information_gain: int
     semantic_sha256: str
     stop_reason: str = ""
+    obligation_delta: int = 0
+    evidence_delta: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -21,6 +23,8 @@ class ProgressGateDecision:
             "information_gain": self.information_gain,
             "semantic_sha256": self.semantic_sha256,
             "stop_reason": self.stop_reason,
+            "obligation_delta": self.obligation_delta,
+            "evidence_delta": self.evidence_delta,
         }
 
 
@@ -30,6 +34,8 @@ class AgentProgressTracker:
     def __init__(self) -> None:
         self._seen_hashes: dict[str, set[str]] = {}
         self._seen_facts: dict[str, set[str]] = {}
+        self._seen_obligations: dict[str, set[str]] = {}
+        self._seen_evidence: dict[str, set[str]] = {}
 
     def observe(
         self,
@@ -64,14 +70,71 @@ class AgentProgressTracker:
         seen = self._seen_facts.setdefault(agent_id, set())
         information_gain = len(facts - seen)
         seen.update(facts)
+        obligations = self._semantic_ids(
+            semantic,
+            {
+                "obligation_id",
+                "obligation_ids",
+                "target_obligation_ids",
+                "unresolved_obligation_ids",
+                "open_obligations",
+            },
+        )
+        evidence = self._semantic_ids(
+            semantic,
+            {
+                "evidence_id",
+                "evidence_ids",
+                "tool_evidence_refs",
+                "verified_evidence_ids",
+            },
+        )
+        seen_obligations = self._seen_obligations.setdefault(agent_id, set())
+        seen_evidence = self._seen_evidence.setdefault(agent_id, set())
+        obligation_delta = len(obligations - seen_obligations)
+        evidence_delta = len(evidence - seen_evidence)
+        seen_obligations.update(obligations)
+        seen_evidence.update(evidence)
+        information_gain += obligation_delta + evidence_delta
         if payload.action == "continue_reasoning" and information_gain <= 0:
             return ProgressGateDecision(
                 False,
                 0,
                 digest,
                 "no_public_information_gain",
+                obligation_delta,
+                evidence_delta,
             )
-        return ProgressGateDecision(True, information_gain, digest)
+        return ProgressGateDecision(
+            True,
+            information_gain,
+            digest,
+            obligation_delta=obligation_delta,
+            evidence_delta=evidence_delta,
+        )
+
+    @classmethod
+    def _semantic_ids(cls, value: Any, keys: set[str]) -> set[str]:
+        result: set[str] = set()
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                normalized = str(key)
+                if normalized in keys:
+                    if isinstance(nested, list):
+                        result.update(
+                            str(item).strip()
+                            for item in nested
+                            if str(item).strip()
+                        )
+                    elif isinstance(nested, (str, int, float, bool)):
+                        item = str(nested).strip()
+                        if item:
+                            result.add(item)
+                result.update(cls._semantic_ids(nested, keys))
+        elif isinstance(value, list):
+            for nested in value:
+                result.update(cls._semantic_ids(nested, keys))
+        return result
 
     @classmethod
     def _public_facts(cls, value: Any, *, key: str = "") -> set[str]:
@@ -108,3 +171,5 @@ class AgentProgressTracker:
     def clear(self) -> None:
         self._seen_hashes.clear()
         self._seen_facts.clear()
+        self._seen_obligations.clear()
+        self._seen_evidence.clear()

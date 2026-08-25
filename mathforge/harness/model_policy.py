@@ -169,6 +169,27 @@ def stage_sequence_reserve_seconds(
     )
 
 
+def stage_sequence_reserve_seconds_parallel(
+    stages: tuple[str, ...] | list[str],
+    maximum_queue_seconds: float,
+    *,
+    worker_count: int,
+) -> float:
+    """Reserve P95 time for a bounded parallel wave, not a serial list."""
+
+    workers = max(1, int(worker_count))
+    maximum = max(0.0, float(maximum_queue_seconds))
+    loads = [0.0] * workers
+    for stage in sorted(
+        (normalize_turn_kind(item) for item in stages),
+        key=lambda item: -stage_p95_seconds(item),
+    ):
+        slot = min(range(workers), key=lambda index: loads[index])
+        p95 = stage_p95_seconds(stage)
+        loads[slot] += p95 + min(maximum, p95 * 0.4)
+    return max(loads, default=0.0)
+
+
 def stage_sequence_feasible(
     stages: tuple[str, ...] | list[str],
     *,
@@ -178,4 +199,18 @@ def stage_sequence_feasible(
     return max(0.0, float(remaining_seconds)) >= stage_sequence_reserve_seconds(
         stages,
         maximum_queue_seconds,
+    )
+
+
+def stage_sequence_feasible_parallel(
+    stages: tuple[str, ...] | list[str],
+    *,
+    remaining_seconds: float,
+    maximum_queue_seconds: float,
+    worker_count: int,
+) -> bool:
+    return max(0.0, float(remaining_seconds)) >= stage_sequence_reserve_seconds_parallel(
+        stages,
+        maximum_queue_seconds,
+        worker_count=worker_count,
     )

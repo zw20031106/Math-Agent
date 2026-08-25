@@ -38,7 +38,7 @@ from mathforge.harness.effective_config import (
 )
 from mathforge.harness.model_policy import (
     stage_p95_seconds,
-    stage_sequence_feasible,
+    stage_sequence_feasible_parallel,
 )
 from mathforge.harness.reasoning_state import (
     REASONING_STATE_MAX_TOKENS,
@@ -776,6 +776,18 @@ class MathForgeHarness:
                 session.route_plan = replace(
                     session.route_plan,
                     candidate_count=max(2, session.route_plan.candidate_count),
+                )
+            if self._config.enable_long_horizon and router_enabled:
+                # Competition runs do not admit a low-difficulty fast path;
+                # the Router still decides the method, but the runtime keeps
+                # a medium-risk verification floor for every admitted case.
+                session.route_plan = replace(
+                    session.route_plan,
+                    risk_level=(
+                        "medium"
+                        if session.route_plan.risk_level == "low"
+                        else session.route_plan.risk_level
+                    ),
                 )
             if not self._config.enable_lemma_loop:
                 session.route_plan = replace(session.route_plan, use_lemma_loop=False)
@@ -3938,7 +3950,7 @@ class MathForgeHarness:
                 )
                 if (
                     not session.budget.can_start_exploration()
-                    or not stage_sequence_feasible(
+                    or not stage_sequence_feasible_parallel(
                         [candidate_kind] * max(1, pending_candidates),
                         remaining_seconds=(
                             session.budget.snapshot().remaining_seconds
@@ -3946,6 +3958,7 @@ class MathForgeHarness:
                         maximum_queue_seconds=(
                             self._config.model_queue_budget_seconds
                         ),
+                        worker_count=self._scheduler_flow.max_workers,
                     )
                 ):
                     branch.status = "ready_to_synthesize"
@@ -4079,6 +4092,8 @@ class MathForgeHarness:
                     progress_summary=turn.parsed.payload.progress_summary,
                     semantic_sha256=decision.semantic_sha256,
                     information_gain=decision.information_gain,
+                    obligation_delta=decision.obligation_delta,
+                    evidence_delta=decision.evidence_delta,
                     state_version=branch.state.version,
                     outbound_intents=list(
                         turn.parsed.payload.outbound_intents
@@ -4386,7 +4401,11 @@ class MathForgeHarness:
             )
 
         if len(candidates) >= 2:
-            self._run_initial_llm_lemma_curator(session, trace)
+            self._run_initial_llm_lemma_curator(
+                session,
+                trace,
+                candidates=candidates,
+            )
             trace.add(
                 "post_backbone_shared_context_released",
                 candidate_ids=[item.candidate_id for item in candidates[:2]],
@@ -4422,11 +4441,23 @@ class MathForgeHarness:
         role_skill_contexts: dict[str, str],
         solver_contexts: dict[str, Any],
     ) -> FanoutResult:
-        backbone = 2 if self._config.enable_alternatives else 1
-        target = max(
-            1,
-            min(backbone, int(session.route_plan.candidate_count)),
-        )
+        if (
+            self._config.enable_long_horizon
+            and self._config.enable_alternatives
+            and session.route_plan.risk_level == "high"
+        ):
+            # Medium/high-risk competition cases retain a three-way
+            # independent backbone; recovery is still budget- and deadline-
+            # gated and therefore never turns the cap into a fixed call count.
+            target = 3
+        else:
+            target = max(
+                1,
+                min(
+                    2 if self._config.enable_alternatives else 1,
+                    int(session.route_plan.candidate_count),
+                ),
+            )
         used_methods = {
             candidate.planned_method_family or candidate.method
             for candidate in fanout.candidates
@@ -4897,7 +4928,27 @@ class MathForgeHarness:
         self,
         session,
         trace: TraceBuilder,
+        *,
+        candidates: list[Any] | None = None,
     ) -> str:
+        candidate_list = list(candidates or ())
+        concrete_unresolved = bool(session.problem_obligations) or any(
+            bool(candidate.unresolved_obligations)
+            for candidate in candidate_list
+        )
+        # Production lemma work is post-candidate and obligation-local.  The
+        # disabled-loop path is retained only as a compatibility fallback for
+        # legacy harness configurations; it is not admitted by the Phase 5
+        # Router/lemma policy used in competition runs.
+        if self._config.enable_lemma_loop and not concrete_unresolved:
+            trace.add(
+                "llm_lemma_curator_completed",
+                status="skipped",
+                independent_model_call=False,
+                failure_code="no_concrete_unresolved_obligations",
+                fallback="solver_candidate_backbone_preserved",
+            )
+            return ""
         plan = session.agent_plan
         conditions = tuple(
             dict.fromkeys(

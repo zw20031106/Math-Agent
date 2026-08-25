@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Completed the 2026-08-24 remediation Phase 5 long-horizon policy work.
+  Solver exploration now reserves time by bounded parallel waves instead of
+  serially charging every branch, while the 48-call hard fuse remains active.
+  Competition long-horizon runs apply a medium-risk floor after Router
+  dispatch, preserve high-risk three-branch recovery, and keep every extra
+  Turn observable through obligation/evidence deltas.  Generic post-candidate
+  Lemma calls are skipped when no concrete unresolved obligation exists;
+  explicit Solver requests and verified obligation-driven expansion remain
+  supported.  Added parallel-reserve, progress-delta, and long-horizon
+  regression gates, and refreshed build/review provenance fingerprints.
 - Completed the 2026-08-24 remediation Phase 4 executable TaskGraph work.
   Task nodes can now bind host operations without leaking callables into the
   public graph, dependency-ready waves are grouped deterministically, optional
