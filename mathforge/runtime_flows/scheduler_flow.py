@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ALL_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field, replace
 from hashlib import sha256
-from threading import Lock
+from threading import Event, Lock
 from time import perf_counter
 from typing import Callable, Iterable, Mapping, TypeVar
 
@@ -412,6 +412,7 @@ class SchedulerFlow:
         *,
         timeout_seconds: float | None = None,
         generation_scope: str = "",
+        preserve_start_order: bool = False,
     ) -> tuple[WaveOutcome, ...]:
         work = tuple(tasks)
         if not work:
@@ -424,7 +425,17 @@ class SchedulerFlow:
             for task_id, _ in work
         }
 
-        def invoke(task_id: str, operation: Callable[[], T]) -> WaveOutcome:
+        start_events = [Event() for _ in work]
+
+        def invoke(
+            index: int,
+            task_id: str,
+            operation: Callable[[], T],
+        ) -> WaveOutcome:
+            if preserve_start_order and index:
+                start_events[index - 1].wait()
+            if preserve_start_order:
+                start_events[index].set()
             started = perf_counter()
             try:
                 value = operation()
@@ -444,28 +455,54 @@ class SchedulerFlow:
                 generations[task_id],
             )
 
-        workers = min(self._max_workers, len(work))
-        pool = ThreadPoolExecutor(
-            max_workers=workers,
-            thread_name_prefix="mathforge-runtime-wave",
+        wall_started = perf_counter()
+        ordered_outcomes: dict[str, WaveOutcome] = {}
+        work_offset = 0
+        if preserve_start_order:
+            first_task_id, first_operation = work[0]
+            first_outcome = invoke(0, first_task_id, first_operation)
+            ordered_outcomes[first_task_id] = replace(
+                first_outcome,
+                accepted=self.accepts_generation(
+                    first_outcome.task_id,
+                    first_outcome.generation,
+                    scope=generation_scope,
+                ),
+            )
+            work_offset = 1
+
+        remaining_work = work[work_offset:]
+        workers = min(self._max_workers, len(remaining_work))
+        pool = (
+            ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="mathforge-runtime-wave",
+            )
+            if remaining_work
+            else None
         )
-        futures: list[Future[WaveOutcome]] = [
-            pool.submit(invoke, task_id, operation)
-            for task_id, operation in work
-        ]
+        futures: list[Future[WaveOutcome]] = []
+        if pool is not None:
+            futures = [
+                pool.submit(invoke, index, task_id, operation)
+                for index, (task_id, operation) in enumerate(
+                    remaining_work,
+                    start=work_offset,
+                )
+            ]
+        elapsed_before_wait = perf_counter() - wall_started
         completed, pending = wait(
             futures,
             timeout=(
                 None
                 if timeout_seconds is None
-                else max(0.0, float(timeout_seconds))
+                else max(0.0, float(timeout_seconds) - elapsed_before_wait)
             ),
             return_when=ALL_COMPLETED,
         )
-        outcomes: dict[Future[WaveOutcome], WaveOutcome] = {}
         for future in completed:
             outcome = future.result()
-            outcomes[future] = replace(
+            ordered_outcomes[outcome.task_id] = replace(
                 outcome,
                 accepted=self.accepts_generation(
                     outcome.task_id,
@@ -475,10 +512,27 @@ class SchedulerFlow:
             )
         for future in pending:
             future.cancel()
-        pool.shutdown(wait=False, cancel_futures=True)
+            task_id = next(
+                task_id
+                for task_id, future_item in zip(
+                    (task_id for task_id, _ in remaining_work),
+                    futures,
+                )
+                if future_item is future
+            )
+            ordered_outcomes[task_id] = WaveOutcome(
+                task_id,
+                None,
+                TimeoutError("parallel wave deadline reached"),
+                max(0.0, float(timeout_seconds or 0.0)),
+                generations[task_id],
+                False,
+            )
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
         return tuple(
-            outcomes.get(
-                future,
+            ordered_outcomes.get(
+                task_id,
                 WaveOutcome(
                     task_id,
                     None,
@@ -487,7 +541,7 @@ class SchedulerFlow:
                     generations[task_id],
                 ),
             )
-            for future, (task_id, _) in zip(futures, work)
+            for task_id, _ in work
         )
 
     def run_graph(

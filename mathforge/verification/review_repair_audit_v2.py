@@ -36,7 +36,7 @@ def decide_bidirectional_review(
     risk_level: str = "medium",
     independent_candidate_ids: Iterable[str] = (),
 ) -> ReviewTriggerDecision:
-    """Run Solver cross-review only when two independent branches add value."""
+    """Run a directed Solver review graph when independent branches add value."""
 
     items = [
         item
@@ -45,11 +45,17 @@ def decide_bidirectional_review(
         and item.source.startswith("llm_")
     ]
     independent = set(independent_candidate_ids)
-    if independent:
-        items = [item for item in items if item.candidate_id in independent]
-    items = items[:2]
+    if len(independent) >= 2:
+        independent_items = [
+            item for item in items if item.candidate_id in independent
+        ]
+        correlated_items = [
+            item for item in items if item.candidate_id not in independent
+        ]
+        items = [*independent_items, *correlated_items]
+    items = items[:3]
     candidate_ids = tuple(item.candidate_id for item in items)
-    if len(items) != 2:
+    if len(items) < 2:
         return ReviewTriggerDecision(
             False,
             False,
@@ -57,7 +63,7 @@ def decide_bidirectional_review(
             ("fewer_than_two_independent_candidates",),
         )
 
-    left, right = items
+    left, right = items[0], items[1]
     reasons: list[str] = []
     if canonical_answer(left.final_answer, left.answer_type) != canonical_answer(
         right.final_answer,
@@ -84,6 +90,18 @@ def decide_bidirectional_review(
     }
     if left_critical != right_critical:
         reasons.append("critical_claim_divergence")
+    if len(items) > 2:
+        reasons.append("three_candidate_coverage")
+        for extra in items[2:]:
+            if canonical_answer(
+                extra.final_answer,
+                extra.answer_type,
+            ) != canonical_answer(left.final_answer, left.answer_type):
+                reasons.append("answer_disagreement")
+            if (extra.planned_method_family or extra.method).casefold() != (
+                left.planned_method_family or left.method
+            ).casefold():
+                reasons.append("method_diversity")
     return ReviewTriggerDecision(
         bool(reasons),
         bool(reasons),

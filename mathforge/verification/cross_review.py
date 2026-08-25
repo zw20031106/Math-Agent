@@ -75,10 +75,23 @@ class CandidateConflict:
 
 
 @dataclass(frozen=True)
+class ReviewEdge:
+    reviewer_candidate_id: str
+    target_candidate_id: str
+    reason_codes: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["reason_codes"] = list(self.reason_codes)
+        return payload
+
+
+@dataclass(frozen=True)
 class CandidateConflictMatrix:
     candidate_ids: tuple[str, ...]
     conflicts: tuple[CandidateConflict, ...]
     peer_review_targets: tuple["ReviewTarget", ...] = ()
+    review_edges: tuple[ReviewEdge, ...] = ()
 
     @classmethod
     def build(
@@ -144,10 +157,42 @@ class CandidateConflictMatrix:
                         ),
                     )
                 )
+        conflict_by_pair = {
+            frozenset((conflict.left_candidate_id, conflict.right_candidate_id)): conflict
+            for conflict in conflicts
+        }
+        review_edges: list[ReviewEdge] = []
+        if len(ordered) >= 2:
+            for index, target in enumerate(ordered):
+                reviewer = ordered[(index + 1) % len(ordered)]
+                conflict = conflict_by_pair.get(
+                    frozenset((reviewer.candidate_id, target.candidate_id))
+                )
+                reasons = ["coverage"]
+                if conflict is not None:
+                    reasons.extend(
+                        reason
+                        for enabled, reason in (
+                            (conflict.answer_conflict, "answer_conflict"),
+                            (conflict.method_conflict, "method_conflict"),
+                            (conflict.assumption_conflict, "assumption_conflict"),
+                            (conflict.obligation_conflict, "obligation_conflict"),
+                            (conflict.critical_claim_conflict, "critical_claim_conflict"),
+                        )
+                        if enabled
+                    )
+                review_edges.append(
+                    ReviewEdge(
+                        reviewer_candidate_id=reviewer.candidate_id,
+                        target_candidate_id=target.candidate_id,
+                        reason_codes=tuple(dict.fromkeys(reasons)),
+                    )
+                )
         return cls(
             candidate_ids=tuple(item.candidate_id for item in ordered),
             conflicts=tuple(conflicts),
             peer_review_targets=tuple(peer_targets),
+            review_edges=tuple(review_edges),
         )
 
     def to_dict(self) -> dict:
@@ -158,6 +203,7 @@ class CandidateConflictMatrix:
                 item.to_dict()
                 for item in self.review_targets()
             ],
+            "review_graph": [edge.to_dict() for edge in self.review_edges],
         }
 
     def review_targets(self) -> tuple["ReviewTarget", ...]:
@@ -311,6 +357,7 @@ def has_reviewable_work(
     return bool(
         reviewable_obligation_ids(candidates, obligations)
         or matrix.review_targets()
+        or matrix.review_edges
         # Missing mapping is itself a verification concern.  The Verifier
         # will emit ``no_reviewable_targets`` without a model call, while the
         # Runtime still observes the attempted verification phase (and tests

@@ -74,7 +74,7 @@
       "version": "effective-agent-governance-4-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "a0938e9e863f417134f8b07f79a771b76ebb3c13c1b039f46237a8665c230839"
+      "sha256": "f984e1494dab853788c900a35c2f7568aaddffbe5a62ee71d630f7d2dbae67e5"
     },
     {
       "id": "prompt-contracts",
@@ -191,7 +191,7 @@
       "version": "typed-lemma-feedback-2-0824-phase1",
       "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
         "review_date": "2026-08-24",
-      "sha256": "a4c75b7c333022a9b19a505cab721f53af7290c7c50b01dfbe655eebe4290af9"
+      "sha256": "7239899014e286ae6cf4b69a9be3b85eef0a34de358dcaaebcdcf2b68579604b"
     },
     {
       "id": "verification-closure",
@@ -222,7 +222,7 @@
       "version": "verification-closure-19-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
         "review_date": "2026-08-24",
-      "sha256": "d44177cd5699ed14a1243636390776cad79285acdeae38189fdcc9860c66292d"
+      "sha256": "c23b5ee3cc038b841b4bf7bd042e4a388fb89ef630a077b1b4cc5b7d00086da9"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -253,7 +253,7 @@
       "version": "phase-f6-agent-protocol-11-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "7fe3e71128364ecae9b42ef36ec0bfe32bf266d6b573b67fdb4b349be6835b7d"
+      "sha256": "4dfd80f158a4f38f30e2e398ab75364943d5b187066c076fafe88654556fd8e0"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -277,7 +277,7 @@
       "version": "phase-f7-runtime-9-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "aa4149af2c6d723de0cb404b05f6cacd8c35c212357e883fef87fa47cd59956c"
+      "sha256": "8fc872eed93b535616c7d7ea211ab3fb8dd29a4a725686d05bccc9f802ecf75f"
     },
     {
       "id": "reviewed-method-cards",
@@ -349,7 +349,7 @@
       "version": "provider-controls-6-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "8efbeb3316f917342c1fb2b8ee65641c981ea9b522167d8e10c986ae61ec6251"
+      "sha256": "6a1976c3728c6b23df392b835ec49ed9fb6dc8b34b843641513ffd7f510ba97e"
     },
     {
       "id": "phase7-live-calibration",
@@ -400,7 +400,7 @@
       "version": "review-repair-communication-audit-2.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "2705db5c80f27adc1141c5fb7e5cc1c5c32e5cd65ca9ceb72b16152a9667123e"
+      "sha256": "8f661770f433c8e89062412b42daaeb9425f6248a19ba6f0318a59a6c7f28979"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -421,7 +421,7 @@
       "version": "scheduler-runtime-2.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "f0be235934dbb3a2b94bfc76602e19597b597ef0562dfa2c92f3765c0e841ea9"
+      "sha256": "810d8371a74b10a38dd5a71ead9426a453a9884c752f57b1f5270d02e6f95c4e"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -446,7 +446,7 @@
       "version": "production-preflight-release-governance-1.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "29384f63bdcf0ee7ba8bfa09fc1ce6d41f97a909245a92a371bedaf6f3df4ac3"
+      "sha256": "357b166891ace0b0034c6e935aacdb4b11fef0e6d13cfe4f87afb898f839c42a"
     },
     {
       "id": "router-e5-gold",

@@ -1583,6 +1583,7 @@ class MathSession:
     agent_runtime: Any = None
     agent_plan: Any = None
     lemmas: list[LemmaCard] = field(default_factory=list)
+    candidate_lemma_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)
     rounds: list[RoundState] = field(default_factory=list)
     trace_events: list[dict[str, Any]] = field(default_factory=list)
     phase: RuntimePhase = RuntimePhase.CREATED
@@ -1673,6 +1674,10 @@ class MathSession:
                 else None
             ),
             "lemmas": [lemma.to_dict() for lemma in self.lemmas],
+            "candidate_lemma_ids": {
+                candidate_id: list(lemma_ids)
+                for candidate_id, lemma_ids in self.candidate_lemma_ids.items()
+            },
             "rounds": [round_state.to_dict() for round_state in self.rounds],
             "trace_events": [dict(event) for event in self.trace_events],
             "phase": self.phase.value,

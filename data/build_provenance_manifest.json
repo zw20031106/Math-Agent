@@ -4,7 +4,7 @@
   "content_reviews": {
     "schema_version": "1.0",
     "status": "pending-human",
-    "manifest_sha256": "a659681994154ebb6046a8b3f06b820a6a9849d61f6b2d49c7b6f3dcdc8bed8e"
+    "manifest_sha256": "08859684f4c84c16a3bef8f9776ceb13e0d46f1ff671989f07fd0b577717ad5c"
   },
   "component_decisions": {
     "schema_version": "1.0",
@@ -14,6 +14,6 @@
   "release_governance": {
     "schema_version": "1.0",
     "status": "candidate-unvalidated",
-    "manifest_sha256": "583e3d4f0219d5fc5e22570678de5f7358a96f3d179a8a898d739949bc8a1a31"
+    "manifest_sha256": "5696a30d182db4e0e851badfcbfb7d4ec29b3addc3f9e68e88475958545eb0bb"
   }
 }

@@ -11,6 +11,7 @@ from mathforge.harness.errors import ModelResponseError
 from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, ProofObligation
 from mathforge.verification.peer_review import PeerReviewRecord, RebuttalRecord
+from mathforge.verification.cross_review import candidate_review_segments
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class SolverPeerReviewAgent:
             "problem": problem.normalized_problem,
             "response_mode": problem.response_mode,
             "candidate": _public_candidate(candidate),
+            "review_segments": candidate_review_segments(candidate),
             "obligations": [item.to_dict() for item in obligations],
             "review_focus": (
                 "Check the final answer, every critical Claim, theorem conditions, "

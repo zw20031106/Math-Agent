@@ -162,6 +162,7 @@ def Retriever(*args, **kwargs):
 class _AutonomousBranch:
     role: str
     candidate_id: str
+    branch_id: str
     solver: PrimarySolver | AlternativeSolver
     method_family: str
     forbidden_method_families: tuple[str, ...]
@@ -172,6 +173,7 @@ class _AutonomousBranch:
     plan_version: int = 0
     shared_context_hash: str = ""
     branch_context_hash: str = ""
+    lemma_ids: tuple[str, ...] = ()
     mode: str = "explore"
     status: str = "exploring"
     stop_reason: str = ""
@@ -1067,6 +1069,11 @@ class MathForgeHarness:
                     role="AlternativeSolver",
                 )
             effective = session.agent_runtime.effective_execution_plan
+            for branch in effective.solver_branches:
+                solver_contexts.setdefault(
+                    branch.branch_id,
+                    solver_contexts.get(branch.agent_role),
+                )
             session.agent_runtime.bind_execution_contexts(
                 shared_context={
                     "problem_ir": session.problem_ir.to_dict(),
@@ -1081,8 +1088,14 @@ class MathForgeHarness:
                         "subgoal_ids": list(branch.subgoal_ids),
                         "method_family": branch.method_family,
                         "role_context": (
-                            solver_contexts[branch.agent_role].to_prompt_json()
-                            if branch.agent_role in solver_contexts
+                            solver_contexts.get(
+                                branch.branch_id,
+                                solver_contexts.get(branch.agent_role),
+                            ).to_prompt_json()
+                            if solver_contexts.get(
+                                branch.branch_id,
+                                solver_contexts.get(branch.agent_role),
+                            ) is not None
                             else ""
                         ),
                         "skill_context": role_skill_contexts.get(
@@ -3705,7 +3718,7 @@ class MathForgeHarness:
                 optional=True,
                 parallel_group="review-wave",
             )
-            for branch in branches[:2]
+            for branch in branches
         )
         review_ids = tuple(node.node_id for node in review_nodes)
         verifier_dependencies = review_ids or solver_ids
@@ -3825,6 +3838,7 @@ class MathForgeHarness:
                 _AutonomousBranch(
                     role=spec.agent_role,
                     candidate_id=candidate_id,
+                    branch_id=spec.branch_id,
                     solver=(
                         PrimarySolver(self._contracts)
                         if spec.agent_role == "PrimarySolver"
@@ -3834,7 +3848,10 @@ class MathForgeHarness:
                     forbidden_method_families=tuple(
                         method for method in all_methods if method != spec.method_family
                     ),
-                    context_view=solver_contexts.get(spec.agent_role),
+                    context_view=solver_contexts.get(
+                        spec.branch_id,
+                        solver_contexts.get(spec.agent_role),
+                    ),
                     skill_context=role_skill_contexts.get(spec.agent_role, ""),
                     state=ReasoningState.initialize(
                         session.problem_ir,
@@ -3917,17 +3934,31 @@ class MathForgeHarness:
                     continue
                 current_plan = session.agent_runtime.effective_execution_plan
                 if branch.plan_version != current_plan.version:
-                    ordinal = int(branch.candidate_id.rsplit("-", 1)[-1]) - 1
-                    role_specs = [
-                        item
-                        for item in current_plan.solver_branches
-                        if item.agent_role == branch.role
-                    ]
-                    if ordinal >= len(role_specs):
+                    spec = next(
+                        (
+                            item
+                            for item in current_plan.solver_branches
+                            if item.branch_id == branch.branch_id
+                        ),
+                        None,
+                    )
+                    if spec is None:
+                        ordinal = int(branch.candidate_id.rsplit("-", 1)[-1]) - 1
+                        role_specs = [
+                            item
+                            for item in current_plan.solver_branches
+                            if item.agent_role == branch.role
+                        ]
+                        spec = (
+                            role_specs[ordinal]
+                            if 0 <= ordinal < len(role_specs)
+                            else None
+                        )
+                    if spec is None:
                         branch.status = "ready_to_synthesize"
                         branch.stop_reason = "branch_removed_by_effective_replan"
                         continue
-                    spec = role_specs[ordinal]
+                    branch.branch_id = spec.branch_id
                     branch.plan_id = current_plan.plan_id
                     branch.plan_version = current_plan.version
                     branch.method_family = spec.method_family
@@ -4011,6 +4042,7 @@ class MathForgeHarness:
                 progress_tasks,
                 timeout_seconds=session.budget.deadline.remaining_for_model_call(),
                 generation_scope=f"{scheduler_graph.graph_id}:explore",
+                preserve_start_order=True,
             )
             branch_by_id = {branch.candidate_id: branch for branch in branches}
             for outcome in progress_outcomes:
@@ -4408,7 +4440,7 @@ class MathForgeHarness:
             )
             trace.add(
                 "post_backbone_shared_context_released",
-                candidate_ids=[item.candidate_id for item in candidates[:2]],
+                candidate_ids=[item.candidate_id for item in candidates],
                 context_independence_preserved=True,
             )
         primary_state = branches[0].state
@@ -4427,7 +4459,8 @@ class MathForgeHarness:
                 "compact_recoveries": compact_recoveries,
                 "proof_token_degradations": proof_degradations,
                 "agent_stop_reasons": {
-                    branch.role: branch.stop_reason for branch in branches
+                    branch.candidate_id: branch.stop_reason
+                    for branch in branches
                 },
             },
         )
@@ -4588,7 +4621,7 @@ class MathForgeHarness:
         trace: TraceBuilder,
         candidates: list,
         *,
-        review_candidate_ids: tuple[str, str] | None = None,
+        review_candidate_ids: tuple[str, ...] | None = None,
     ) -> list:
         incremental = review_candidate_ids is not None
         pool = (
@@ -4626,9 +4659,26 @@ class MathForgeHarness:
                     "plan_id": session.agent_runtime.effective_execution_plan.plan_id,
                     "plan_version": session.agent_runtime.effective_execution_plan.version,
                     "skill_set_hash": self._skills.fingerprint,
+                    "prompt_hash": semantic_fingerprint(
+                        {
+                            "contract_hash": self._contracts.fingerprint,
+                            "role": candidate.role,
+                            "method_family": (
+                                candidate.planned_method_family or candidate.method
+                            ),
+                            "response_mode": session.problem_ir.response_mode,
+                        }
+                    ),
+                    "model_identity": self._provenance.get(
+                        "requested_model",
+                        "unreported",
+                    ),
                     "shared_context_hash": lineage["shared_context_hash"],
                     "branch_context_hash": lineage["branch_context_hash"],
-                    "lemma_ids": (),
+                    "lemma_ids": session.candidate_lemma_ids.get(
+                        candidate.candidate_id,
+                        (),
+                    ),
                     "tool_evidence_refs": (),
                 })
             except (KeyError, ValueError) as error:
@@ -4651,17 +4701,11 @@ class MathForgeHarness:
             incremental=incremental,
         )
         if review_candidate_ids is None:
-            by_role = {
-                next(
-                    candidate.role
-                    for candidate in solver_candidates
-                    if candidate.candidate_id == entry.candidate_id
-                ): entry
-                for entry in viable
-            }
-            review_entries = (
-                by_role.get("PrimarySolver"),
-                by_role.get("AlternativeSolver"),
+            viable_by_id = {entry.candidate_id: entry for entry in viable}
+            review_entries = tuple(
+                viable_by_id[candidate.candidate_id]
+                for candidate in solver_candidates
+                if candidate.candidate_id in viable_by_id
             )
         else:
             independent_by_id = {
@@ -4719,10 +4763,25 @@ class MathForgeHarness:
         candidate_by_id = {
             candidate.candidate_id: candidate for candidate in solver_candidates
         }
-        first_entry, second_entry = review_entries
-        pairs = (
-            (first_entry, second_entry),
-            (second_entry, first_entry),
+        review_entry_by_id = {
+            entry.candidate_id: entry for entry in review_entries
+        }
+        review_matrix = CandidateConflictMatrix.build(
+            [
+                CandidateReviewSummary.from_candidate(
+                    candidate_by_id[entry.candidate_id]
+                )
+                for entry in review_entries
+            ]
+        )
+        pairs = tuple(
+            (
+                review_entry_by_id[edge.reviewer_candidate_id],
+                review_entry_by_id[edge.target_candidate_id],
+            )
+            for edge in review_matrix.review_edges
+            if edge.reviewer_candidate_id in review_entry_by_id
+            and edge.target_candidate_id in review_entry_by_id
         )
         review_outcomes = []
         review_tasks = []
@@ -4774,14 +4833,16 @@ class MathForgeHarness:
         wave_outcomes = self._scheduler_flow.run_parallel(
             review_tasks,
             timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+            generation_scope=(
+                f"peer-review:{session.agent_runtime.effective_execution_plan.plan_id}"
+            ),
         )
         trace.add(
             "parallel_review_wave_completed",
             task_ids=[outcome.task_id for outcome in wave_outcomes],
             parallelism=min(
                 len(wave_outcomes),
-                2,
-                self._config.model_max_concurrency,
+                self._scheduler_flow.max_workers,
             ),
             elapsed_seconds=round(
                 max(
@@ -4795,7 +4856,8 @@ class MathForgeHarness:
             reviewer_entry, target_entry, reviewer, target = review_context[
                 wave_outcome.task_id
             ]
-            if wave_outcome.error is not None:
+            if wave_outcome.error is not None or not wave_outcome.accepted:
+                pool.mark_review_incomplete(target.candidate_id)
                 trace.add(
                     "peer_review_completed",
                     status="failed",
@@ -4804,7 +4866,8 @@ class MathForgeHarness:
                     independent_model_call=True,
                     failure_code=self._reasoning_failure_code(
                         wave_outcome.error
-                    ),
+                    ) if wave_outcome.error is not None else "stale_scheduler_result",
+                    generation=wave_outcome.generation,
                 )
                 continue
             outcome = wave_outcome.value
@@ -4852,6 +4915,7 @@ class MathForgeHarness:
                 finding_ids=[item.finding_id for item in review.finding_items],
                 independent_model_call=True,
                 thread_id=review_outcome.thread_id,
+                answer_mutation_allowed=False,
             )
             try:
                 outcome = self._peer_review_agent.rebut(
@@ -4900,6 +4964,7 @@ class MathForgeHarness:
                 message_id=outcome.message_id,
                 thread_id=outcome.thread_id,
                 thread_status="closed",
+                answer_mutation_allowed=False,
             )
 
         active_ids = set(pool.active_candidate_ids())
@@ -4907,14 +4972,22 @@ class MathForgeHarness:
             "solver_peer_review_phase_completed",
             status=(
                 "completed"
-                if len(review_outcomes) == 2
-                and (not self._config.enable_rebuttal or rebuttal_count == 2)
+                if len(review_outcomes) == len(pairs)
+                and (
+                    not self._config.enable_rebuttal
+                    or rebuttal_count == len(pairs)
+                )
                 else "partial"
             ),
             bidirectional_reviews=len(review_outcomes),
             rebuttals=rebuttal_count,
             active_candidate_ids=sorted(active_ids),
             candidate_pool=pool.snapshot(),
+            review_coverage=pool.review_coverage(),
+            expected_review_coverage=[
+                entry.candidate_id for entry in review_entries
+            ],
+            review_graph=[edge.to_dict() for edge in review_matrix.review_edges],
             downstream_candidate_filter_applied=True,
         )
         return [
@@ -4992,6 +5065,11 @@ class MathForgeHarness:
             )
             return ""
         session.lemmas.extend(outcome.lemmas)
+        shared_lemma_ids = tuple(lemma.lemma_id for lemma in outcome.lemmas)
+        for candidate in candidate_list:
+            session.candidate_lemma_ids[candidate.candidate_id] = (
+                shared_lemma_ids
+            )
         alternative_message_id = ""
         if self._config.enable_alternatives and outcome.turn_id:
             alternative_message_id = session.agent_runtime.relay_turn_artifact(
@@ -5057,6 +5135,9 @@ class MathForgeHarness:
             )
             return ""
         session.lemmas.extend(outcome.lemmas)
+        lemma_ids = tuple(lemma.lemma_id for lemma in outcome.lemmas)
+        branch.lemma_ids = tuple(dict.fromkeys((*branch.lemma_ids, *lemma_ids)))
+        session.candidate_lemma_ids[branch.candidate_id] = branch.lemma_ids
         trace.add(
             "lemma_request_completed",
             requester_role=branch.role,
@@ -5156,13 +5237,17 @@ class MathForgeHarness:
                 )
                 branch.forbidden_method_families = tuple(sorted(prior_methods))
             else:
-                method_index = 0 if branch.role == "PrimarySolver" else 1
+                if branch.role == "PrimarySolver":
+                    method_index = 0
+                else:
+                    ordinal = int(branch.candidate_id.rsplit("-", 1)[-1]) - 1
+                    method_index = max(0, ordinal)
                 if method_index < len(methods):
                     branch.method_family = methods[method_index]
                     branch.forbidden_method_families = tuple(
                         method
-                        for index, method in enumerate(methods[:2])
-                        if index != method_index
+                        for method in methods
+                        if method != branch.method_family
                     )
             refs = session.agent_runtime.publish_router_decision(
                 route_payload=session.route_plan.to_dict(),
@@ -5171,9 +5256,34 @@ class MathForgeHarness:
             )
             active_branches = list(branches or (branch,))
             effective = session.agent_runtime.effective_execution_plan
-            by_role: dict[str, list[_AutonomousBranch]] = {}
+            effective_branch_ids = {
+                item.branch_id for item in effective.solver_branches
+            }
+            assigned_branch_ids: set[str] = set()
             for active_branch in active_branches:
-                by_role.setdefault(active_branch.role, []).append(active_branch)
+                if active_branch.branch_id in effective_branch_ids:
+                    assigned_branch_ids.add(active_branch.branch_id)
+                else:
+                    replacement = next(
+                        (
+                            item
+                            for item in effective.solver_branches
+                            if item.agent_role == active_branch.role
+                            and item.branch_id not in assigned_branch_ids
+                            and item.method_family == active_branch.method_family
+                        ),
+                        None,
+                    )
+                    if replacement is not None:
+                        active_branch.branch_id = replacement.branch_id
+                        assigned_branch_ids.add(replacement.branch_id)
+                active_branch.plan_id = effective.plan_id
+                active_branch.plan_version = effective.version
+            by_branch_id = {
+                active_branch.branch_id: active_branch
+                for active_branch in active_branches
+                if active_branch.branch_id
+            }
             session.agent_runtime.bind_execution_contexts(
                 shared_context={
                     "problem_ir": session.problem_ir.to_dict(),
@@ -5188,14 +5298,14 @@ class MathForgeHarness:
                         "subgoal_ids": list(spec.subgoal_ids),
                         "method_family": spec.method_family,
                         "role_context": (
-                            by_role[spec.agent_role][0].context_view.to_prompt_json()
-                            if spec.agent_role in by_role
-                            and by_role[spec.agent_role][0].context_view is not None
+                            by_branch_id[spec.branch_id].context_view.to_prompt_json()
+                            if spec.branch_id in by_branch_id
+                            and by_branch_id[spec.branch_id].context_view is not None
                             else ""
                         ),
                         "skill_context": (
-                            by_role[spec.agent_role][0].skill_context
-                            if spec.agent_role in by_role
+                            by_branch_id[spec.branch_id].skill_context
+                            if spec.branch_id in by_branch_id
                             else ""
                         ),
                     }
@@ -5754,6 +5864,7 @@ class MathForgeHarness:
         branch = _AutonomousBranch(
             role=role,
             candidate_id=candidate_id,
+            branch_id="",
             solver=(
                 AlternativeSolver(self._contracts)
                 if role == "AlternativeSolver"

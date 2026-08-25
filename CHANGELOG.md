@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Completed the 2026-08-24 remediation Phase 6 candidate cross-review and
+  independence work. CandidatePool and runtime review selection now preserve
+  every candidate by `candidate_id`/`branch_id`, including multiple
+  `AlternativeSolver` branches. Three-candidate runs expose a directed,
+  conflict-aware coverage graph and per-candidate review coverage. Independence
+  evidence now records Prompt, Skill, model, shared/branch context, lemma
+  disclosure, execution, method, and tool-evidence dimensions; same-model
+  agreement is labelled correlated corroboration rather than independent
+  proof. Peer-review payloads include bounded Claim/Step-linked segments and
+  real obligations, while rebuttal traces explicitly prohibit silent answer
+  mutation. Failed reviewer turns are surfaced as coverage gaps without
+  fabricating reviewed status or discarding otherwise eligible candidates.
+  Scheduler startup ordering is deterministic for the first branch while the
+  remaining review/exploration tasks stay in the bounded parallel wave. Added
+  Phase 6 graph, provenance, coverage, and regression gates.
 - Completed the 2026-08-24 remediation Phase 5 long-horizon policy work.
   Solver exploration now reserves time by bounded parallel waves instead of
   serially charging every branch, while the 48-call hard fuse remains active.

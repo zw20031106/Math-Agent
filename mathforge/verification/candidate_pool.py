@@ -110,6 +110,11 @@ class IndependenceAssessment:
     method_independence: bool = True
     context_independence: bool = True
     evidence_independence: bool = True
+    prompt_independence: bool = True
+    skill_independence: bool = True
+    model_independence: bool = True
+    lemma_independence: bool = True
+    correlated_corroboration: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -132,6 +137,7 @@ class CandidatePoolEntry:
     independence_score: int = 4
     independence_reason_codes: tuple[str, ...] = ()
     peer_review_ids: tuple[str, ...] = ()
+    review_incomplete: bool = False
     rebuttal_ids: tuple[str, ...] = ()
     conceded_finding_ids: tuple[str, ...] = ()
     branch_id: str = ""
@@ -146,6 +152,13 @@ class CandidatePoolEntry:
     method_independence: bool = True
     context_independence: bool = True
     evidence_independence: bool = True
+    prompt_hash: str = ""
+    model_identity: str = ""
+    prompt_independence: bool = True
+    skill_independence: bool = True
+    model_independence: bool = True
+    lemma_independence: bool = True
+    correlated_corroboration: bool = False
 
     def __post_init__(self) -> None:
         if self.status not in _CANDIDATE_STATES:
@@ -197,6 +210,12 @@ class CandidatePool:
             source_turn_id,
             provenance,
         )
+        # CandidatePool is the Host-owned independence authority.  Reflect
+        # that decision on the candidate consumed by arbitration so a
+        # correlated answer cannot later be counted as independent agreement.
+        candidate.is_method_duplicate = bool(
+            candidate.is_method_duplicate or not assessment.independent
+        )
         entry = CandidatePoolEntry(
             candidate_id=candidate.candidate_id,
             author_agent_id=author_agent_id,
@@ -225,6 +244,13 @@ class CandidatePool:
             method_independence=assessment.method_independence,
             context_independence=assessment.context_independence,
             evidence_independence=assessment.evidence_independence,
+            prompt_hash=str(provenance.get("prompt_hash", "")),
+            model_identity=str(provenance.get("model_identity", "")),
+            prompt_independence=assessment.prompt_independence,
+            skill_independence=assessment.skill_independence,
+            model_independence=assessment.model_independence,
+            lemma_independence=assessment.lemma_independence,
+            correlated_corroboration=assessment.correlated_corroboration,
         )
         self._entries[candidate.candidate_id] = entry
         self._candidates[candidate.candidate_id] = deepcopy(candidate)
@@ -304,12 +330,70 @@ class CandidatePool:
             evidence_independence = not bool(
                 evidence_refs.intersection(other.tool_evidence_refs)
             )
+            prompt_hash = str(provenance.get("prompt_hash", ""))
+            prompt_independence = bool(
+                prompt_hash
+                and other.prompt_hash
+                and prompt_hash != other.prompt_hash
+            )
+            if not prompt_independence:
+                reasons.append(
+                    "missing_prompt_hash"
+                    if not prompt_hash or not other.prompt_hash
+                    else "same_prompt_hash"
+                )
+            skill_hash = str(provenance.get("skill_set_hash", ""))
+            skill_independence = not (
+                skill_hash
+                and other.skill_set_hash
+                and skill_hash == other.skill_set_hash
+                and signature.method_family == other.method_signature.method_family
+            )
+            if not skill_independence:
+                reasons.append("same_skill_set_and_method")
+            model_identity = str(provenance.get("model_identity", ""))
+            model_independence = bool(
+                model_identity
+                and other.model_identity
+                and (
+                    model_identity != other.model_identity
+                    or prompt_independence
+                    or context_independence
+                )
+            )
+            if not model_independence:
+                reasons.append(
+                    "missing_model_identity"
+                    if not model_identity or not other.model_identity
+                    else "same_model_same_execution_context"
+                )
+            lemma_ids = {
+                str(item) for item in provenance.get("lemma_ids", ())
+            }
+            lemma_independence = not (
+                lemma_ids
+                and set(other.lemma_ids)
+                and lemma_ids == set(other.lemma_ids)
+            )
+            if not lemma_independence:
+                reasons.append("same_lemma_disclosure")
+            correlated_corroboration = bool(
+                model_identity
+                and model_identity == other.model_identity
+                and same_answer
+            )
+            if correlated_corroboration:
+                reasons.append("correlated_same_model_answer")
             independent = all(
                 (
                     execution_independence,
                     method_independence,
                     context_independence,
                     evidence_independence,
+                    prompt_independence,
+                    skill_independence,
+                    model_independence,
+                    lemma_independence,
                 )
             )
             if not independent:
@@ -322,11 +406,39 @@ class CandidatePool:
                     method_independence,
                     context_independence,
                     evidence_independence,
+                    prompt_independence,
+                    skill_independence,
+                    model_independence,
+                    lemma_independence,
+                    correlated_corroboration,
                 )
-        return IndependenceAssessment(True, 4, ("structurally_distinct",))
+        return IndependenceAssessment(
+            True,
+            4,
+            ("structurally_distinct",),
+            correlated_corroboration=False,
+        )
 
     def mark_peer_reviewing(self, candidate_id: str) -> CandidatePoolEntry:
         return self._update(candidate_id, status="peer_reviewing")
+
+    def mark_review_incomplete(self, candidate_id: str) -> CandidatePoolEntry:
+        """Record a review gap without fabricating reviewed status.
+
+        A failed reviewer turn must not make a candidate look reviewed, but it
+        also must not erase a candidate that already has a valid review.  A
+        candidate with no attached review returns to ``submitted`` so the
+        deterministic arbitration layer can decide using the evidence it has;
+        ``review_incomplete`` and the coverage projection expose the gap.
+        """
+
+        entry = self._entries[candidate_id]
+        status = entry.status if entry.peer_review_ids else "submitted"
+        return self._update(
+            candidate_id,
+            status=status,
+            review_incomplete=True,
+        )
 
     def attach_review(
         self,
@@ -418,6 +530,20 @@ class CandidatePool:
 
     def snapshot(self) -> list[dict[str, Any]]:
         return [entry.to_dict() for entry in self._entries.values()]
+
+    def review_coverage(self) -> dict[str, dict[str, Any]]:
+        """Return explicit per-candidate review coverage, including gaps."""
+
+        return {
+            candidate_id: {
+                "reviewed": bool(entry.peer_review_ids),
+                "review_incomplete": entry.review_incomplete,
+                "review_count": len(entry.peer_review_ids),
+                "review_ids": list(entry.peer_review_ids),
+                "status": entry.status,
+            }
+            for candidate_id, entry in self._entries.items()
+        }
 
 
 @dataclass
