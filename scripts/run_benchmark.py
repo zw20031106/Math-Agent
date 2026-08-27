@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from hashlib import sha256
 import json
+import platform as platform_module
 from pathlib import Path
 import sys
 
@@ -20,7 +21,12 @@ from mathforge.benchmark import (  # noqa: E402
     run_benchmark,
 )
 from mathforge.config import HarnessConfig, load_competition_config  # noqa: E402
-from mathforge.evaluation.artifacts import finalize_artifact  # noqa: E402
+from mathforge.evaluation.artifacts import (  # noqa: E402
+    build_run_identity,
+    ensure_competition_timing,
+    finalize_artifact,
+    timing_profile_for,
+)
 from mathforge.model_identity import (  # noqa: E402
     EXACT_INTERN_MODEL,
     exact_model_identity,
@@ -46,24 +52,46 @@ def build_benchmark_metadata(
         request_source="argument:--model",
     )
     config = load_benchmark_config(config_path)
+    ensure_competition_timing(config)
     provenance = build_run_provenance(
         config,
         model_identity=model_identity,
         inspect_worktree=True,
     )
+    dataset_sha = _file_sha256(input_path)
+    prompt_fingerprint = PromptContractLoader().fingerprint
+    skill_fingerprint = SkillRegistry().fingerprint
+    tool_fingerprint = ToolRegistry().fingerprint
+    run_identity = build_run_identity(
+        commit_sha=provenance.code_commit,
+        competition_config_sha=config.fingerprint,
+        prompt_fingerprint=prompt_fingerprint,
+        skill_fingerprint=skill_fingerprint,
+        tool_fingerprint=tool_fingerprint,
+        dataset_sha=dataset_sha,
+        model_identity=model_identity.to_dict(),
+        python=(
+            f"{platform_module.python_implementation()} "
+            f"{platform_module.python_version()}"
+        ),
+        platform=platform_module.platform(),
+    )
     return {
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
-        "dataset_sha256": _file_sha256(input_path),
+        "dataset_sha256": dataset_sha,
         "config_sha256": config.fingerprint,
         "config_schema_version": config.schema_version,
         "config_profile": config.profile,
         "config_status": config.status,
-        "prompt_sha256": PromptContractLoader().fingerprint,
-        "skill_sha256": SkillRegistry().fingerprint,
+        "prompt_sha256": prompt_fingerprint,
+        "skill_sha256": skill_fingerprint,
         "rag_sha256": Retriever().fingerprint,
-        "tool_sha256": ToolRegistry().fingerprint,
+        "tool_sha256": tool_fingerprint,
         "git_commit": provenance.code_commit,
         "code_dirty": provenance.code_dirty,
+        "run_identity": run_identity.to_dict(),
+        "timing_profile": timing_profile_for(config),
+        "outer_platform_limit_seconds": config.outer_platform_limit_seconds,
         **model_identity.to_dict(),
         "run_provenance": provenance.to_dict(),
     }
@@ -85,6 +113,7 @@ def main() -> int:
         request_source="argument:--model",
     )
     config = load_benchmark_config(args.config)
+    ensure_competition_timing(config)
     client = InternChatClient()
     client.model = args.model
     harness = MathForgeHarness(
@@ -129,6 +158,15 @@ def load_benchmark_config(path: Path) -> HarnessConfig:
     metadata_fields = {"schema_version", "profile", "status"}
     if metadata_fields <= set(payload):
         return HarnessConfig.from_dict(payload)
+    # Small test/migration overlays historically supplied only a profile (or
+    # profile and status).  Resolve those overlays against the authoritative
+    # competition settings so identity capture can still describe the actual
+    # executable configuration.
+    if set(payload) <= {"profile", "status"} and payload.get("profile") != "competition":
+        merged = load_competition_config().to_dict()
+        merged["profile"] = str(payload.get("profile", "ablation"))
+        merged["status"] = str(payload.get("status", "experiment"))
+        return HarnessConfig.from_dict(merged)
     unknown = set(payload) - HarnessConfig.setting_names()
     if unknown:
         raise ValueError(f"unknown ablation configuration keys: {sorted(unknown)}")

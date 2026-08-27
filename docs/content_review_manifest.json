@@ -349,7 +349,7 @@
       "version": "provider-controls-6-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "9afd5ce9d1d314daa814644972723a1c103fe25b4a13bef00ac8af73ff336e21"
+      "sha256": "549c74f5290e5e5163020c6dfd2e1d6cbb90230ea51dedc912fe0fa9acb428a8"
     },
     {
       "id": "phase7-live-calibration",
@@ -364,7 +364,7 @@
       "version": "phase7-live-calibration-4-0812-p4",
       "engineering_reviewer": "codex-0812-p4-audit",
       "review_date": "2026-08-12",
-      "sha256": "4b6aba8c95c7bf5dde0f1bfc8b516228d0594d65af8b289120a4644a28655e93"
+      "sha256": "54782da6a3090002649c162420aadc4c0f58d2fb487d73c0990eb082713ee929"
     },
     {
       "id": "router-calibration",
@@ -427,7 +427,7 @@
       "version": "skill-context-memory-1-0825-phase8",
       "engineering_reviewer": "codex-0825-phase8-skill-context-memory",
       "review_date": "2026-08-25",
-      "sha256": "57329045ad745c91c3a5b3ccffdf9f08b98a59deb72481a450f88f6843e6b38d"
+      "sha256": "dd002950199448235be598a35a87c40921ca25f80a246bbfb54da1e95ddb680b"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -448,7 +448,7 @@
       "version": "scheduler-runtime-2.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "048c2c9eda655adc7a50040303bd8bef26fa6f4cedca264e9907ecee296681ba"
+      "sha256": "422a060f1b1454b5fcb39e631b01049300a61ebf9266b9814337ed1e00bd4c43"
     },
     {
       "id": "phase9-provider-resource-governance",
@@ -475,7 +475,7 @@
       "version": "provider-resource-governance-1-0825-phase9",
       "engineering_reviewer": "codex-0825-phase9-provider-resource-governance",
       "review_date": "2026-08-25",
-      "sha256": "2bf0de02cf6e05563097dc3a39f49f4db249733e1da81204433d3741c280ccc5"
+      "sha256": "c4cc1e7fd464e9ca515f875b7b939c79f207ef280ef84e4875a23e8a6dc2b855"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -500,7 +500,7 @@
       "version": "production-preflight-release-governance-1.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "5a581e7f51c61dbebd2a52cb8f93de33dd663109e3355156fb7e51820b298fe4"
+      "sha256": "779ecbf36a4ba8b1699057d84b9b62afbb021dca72797c9847b613ca87481445"
     },
     {
       "id": "router-e5-gold",

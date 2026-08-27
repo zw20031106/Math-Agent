@@ -12,6 +12,10 @@ from time import perf_counter
 from typing import Any, Callable, Mapping
 
 from mathforge.evaluation.scoring import ScoreResult, score_response
+from mathforge.evaluation.failure_attribution import (
+    aggregate_failure_attribution,
+    attribute_case_failure,
+)
 from mathforge.harness.fingerprints import request_fingerprint
 from mathforge.harness.metrics import RunMetrics
 from mathforge.parsing.problem_parser import ProblemParser
@@ -423,6 +427,7 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
     seeds = sorted({record.random_seed for record in records})
     repetition_indexes = {record.repetition_index for record in records}
     pollution_records = sum(record.pollution.contaminated for record in records)
+    failure_attributions = [attribute_case_failure(record) for record in records]
     return {
         "case_count": len(records),
         "expected_count": len(expected),
@@ -608,6 +613,10 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
         "concurrency_pollution_count": (
             duplicate_sessions + fingerprint_mismatches + pollution_records
         ),
+        "failure_attribution": aggregate_failure_attribution(
+            failure_attributions,
+            case_count=len(records),
+        ),
     }
 
 
@@ -664,6 +673,7 @@ def benchmark_record_to_dict(record: BenchmarkRecord) -> dict:
         "latency_seconds": record.latency_seconds,
         "json_valid": record.json_valid,
         "score": record.score.to_dict(),
+        "failure_attribution": attribute_case_failure(record).to_dict(),
         "request_fingerprint": record.request_fingerprint,
         "run_metrics": record.run_metrics.to_dict(),
         "pollution": record.pollution.to_dict(),

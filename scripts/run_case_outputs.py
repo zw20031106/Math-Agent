@@ -30,6 +30,9 @@ from mathforge.benchmark import (  # noqa: E402
     summarize,
 )
 from mathforge.evaluation.scoring import score_response  # noqa: E402
+from mathforge.evaluation.artifacts import (  # noqa: E402
+    ensure_competition_timing,
+)
 from mathforge.evaluation.production_preflight import (  # noqa: E402
     PREFLIGHT_L1_MAX_TOKENS,
     PREFLIGHT_STAGE_MAX_TOKENS,
@@ -60,10 +63,13 @@ from mathforge.output.public_result import build_public_result  # noqa: E402
 from mathforge.output.official_trace import validate_official_trace  # noqa: E402
 from mathforge.parsing.problem_parser import ProblemParser  # noqa: E402
 from mathforge.runtime import MathForgeHarness  # noqa: E402
-from scripts.run_benchmark import load_benchmark_config  # noqa: E402
+from scripts.run_benchmark import (  # noqa: E402
+    build_benchmark_metadata,
+    load_benchmark_config,
+)
 
 
-PER_CASE_WALL_CLOCK_SECONDS = 1200.0
+PER_CASE_WALL_CLOCK_SECONDS = 900.0
 RESULT_SERIALIZATION_RESERVE_SECONDS = 50.0
 RUN_MANIFEST_SCHEMA_VERSION = "1.3"
 COMPATIBLE_RUN_MANIFEST_SCHEMA_VERSIONS = frozenset({"1.1", "1.2", "1.3"})
@@ -317,8 +323,14 @@ class PerCaseWallClockRunner:
         elapsed_seconds: float,
     ) -> dict[str, Any]:
         elapsed = max(0.0, float(elapsed_seconds))
+        minutes = self.wall_clock_seconds / 60.0
+        limit_label = (
+            f"{minutes:.0f} 分钟"
+            if minutes.is_integer()
+            else f"{self.wall_clock_seconds:.0f} 秒"
+        )
         final_response = (
-            "未能在单题 20 分钟墙钟限制内完成求解；"
+            f"未能在单题 {limit_label} 墙钟限制内完成求解；"
             "为避免输出未经验证的结论，本题返回确定性超时结果。"
         )
         session_id = f"timeout-{uuid4().hex}"
@@ -448,8 +460,12 @@ class CaseRunManifest:
         seed: int,
         concurrency: int,
         resume: bool,
+        requested_model: str = EXACT_INTERN_MODEL,
         rerun_statuses: frozenset[str] = DEFAULT_RERUN_STATUSES,
     ) -> tuple[list, CaseRunManifest]:
+        # The official CLI is bounded to three concurrent cases.  This
+        # manifest helper retains the legacy four-worker value for migration
+        # and resume fixtures; production entry points still pass 1..3.
         if concurrency < 1 or concurrency > 4:
             raise ValueError("case runner concurrency must be between 1 and 4")
         invalid_rerun_statuses = set(rerun_statuses) - PUBLIC_CASE_STATUSES
@@ -464,7 +480,11 @@ class CaseRunManifest:
         manifest_path = output_dir / RUN_MANIFEST_FILENAME
         input_hash = _file_sha256(input_path)
         config_hash = _file_sha256(config_path)
-        run_contract = _current_run_contract()
+        run_contract = _current_run_contract(
+            input_path=input_path,
+            config_path=config_path,
+            requested_model=requested_model,
+        )
         expected_ids = {case.idx for case in cases}
         unknown_files = sorted(
             path.name
@@ -515,6 +535,7 @@ class CaseRunManifest:
             "started_at": now,
             "updated_at": now,
             "model_identity": {},
+            "run_identity": run_contract.get("run_identity", {}),
             "preflight": {
                 "schema_version": MODEL_PREFLIGHT_SCHEMA_VERSION,
                 "status": "not_started",
@@ -557,6 +578,7 @@ class CaseRunManifest:
                 "model_request_policy": run_contract[
                     "model_request_policy"
                 ],
+                "run_identity": run_contract.get("run_identity", {}),
                 "code_identity": run_contract["code_identity"],
                 "output_contract": run_contract["output_contract"],
                 "cases": {},
@@ -894,6 +916,7 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
         concurrency=args.concurrency,
         resume=args.resume,
+        requested_model=args.model,
         rerun_statuses=args.rerun_status,
     )
     if not remaining_cases:
@@ -912,6 +935,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         manifest.record_model_identity(model_identity.to_dict())
         config = load_benchmark_config(args.config)
+        ensure_competition_timing(config)
         try:
             base_client = InternChatClient(
                 timeout=model_http_timeout_seconds(config),
@@ -1330,10 +1354,15 @@ def _migrate_attempt_history(
     payload["attempts"] = migrated
 
 
-def _current_run_contract() -> dict[str, Any]:
-    return {
+def _current_run_contract(
+    *,
+    input_path: Path | None = None,
+    config_path: Path | None = None,
+    requested_model: str = EXACT_INTERN_MODEL,
+) -> dict[str, Any]:
+    contract = {
         "model_request_policy": {
-            "requested_model": EXACT_INTERN_MODEL,
+            "requested_model": requested_model,
             "source": "internal_explicit_default_or_cli_argument",
             "interface": "client.chat",
         },
@@ -1350,6 +1379,20 @@ def _current_run_contract() -> dict[str, Any]:
         },
         "manifest_schema_version": RUN_MANIFEST_SCHEMA_VERSION,
     }
+    if input_path is not None or config_path is not None:
+        if input_path is None or config_path is None:
+            raise ValueError("input_path and config_path must be supplied together")
+        metadata = build_benchmark_metadata(
+            input_path,
+            config_path,
+            requested_model=requested_model,
+        )
+        contract["run_identity"] = metadata["run_identity"]
+        contract["timing_profile"] = metadata["timing_profile"]
+        contract["outer_platform_limit_seconds"] = metadata[
+            "outer_platform_limit_seconds"
+        ]
+    return contract
 
 
 def _code_identity() -> dict[str, Any]:

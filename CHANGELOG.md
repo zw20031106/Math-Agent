@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Completed E0 evidence-freeze and characterization work.  Benchmark and
+  per-case manifests now carry a complete current-run identity (commit,
+  competition configuration, Prompt/Skill/Tool, dataset, model, Python, and
+  platform fingerprints); baseline validation fails closed for missing,
+  dirty, historical, or non-comparable evidence.  Formal competition runs
+  enforce the 900-second outer limit, while 1200-second debug runs are
+  explicitly labelled non-comparable.  Added deterministic one-primary-cause
+  failure attribution and a reproducible workflow characterization test.
 - Completed the 2026-08-25 remediation Phase 9 Provider/timeout/resource
   work.  Stage timeout is now the actual caller-visible boundary with only a
   100 ms tail grace; late physical calls are bounded, case-isolated, and

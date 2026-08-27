@@ -6,6 +6,10 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 
+from mathforge.evaluation.artifacts import (
+    COMPETITION_TIMING_PROFILE,
+    run_identity_errors,
+)
 from mathforge.model_identity import EXACT_INTERN_MODEL
 
 
@@ -220,6 +224,83 @@ def validate_registered_trees(
         if fingerprint != entry.get("tree_sha256"):
             errors.append(f"registered evidence fingerprint mismatch: {entry.get('id', '')}")
     return errors
+
+
+def baseline_registration_errors(
+    registry: dict[str, Any],
+    identity: dict[str, Any],
+    *,
+    code_dirty: bool | None = None,
+    timing_profile: str | None = None,
+    entry: dict[str, Any] | None = None,
+) -> list[str]:
+    """Return fail-closed errors before activating a current baseline.
+
+    The registry may contain historical evidence for diagnosis, but those
+    entries can never satisfy this gate.  A candidate must carry a complete
+    current-run identity and agree with the registry's candidate commit,
+    configuration, dataset, and exact model.
+    """
+
+    errors = run_identity_errors(
+        identity,
+        code_dirty=code_dirty,
+        require_clean=True,
+        require_exact_model=True,
+    )
+    if timing_profile != COMPETITION_TIMING_PROFILE:
+        errors.append("baseline registration requires the competition timing profile")
+    if entry is not None:
+        if entry.get("classification") == "historical-ineligible":
+            errors.append("historical evidence cannot become an active baseline")
+        if entry.get("eligible_for_baseline") is not True:
+            errors.append("baseline entry is not explicitly eligible")
+        if entry.get("requested_model") != EXACT_INTERN_MODEL:
+            errors.append("baseline entry uses the wrong model")
+        if entry.get("git_commit") != identity.get("commit_sha"):
+            errors.append("baseline entry commit does not match run identity")
+        if entry.get("dataset_sha256") != identity.get("dataset_sha"):
+            errors.append("baseline entry dataset does not match run identity")
+    if isinstance(registry, dict):
+        if identity.get("commit_sha") != registry.get("baseline_candidate_git_commit"):
+            errors.append("run identity commit does not match registry candidate")
+        if identity.get("dataset_sha") != registry.get("dataset_sha256"):
+            errors.append("run identity dataset does not match registry candidate")
+        registry_config = registry.get("baseline_candidate_config_sha256")
+        if registry_config and identity.get("competition_config_sha") != registry_config:
+            errors.append("run identity config does not match registry candidate")
+        active_id = registry.get("active_baseline_id")
+        if active_id is not None:
+            active_entry = next(
+                (
+                    item for item in registry.get("entries", [])
+                    if isinstance(item, dict) and item.get("id") == active_id
+                ),
+                None,
+            )
+            if not isinstance(active_entry, dict) or (
+                active_entry.get("classification") == "historical-ineligible"
+                or active_entry.get("eligible_for_baseline") is not True
+            ):
+                errors.append("registry active baseline is not current eligible evidence")
+    return sorted(set(errors))
+
+
+def can_register_baseline(
+    registry: dict[str, Any],
+    identity: dict[str, Any],
+    *,
+    code_dirty: bool | None = None,
+    timing_profile: str | None = None,
+    entry: dict[str, Any] | None = None,
+) -> bool:
+    return not baseline_registration_errors(
+        registry,
+        identity,
+        code_dirty=code_dirty,
+        timing_profile=timing_profile,
+        entry=entry,
+    )
 
 
 def _is_hash(value: Any) -> bool:
