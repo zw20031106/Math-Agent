@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Completed E4 stateful long-horizon and truncation recovery work. Added
+  protocol-aware `TruncationAssessment`, bounded public `CheckpointCursor`
+  rollback/resume, stateful Candidate rebuilds from `ReasoningState` and
+  `ProofBackbone`, closure-window-only emergency fallback, and recovered-answer
+  corroboration gates. Host-managed `VerifiedFactBank`, proof-backbone
+  dependency inference, semantic information-gain scoring, and public trace
+  events now preserve mathematical frontier state without private reasoning.
+  Added E4 invariant, solver recovery, and runtime checkpoint regression tests;
+  formal competition evidence remains pending.
 - Completed E3 executable-Skill work. Added the immutable
   `SkillExecutionPlan`/`SkillOutcome`/`SkillCheckTask` contracts with
   offline utility priors, fail-closed capability admission, alternative and

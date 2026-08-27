@@ -286,6 +286,7 @@ def public_candidate_content(candidate: CandidateSolution) -> dict:
     return {
         "public_solution_steps": list(candidate.public_solution_steps),
         "final_answer": candidate.final_answer,
+        "assurance": getattr(candidate, "assurance", "standard"),
         "assumptions": list(candidate.assumptions),
         "theorems": list(candidate.theorems),
         "claims": [claim.to_dict() for claim in candidate.claims],
@@ -304,6 +305,7 @@ def candidate_trace_payload(candidate: CandidateSolution) -> dict:
         "parse_status": candidate.parse_status,
         "parse_tier": candidate.parse_tier,
         "source": candidate.source,
+        "assurance": getattr(candidate, "assurance", "standard"),
         "contract_deviations": list(candidate.contract_deviations),
         "content": public_candidate_content(candidate),
         "content_digest": semantic_fingerprint(candidate.to_dict()),

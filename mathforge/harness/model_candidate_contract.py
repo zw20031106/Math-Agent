@@ -98,6 +98,7 @@ MODEL_CANDIDATE_HOST_FIELDS = frozenset(
         "is_method_duplicate",
         "contract_deviations",
         "degraded",
+        "assurance",
         "method_steps",
     }
 )

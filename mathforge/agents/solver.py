@@ -25,7 +25,13 @@ from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.problem_conditions import build_problem_condition_envelope
 from mathforge.harness.reasoning_state import (
     ProgressDeltaParser,
+    ReasoningState,
     RoundDelta,
+)
+from mathforge.harness.truncation import (
+    ProofBackbone,
+    TruncationAssessment,
+    rebuild_candidate_from_state,
 )
 from mathforge.harness.schemas import (
     CandidateSolution,
@@ -54,6 +60,9 @@ class SolverRequest:
     forbidden_method_families: tuple[str, ...] = ()
     context_view: RoleContextView | None = None
     reasoning_state_json: str = ""
+    # Full public checkpoint snapshot used only for deterministic recovery.
+    # Normal prompts continue to use the token-budgeted reasoning_state_json.
+    checkpoint_state_json: str = ""
 
 
 class PrimarySolver:
@@ -242,6 +251,7 @@ class AutonomousSolverTurn:
     parsed: ParsedAgentTurn
     delta: RoundDelta | None = None
     candidate: CandidateSolution | None = None
+    truncation_assessment: TruncationAssessment | None = None
 
     @property
     def action(self) -> str:
@@ -488,6 +498,8 @@ class SolverExecutor:
             raise ModelResponseError(validation_code)
         candidate.parse_status = f"{candidate.parse_status}:emergency_direct"
         candidate.planned_method_family = request.method_family
+        candidate.assurance = "emergency"
+        candidate.degraded = True
         candidate.validate()
         return candidate
 
@@ -603,6 +615,10 @@ class SolverExecutor:
             task_result_type="ProgressArtifact",
             progress_summary="public progress turn",
         )
+        truncation_assessment = TruncationAssessment.assess(
+            response,
+            required_fields=("action", "public_state_delta", "progress_summary"),
+        )
         if parsed.payload.task_result_type not in {
             "ProgressArtifact",
             "ToolRequestArtifact",
@@ -645,7 +661,11 @@ class SolverExecutor:
             rejected=False,
         )
         self._complete_agent_turn(response, budget)
-        return AutonomousSolverTurn(parsed=parsed, delta=delta)
+        return AutonomousSolverTurn(
+            parsed=parsed,
+            delta=delta,
+            truncation_assessment=truncation_assessment,
+        )
 
     def execute_autonomous_candidate(
         self,
@@ -722,6 +742,20 @@ class SolverExecutor:
                 planned_method_family=request.method_family,
             )
             if candidate is not None:
+                rebuilt = self._rebuild_from_public_state(
+                    request,
+                    candidate,
+                    role=solver.role,
+                )
+                if rebuilt is not None:
+                    candidate = rebuilt
+                elif (
+                    request.reasoning_state_json.strip()
+                    or request.checkpoint_state_json.strip()
+                ):
+                    raise ModelResponseError(
+                        "stateful_candidate_rebuild_unavailable"
+                    )
                 return self._recovered_autonomous_candidate(
                     response,
                     candidate,
@@ -750,6 +784,18 @@ class SolverExecutor:
             )
             if candidate is None:
                 raise
+            rebuilt = self._rebuild_from_public_state(
+                request,
+                candidate,
+                role=solver.role,
+            )
+            if rebuilt is not None:
+                candidate = rebuilt
+            elif (
+                request.reasoning_state_json.strip()
+                or request.checkpoint_state_json.strip()
+            ):
+                raise ModelResponseError("stateful_candidate_rebuild_unavailable")
             return self._recovered_autonomous_candidate(
                 response,
                 candidate,
@@ -807,6 +853,43 @@ class SolverExecutor:
             )
             candidate.contract_deviations.append("method:planned_method_family")
             validation_code = "candidate_method_deviation"
+
+        # A body that is structurally damaged but still yielded a public
+        # answer must be rebuilt from the last Host checkpoint.  A balanced
+        # payload with only a provider length marker remains a probable (not
+        # definite) truncation and keeps the compatibility path used by the
+        # existing simple-candidate profile.
+        truncation_assessment = TruncationAssessment.assess(
+            response,
+            required_fields=("action", "result_payload"),
+        )
+        if parsed.partial and truncation_assessment.status in {
+            "DEFINITE_TRUNCATION",
+            "STRUCTURAL_DAMAGE",
+        }:
+            rebuilt = self._rebuild_from_public_state(
+                request,
+                candidate,
+                role=solver.role,
+            )
+            if rebuilt is not None:
+                candidate = rebuilt
+                return self._recovered_autonomous_candidate(
+                    response,
+                    candidate,
+                    budget,
+                    recovery_reason="stateful_candidate_rebuilt_from_truncated_body",
+                )
+            if (
+                request.reasoning_state_json.strip()
+                or request.checkpoint_state_json.strip()
+            ):
+                self._fail_agent_turn(
+                    response,
+                    budget,
+                    "stateful_candidate_rebuild_unavailable",
+                )
+                raise ModelResponseError("stateful_candidate_rebuild_unavailable")
         budget.record_model_response_validation(
             getattr(response, "model_call_index", None),
             validation_code,
@@ -815,7 +898,11 @@ class SolverExecutor:
         candidate.planned_method_family = request.method_family
         candidate.validate()
         self._complete_agent_turn(response, budget)
-        return AutonomousSolverTurn(parsed=parsed, candidate=candidate)
+        return AutonomousSolverTurn(
+            parsed=parsed,
+            candidate=candidate,
+            truncation_assessment=truncation_assessment,
+        )
 
     def _retry_truncated_answer(
         self,
@@ -832,19 +919,31 @@ class SolverExecutor:
             optional=False,
             action_category="candidate_completion",
         )
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Solve the supplied problem. Output only the exact final "
-                    "answer without labels, delimiters, explanations, or JSON."
-                ),
-            },
-            {
-                "role": "user",
-                "content": request.problem.normalized_problem,
-            },
-        ]
+        if request.reasoning_state_json.strip() or request.checkpoint_state_json.strip():
+            # Stateful recovery keeps the public frontier and asks for a
+            # complete Candidate artifact.  The answer-only retry remains a
+            # last-resort compatibility path for callers that have no public
+            # checkpoint at all.
+            compilation = solver.compile_prompt(
+                request,
+                autonomous=True,
+                compact=True,
+            )
+            messages = compilation.messages
+        else:
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Solve the supplied problem. Output only the exact final "
+                        "answer without labels, delimiters, explanations, or JSON."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": request.problem.normalized_problem,
+                },
+            ]
         budget.record_prompt_chars(
             sum(len(message["content"]) for message in messages)
         )
@@ -860,6 +959,57 @@ class SolverExecutor:
             input_artifact_ids=input_artifact_ids,
         )
 
+    @staticmethod
+    def _rebuild_from_public_state(
+        request: SolverRequest,
+        recovered: CandidateSolution,
+        *,
+        role: str,
+    ) -> CandidateSolution | None:
+        state_json = (
+            request.checkpoint_state_json
+            if request.checkpoint_state_json.strip()
+            else request.reasoning_state_json
+        )
+        if not state_json.strip():
+            return None
+        try:
+            payload = json.loads(state_json)
+            if isinstance(payload, dict):
+                # Compressed prompt projections contain additional metadata;
+                # recovery reads only the canonical public state fields.
+                allowed = {
+                    "schema_version",
+                    "state_id",
+                    "version",
+                    "problem_frame",
+                    "subgoal_ledger",
+                    "claim_ledger",
+                    "open_obligations",
+                    "evidence_refs",
+                    "tool_results",
+                    "contradictions",
+                    "strategy",
+                    "rounds",
+                    "session_id",
+                    "branch_id",
+                    "agent_id",
+                }
+                payload = {key: value for key, value in payload.items() if key in allowed}
+            state = ReasoningState.from_dict(payload)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        backbone = ProofBackbone.from_state(state)
+        return rebuild_candidate_from_state(
+            state,
+            final_answer=recovered.final_answer,
+            candidate_id=request.candidate_id,
+            role=role,
+            method=request.method_family,
+            answer_type=request.problem.answer_type,
+            proof_backbone=backbone,
+        )
+
     def _recovered_autonomous_candidate(
         self,
         response: str,
@@ -869,6 +1019,12 @@ class SolverExecutor:
         recovery_reason: str,
     ) -> AutonomousSolverTurn:
         candidate.degraded = True
+        candidate.assurance = (
+            "recovered"
+            if "stateful_rebuild" in " ".join(candidate.contract_deviations)
+            or candidate.parse_status == "truncated_candidate_rebuilt"
+            else "answer_salvaged"
+        )
         if "truncation_recovery" not in candidate.contract_deviations:
             candidate.contract_deviations.append("truncation_recovery")
         payload = AgentTurnPayload(
@@ -899,6 +1055,10 @@ class SolverExecutor:
             recovery_reason=recovery_reason,
             assurance_degradation="high",
         )
+        truncation_assessment = TruncationAssessment.assess(
+            response,
+            required_fields=("action", "result_payload"),
+        )
         budget.record_model_protocol_telemetry(
             getattr(response, "model_call_index", None),
             parsed.parse_tier,
@@ -913,7 +1073,11 @@ class SolverExecutor:
         )
         self._complete_recovered_agent_turn(response, budget, parsed)
         candidate.validate()
-        return AutonomousSolverTurn(parsed=parsed, candidate=candidate)
+        return AutonomousSolverTurn(
+            parsed=parsed,
+            candidate=candidate,
+            truncation_assessment=truncation_assessment,
+        )
 
     @staticmethod
     def _parse_agent_turn(

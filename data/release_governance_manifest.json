@@ -5,7 +5,7 @@
   "prompt_tree_sha256": "9b9045645d1ad209804872d8a6b4c01a1412223a917b40aa2edfdb6b68293594",
   "skill_tree_sha256": "03b54aeaa1cad14412b329a7029b57df244774c40a67068df074956c48dc0224",
   "evidence_registry_sha256": "e9f489edab138de32c95777a5fd7b389e25f9d7c297fc7d48399e747563ef360",
-  "content_review_manifest_sha256": "5aafe1623ad9e49985b1e44d74e02c093d8edc9658fb8116f45aed17f80f6e21",
+  "content_review_manifest_sha256": "86bbf8a9350bba1786bdb7293de69f03e3ff5615aeac32c9fbceda0d75e940ad",
   "test_attestation": {
     "status": "pending-phase11",
     "source_sha256": ""

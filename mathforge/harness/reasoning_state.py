@@ -1599,6 +1599,8 @@ class CompressedReasoningState:
     omitted_rounds: int
     semantic_invariants: tuple[str, ...]
     active_claim_ids: tuple[str, ...] = ()
+    verified_fact_ids: tuple[str, ...] = ()
+    proof_backbone: dict[str, Any] | None = None
 
 
 class ReasoningStateCompressor:
@@ -1615,11 +1617,32 @@ class ReasoningStateCompressor:
         state: ReasoningState,
         *,
         max_tokens: int = REASONING_STATE_MAX_TOKENS,
+        verified_fact_bank: Any | None = None,
+        proof_backbone: Any | None = None,
     ) -> CompressedReasoningState:
         if type(max_tokens) is not int or max_tokens < 1:
             raise ValueError("ReasoningState token budget must be positive")
         state.validate()
         full_payload = state.to_dict()
+        verified_fact_ids = tuple(
+            getattr(item, "fact_id", "")
+            for item in (
+                verified_fact_bank.values()
+                if verified_fact_bank is not None
+                else ()
+            )
+            if getattr(item, "fact_id", "")
+        )
+        backbone_payload = (
+            proof_backbone.to_prompt_dict()
+            if proof_backbone is not None
+            and hasattr(proof_backbone, "to_prompt_dict")
+            else None
+        )
+        if verified_fact_bank is not None:
+            full_payload["verified_fact_bank"] = verified_fact_bank.to_dict()
+        if backbone_payload is not None:
+            full_payload["proof_backbone"] = backbone_payload
         full_text, full_count = self._serialize_and_count(full_payload)
         invariants = (
             "problem_frame",
@@ -1636,6 +1659,10 @@ class ReasoningStateCompressor:
             "branch_identity",
             "active_frontier",
         )
+        if verified_fact_bank is not None:
+            invariants = (*invariants, "verified_fact_bank")
+        if backbone_payload is not None:
+            invariants = (*invariants, "proof_backbone")
         if full_count.tokens <= max_tokens:
             return CompressedReasoningState(
                 full_text,
@@ -1645,10 +1672,16 @@ class ReasoningStateCompressor:
                 0,
                 invariants,
                 state.active_frontier(),
+                verified_fact_ids,
+                backbone_payload,
             )
 
         compact_state, gc_summary = state.semantic_gc()
         compact_payload = compact_state.to_dict()
+        if verified_fact_bank is not None:
+            compact_payload["verified_fact_bank"] = verified_fact_bank.to_dict()
+        if backbone_payload is not None:
+            compact_payload["proof_backbone"] = backbone_payload
         active_claim_ids = tuple(gc_summary["active_claim_ids"])
         payload = {
             **compact_payload,
@@ -1691,6 +1724,8 @@ class ReasoningStateCompressor:
             int(payload["compression"]["omitted_rounds"]),
             invariants,
             active_claim_ids,
+            verified_fact_ids,
+            backbone_payload,
         )
 
     def _serialize_and_count(

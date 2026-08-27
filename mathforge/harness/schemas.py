@@ -56,6 +56,11 @@ class CandidateParseTier(str, Enum):
     REJECTED = "rejected"
 
 
+_CANDIDATE_ASSURANCE = frozenset(
+    {"standard", "emergency", "recovered", "answer_salvaged", "provisional", "verified"}
+)
+
+
 def _default_candidate_source(role: str) -> str:
     return {
         CandidateRole.PRIMARY_SOLVER.value: CandidateSource.LLM_PRIMARY.value,
@@ -847,6 +852,10 @@ class CandidateSolution:
     source: str = CandidateSource.LLM_PRIMARY.value
     parse_tier: str = CandidateParseTier.STRICT.value
     degraded: bool = False
+    # Host-owned assurance label.  ``emergency`` and ``recovered`` are
+    # intentionally visible so arbitration and reports cannot mistake a
+    # degraded answer for an ordinary Candidate.
+    assurance: str = "standard"
     schema_version: str = CANDIDATE_SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -872,6 +881,7 @@ class CandidateSolution:
             "source": self.source,
             "parse_tier": self.parse_tier,
             "degraded": self.degraded,
+            "assurance": self.assurance,
         }
 
     def validate(self) -> None:
@@ -888,6 +898,7 @@ class CandidateSolution:
             self.planned_method_family,
             self.source,
             self.parse_tier,
+            self.assurance,
         )
         if any(not isinstance(value, str) for value in string_fields):
             raise SchemaValidationError(
@@ -937,6 +948,8 @@ class CandidateSolution:
             raise SchemaValidationError(
                 "CandidateSolution.degraded must be a boolean"
             )
+        if self.assurance not in _CANDIDATE_ASSURANCE:
+            raise SchemaValidationError("invalid CandidateSolution assurance")
         if self.planned_method_family and self.planned_method_family not in {
             item.value for item in MethodFamily
         }:
@@ -1028,6 +1041,7 @@ class CandidateSolution:
             "source",
             "parse_tier",
             "degraded",
+            "assurance",
         }
         _reject_unknown_fields(payload, allowed, "CandidateSolution")
         strings = _require_string_fields(
@@ -1059,6 +1073,7 @@ class CandidateSolution:
         version = payload.get("version")
         duplicate = payload.get("is_method_duplicate")
         degraded = payload.get("degraded", False)
+        assurance = payload.get("assurance", "standard")
         if not isinstance(version, int) or isinstance(version, bool):
             raise SchemaValidationError("CandidateSolution.version must be an integer")
         if not isinstance(duplicate, bool):
@@ -1068,6 +1083,10 @@ class CandidateSolution:
         if not isinstance(degraded, bool):
             raise SchemaValidationError(
                 "CandidateSolution.degraded must be a boolean"
+            )
+        if not isinstance(assurance, str) or assurance not in _CANDIDATE_ASSURANCE:
+            raise SchemaValidationError(
+                "CandidateSolution.assurance must be a known string"
             )
         candidate = cls(
             candidate_id=strings["candidate_id"],
@@ -1114,6 +1133,7 @@ class CandidateSolution:
                 payload.get("parse_tier", CandidateParseTier.STRICT.value)
             ),
             degraded=degraded,
+            assurance=assurance,
             schema_version=cls.SCHEMA_VERSION,
         )
         candidate.validate()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from collections import OrderedDict
 import json
 from threading import Lock
@@ -53,6 +53,16 @@ from mathforge.harness.reasoning_state import (
     REASONING_STATE_MAX_TOKENS,
     ReasoningState,
     ReasoningStateCompressor,
+)
+from mathforge.harness.truncation import (
+    CheckpointCursor,
+    CheckpointStore,
+    ProofBackbone,
+    RecoveredAnswerGate,
+    VerifiedFactBank,
+    emergency_allowed,
+    is_recovered_candidate,
+    resume_prompt_context,
 )
 from mathforge.harness.proof_graph import build_claim_evidence_graph
 from mathforge.agents.solver import (
@@ -189,6 +199,11 @@ class _AutonomousBranch:
     status: str = "exploring"
     stop_reason: str = ""
     candidate: Any = None
+    checkpoint_store: CheckpointStore = field(default_factory=CheckpointStore)
+    checkpoint: CheckpointCursor | None = None
+    checkpoint_state: ReasoningState | None = None
+    verified_fact_bank: VerifiedFactBank = field(default_factory=VerifiedFactBank)
+    proof_backbone: ProofBackbone = field(default_factory=ProofBackbone)
 
 
 _ROLE_CONTRACT_DIRECTORIES = {
@@ -1358,6 +1373,30 @@ class MathForgeHarness:
                 role_skill_contexts=role_skill_contexts,
                 solver_contexts=solver_contexts,
             )
+            if autonomous_agents_enabled:
+                assurance_counts: dict[str, int] = {}
+                for candidate in fanout.candidates:
+                    assurance = str(
+                        getattr(candidate, "assurance", "standard")
+                    )
+                    assurance_counts[assurance] = (
+                        assurance_counts.get(assurance, 0) + 1
+                    )
+                autonomous_summary.update(
+                    {
+                        "candidate_assurance_counts": assurance_counts,
+                        "emergency_candidate_count": assurance_counts.get(
+                            "emergency", 0
+                        ),
+                        "answer_salvaged_candidate_count": assurance_counts.get(
+                            "answer_salvaged", 0
+                        )
+                        + assurance_counts.get("provisional", 0),
+                        "stateful_rebuilt_candidate_count": assurance_counts.get(
+                            "recovered", 0
+                        ),
+                    }
+                )
             primary_candidate = next(
                 (
                     item
@@ -1579,14 +1618,25 @@ class MathForgeHarness:
             admission_rejections: dict[str, list[str]] = {}
             admitted_candidates = []
             for item in fanout.candidates:
-                if (
-                    item.parse_tier == "answer_recovered"
-                    and not self._config.enable_tools
-                ):
-                    admission_rejections[item.candidate_id] = [
-                        "answer_recovery_evidence_unavailable"
-                    ]
-                    continue
+                if is_recovered_candidate(item) and not self._config.enable_tools:
+                    recovery = RecoveredAnswerGate.evaluate(
+                        item,
+                        independent_candidates=fanout.candidates,
+                        high_risk=session.route_plan.risk_level == "high",
+                        proof_full=session.problem_ir.response_mode == "proof_full",
+                    )
+                    trace.add(
+                        "recovery_corroboration",
+                        candidate_id=item.candidate_id,
+                        **recovery.to_dict(),
+                    )
+                    if not recovery.admitted or not recovery.winner_allowed:
+                        admission_rejections[item.candidate_id] = [
+                            "answer_recovery_evidence_unavailable"
+                            if not recovery.admitted
+                            else "recovered_answer_not_winner_eligible"
+                        ]
+                        continue
                 admission = self._candidate_stage.evaluate(
                     item,
                     session.problem_ir,
@@ -1626,6 +1676,26 @@ class MathForgeHarness:
                             admission.rejection_codes
                         )
                         continue
+                    if is_recovered_candidate(item):
+                        recovery = RecoveredAnswerGate.evaluate(
+                            item,
+                            deterministic_tool_hard_pass=result.status == "pass",
+                            independent_candidates=fanout.candidates,
+                            high_risk=session.route_plan.risk_level == "high",
+                            proof_full=session.problem_ir.response_mode == "proof_full",
+                        )
+                        trace.add(
+                            "recovery_corroboration",
+                            candidate_id=item.candidate_id,
+                            **recovery.to_dict(),
+                        )
+                        if not recovery.admitted or not recovery.winner_allowed:
+                            admission_rejections[item.candidate_id] = [
+                                "answer_recovery_corroboration_missing"
+                                if not recovery.admitted
+                                else "recovered_answer_not_winner_eligible"
+                            ]
+                            continue
                 if self._config.enable_tools and self._config.enable_evidence:
                     claim_records = self._evidence_stage.verify(
                         item,
@@ -4374,38 +4444,49 @@ class MathForgeHarness:
                 if spec.agent_role == "PrimarySolver"
                 else f"alternative-{ordinal}"
             )
-            branches.append(
-                _AutonomousBranch(
-                    role=spec.agent_role,
-                    candidate_id=candidate_id,
-                    branch_id=spec.branch_id,
-                    solver=(
-                        PrimarySolver(self._contracts)
-                        if spec.agent_role == "PrimarySolver"
-                        else AlternativeSolver(self._contracts)
-                    ),
-                    method_family=spec.method_family,
-                    forbidden_method_families=tuple(
-                        method for method in all_methods if method != spec.method_family
-                    ),
-                    context_view=solver_contexts.get(
-                        spec.branch_id,
-                        solver_contexts.get(spec.agent_role),
-                    ),
-                    skill_context=role_skill_contexts.get(spec.agent_role, ""),
-                    state=ReasoningState.initialize(
-                        session.problem_ir,
-                        strategy=spec.method_family,
-                        session_id=session.session_id,
-                        branch_id=f"branch-{candidate_id}",
-                        agent_id=spec.agent_role,
-                    ),
-                    plan_id=effective.plan_id,
-                    plan_version=effective.version,
-                    shared_context_hash=spec.shared_context_hash,
-                    branch_context_hash=spec.branch_context_hash,
-                )
+            branch = _AutonomousBranch(
+                role=spec.agent_role,
+                candidate_id=candidate_id,
+                branch_id=spec.branch_id,
+                solver=(
+                    PrimarySolver(self._contracts)
+                    if spec.agent_role == "PrimarySolver"
+                    else AlternativeSolver(self._contracts)
+                ),
+                method_family=spec.method_family,
+                forbidden_method_families=tuple(
+                    method for method in all_methods if method != spec.method_family
+                ),
+                context_view=solver_contexts.get(
+                    spec.branch_id,
+                    solver_contexts.get(spec.agent_role),
+                ),
+                skill_context=role_skill_contexts.get(spec.agent_role, ""),
+                state=ReasoningState.initialize(
+                    session.problem_ir,
+                    strategy=spec.method_family,
+                    session_id=session.session_id,
+                    branch_id=f"branch-{candidate_id}",
+                    agent_id=spec.agent_role,
+                ),
+                plan_id=effective.plan_id,
+                plan_version=effective.version,
+                shared_context_hash=spec.shared_context_hash,
+                branch_context_hash=spec.branch_context_hash,
             )
+            # The initial public state is the recovery boundary for the first
+            # exploration turn.  Subsequent boundaries are committed only
+            # after a valid Progress delta has been applied.
+            branch.checkpoint = branch.checkpoint_store.commit(
+                branch.state,
+                plan_version=effective.version,
+                next_step="begin_public_exploration",
+            )
+            branch.checkpoint_state = branch.checkpoint_store.reload(
+                branch.checkpoint
+            )
+            branch.proof_backbone = ProofBackbone.from_state(branch.state)
+            branches.append(branch)
         trace.add(
             "effective_execution_plan_dispatched",
             plan_id=effective.plan_id,
@@ -4551,6 +4632,18 @@ class MathForgeHarness:
                     compressed = self._compress_reasoning_state(
                         active_branch.state,
                         trace,
+                        verified_fact_bank=active_branch.verified_fact_bank,
+                        proof_backbone=active_branch.proof_backbone,
+                    )
+                    checkpoint_context = (
+                        resume_prompt_context(
+                            active_branch.checkpoint,
+                            active_branch.state,
+                            verified_facts=active_branch.verified_fact_bank.values(),
+                            proof_backbone=active_branch.proof_backbone,
+                        )
+                        if active_branch.checkpoint is not None
+                        else ""
                     )
                     return self._solver_executor.execute_autonomous_progress(
                         active_branch.solver,
@@ -4559,6 +4652,7 @@ class MathForgeHarness:
                             session.problem_ir,
                             session.route_plan,
                             active_branch.skill_context
+                            + checkpoint_context
                             + self._autonomous_budget_context(
                                 session.budget.snapshot()
                             ),
@@ -4641,6 +4735,22 @@ class MathForgeHarness:
                 action_turns += 1
                 progress_turns += 1
                 cycle_advanced = True
+                assessment = turn.truncation_assessment
+                if assessment is not None:
+                    trace.add(
+                        "truncation_assessed",
+                        candidate_id=branch.candidate_id,
+                        role=branch.role,
+                        status=assessment.status,
+                        reasons=list(assessment.reasons),
+                        json_balance=assessment.json_balance,
+                        missing_required_fields=list(
+                            assessment.missing_required_fields
+                        ),
+                        think_tag=assessment.think_tag,
+                        boxed_answer=assessment.boxed_answer,
+                        protocol_suffix=assessment.protocol_suffix,
+                    )
                 decision = tracker.observe(
                     f"{branch.role}:{branch.candidate_id}",
                     turn.parsed.payload,
@@ -4650,7 +4760,54 @@ class MathForgeHarness:
                     "added_claim_ids": [],
                     "evidence_ids": [],
                 }
-                if turn.delta is not None:
+                # Partial Progress is never committed.  Restore the most
+                # recent public checkpoint before the next frontier turn.
+                if turn.partial:
+                    restored = branch.checkpoint_store.discard_uncommitted(
+                        branch.checkpoint
+                    )
+                    if restored is not None:
+                        branch.state = restored
+                        branch.checkpoint_state = restored
+                        latest = branch.checkpoint_store.latest
+                        if latest is not None:
+                            branch.checkpoint = latest[0]
+                        tracker.clear_agent(
+                            f"{branch.role}:{branch.candidate_id}"
+                        )
+                        trace.add(
+                            "checkpoint_restored",
+                            candidate_id=branch.candidate_id,
+                            checkpoint=(
+                                branch.checkpoint.to_dict()
+                                if branch.checkpoint is not None
+                                else {}
+                            ),
+                            truncation_status=(
+                                assessment.status
+                                if assessment is not None
+                                else "DEFINITE_TRUNCATION"
+                            ),
+                            discarded_uncommitted_delta=True,
+                        )
+                    # A truncated Progress turn is an interrupted attempt,
+                    # not a semantic stall. Its public delta is discarded,
+                    # so the next turn must resume the same frontier and the
+                    # discarded payload must not be reported as information gain.
+                    decision = replace(
+                        decision,
+                        continue_allowed=True,
+                        information_gain=0,
+                        stop_reason="truncation_resume",
+                        score_components={},
+                    )
+                    summary = {
+                        "information_gain": 0,
+                        "added_claim_ids": [],
+                        "evidence_ids": list(branch.state.evidence_refs),
+                        "checkpoint_restored": True,
+                    }
+                elif turn.delta is not None:
                     try:
                         branch.state, summary = branch.state.apply(turn.delta)
                     except ValueError as error:
@@ -4666,6 +4823,30 @@ class MathForgeHarness:
                             next_action="synthesize_candidate",
                         )
                         continue
+                    branch.checkpoint = branch.checkpoint_store.commit(
+                        branch.state,
+                        plan_version=branch.plan_version,
+                        next_step=turn.delta.next_step,
+                    )
+                    branch.checkpoint_state = branch.checkpoint_store.reload(
+                        branch.checkpoint
+                    )
+                    branch.proof_backbone = ProofBackbone.from_state(
+                        branch.state,
+                        verified_facts=branch.verified_fact_bank.values(),
+                    )
+                    trace.add(
+                        "proof_backbone_updated",
+                        candidate_id=branch.candidate_id,
+                        version=branch.proof_backbone.version,
+                        backbone=branch.proof_backbone.to_prompt_dict(),
+                    )
+                    trace.add(
+                        "checkpoint_committed",
+                        candidate_id=branch.candidate_id,
+                        checkpoint=branch.checkpoint.to_dict(),
+                        information_gain=summary.get("information_gain", 0),
+                    )
                 trace.add(
                     "autonomous_agent_action",
                     agent_role=branch.role,
@@ -4679,9 +4860,30 @@ class MathForgeHarness:
                     information_gain=decision.information_gain,
                     obligation_delta=decision.obligation_delta,
                     evidence_delta=decision.evidence_delta,
+                    score_components=decision.score_components or {},
+                    truncation_status=(
+                        assessment.status if assessment is not None else ""
+                    ),
                     state_version=branch.state.version,
                     outbound_intents=list(
                         turn.parsed.payload.outbound_intents
+                    ),
+                )
+                trace.add(
+                    "information_gain_scored",
+                    agent_role=branch.role,
+                    candidate_id=branch.candidate_id,
+                    score=decision.information_gain,
+                    components=decision.score_components or {},
+                    checkpoint_id=(
+                        branch.checkpoint.checkpoint_id
+                        if branch.checkpoint is not None
+                        else ""
+                    ),
+                    checkpoint_version=(
+                        branch.checkpoint.state_version
+                        if branch.checkpoint is not None
+                        else 0
                     ),
                 )
                 if not decision.continue_allowed:
@@ -4800,19 +5002,48 @@ class MathForgeHarness:
             )
 
             def synthesize(active_branch=branch):
-                compressed = self._compress_reasoning_state(active_branch.state, trace)
+                compressed = self._compress_reasoning_state(
+                    active_branch.state,
+                    trace,
+                    verified_fact_bank=active_branch.verified_fact_bank,
+                    proof_backbone=active_branch.proof_backbone,
+                )
+                checkpoint_context = (
+                    resume_prompt_context(
+                        active_branch.checkpoint,
+                        active_branch.state,
+                        verified_facts=active_branch.verified_fact_bank.values(),
+                        proof_backbone=active_branch.proof_backbone,
+                    )
+                    if active_branch.checkpoint is not None
+                    else ""
+                )
                 request = SolverRequest(
                     active_branch.candidate_id,
                     session.problem_ir,
                     session.route_plan,
                     active_branch.skill_context
+                    + checkpoint_context
                     + self._autonomous_budget_context(
                         session.budget.snapshot()
                     ),
                     active_branch.method_family,
                     active_branch.forbidden_method_families,
                     active_branch.context_view,
-                    compressed.prompt_json,
+                    compressed.prompt_json if not direct_candidate_mode else "",
+                    (
+                        json.dumps(
+                            active_branch.checkpoint_state.to_dict(),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        if (
+                            not direct_candidate_mode
+                            and active_branch.checkpoint_state is not None
+                        )
+                        else ""
+                    ),
                 )
                 compact_recovery = False
                 proof_degradation = False
@@ -4994,6 +5225,18 @@ class MathForgeHarness:
             branch.candidate = candidate
             branch.status = "candidate_published"
             candidates.append(candidate)
+            if candidate.parse_status == "truncated_candidate_rebuilt":
+                trace.add(
+                    "candidate_stateful_rebuilt",
+                    candidate_id=candidate.candidate_id,
+                    version=candidate.version,
+                    assurance=getattr(candidate, "assurance", "recovered"),
+                    proof_backbone=branch.proof_backbone.to_prompt_dict(),
+                    open_obligations=[
+                        item.obligation_id for item in branch.state.open_obligations
+                    ],
+                    verification_required=True,
+                )
             trace.add(
                 "candidate_generated",
                 **candidate_trace_payload(candidate),
@@ -5029,6 +5272,22 @@ class MathForgeHarness:
                 "proof_token_degradations": proof_degradations,
                 "agent_stop_reasons": {
                     branch.candidate_id: branch.stop_reason
+                    for branch in branches
+                },
+                "checkpoints": {
+                    branch.candidate_id: (
+                        branch.checkpoint.to_dict()
+                        if branch.checkpoint is not None
+                        else {}
+                    )
+                    for branch in branches
+                },
+                "verified_fact_counts": {
+                    branch.candidate_id: len(branch.verified_fact_bank.values())
+                    for branch in branches
+                },
+                "proof_backbones": {
+                    branch.candidate_id: branch.proof_backbone.to_prompt_dict()
                     for branch in branches
                 },
                 "simple_direct_candidate": direct_candidate_mode,
@@ -5149,6 +5408,52 @@ class MathForgeHarness:
         if fanout.candidates or not session.budget.deadline.can_start_model_call():
             return fanout
 
+        # Direct answer-only recovery is deliberately the final fallback.  A
+        # usable candidate or a feasible compact rebuild must be attempted
+        # first; emergency work is admitted only when the remaining model
+        # window is below the closure threshold (including deterministic
+        # finalization reserve).
+        closure_threshold = (
+            self._config.deterministic_finalize_reserve_seconds
+            + stage_p95_seconds("solver_compact_synthesis")
+        )
+        if self._config.enable_long_horizon and not emergency_allowed(
+            remaining_time=session.budget.deadline.remaining_for_model_call(),
+            closure_threshold=closure_threshold,
+            usable_candidate=bool(fanout.candidates),
+        ):
+            trace.add(
+                "candidate_generation_started",
+                candidate_id="emergency-direct-1",
+                role="PrimarySolver",
+                planned_method_family=methods[0] if methods else "direct-deduction",
+                turn_kind="emergency_direct_answer",
+                emergency=True,
+                deferred=True,
+            )
+            trace.add(
+                "candidate_generation_failed",
+                **candidate_failure_trace_payload(
+                    "emergency-direct-1",
+                    "emergency_deferred_until_closure_window",
+                ),
+                role="PrimarySolver",
+                emergency=True,
+                deferred=True,
+            )
+            trace.add(
+                "emergency_deferred",
+                role="PrimarySolver",
+                reason="emergency_deferred_until_closure_window",
+                emergency=True,
+                remaining_model_seconds=round(
+                    session.budget.deadline.remaining_for_model_call(),
+                    6,
+                ),
+                closure_threshold_seconds=closure_threshold,
+            )
+            return fanout
+
         emergency_id = "emergency-direct-1"
         method = methods[0] if methods else "direct-deduction"
         trace.add(
@@ -5182,6 +5487,8 @@ class MathForgeHarness:
                 emergency=True,
             )
         else:
+            candidate.assurance = "emergency"
+            candidate.degraded = True
             fanout.candidates.append(candidate)
             trace.add(
                 "candidate_generated",
@@ -5759,6 +6066,51 @@ class MathForgeHarness:
                 batch.results
             )
             summary["evidence_ids"] = feedback["evidence_ids"]
+            for claim in branch.state.claim_ledger.items:
+                if claim.status != "verified":
+                    continue
+                fact = branch.verified_fact_bank.record_claim(
+                    claim,
+                    version=branch.state.version,
+                    evidence_strength="hard",
+                    pinned=claim.importance == "critical",
+                )
+                trace.add(
+                    "verified_fact_promoted",
+                    candidate_id=branch.candidate_id,
+                    fact_id=fact.fact_id,
+                    source_claim_id=fact.source_claim_id,
+                    evidence_strength=fact.evidence_strength,
+                    pinned=fact.pinned,
+                )
+            branch.proof_backbone = ProofBackbone.from_state(
+                branch.state,
+                verified_facts=branch.verified_fact_bank.values(),
+            )
+            trace.add(
+                "proof_backbone_updated",
+                candidate_id=branch.candidate_id,
+                version=branch.proof_backbone.version,
+                backbone=branch.proof_backbone.to_prompt_dict(),
+            )
+            branch.checkpoint = branch.checkpoint_store.commit(
+                branch.state,
+                plan_version=branch.plan_version,
+                next_step=(
+                    branch.state.rounds[-1].next_step
+                    if branch.state.rounds
+                    else "continue_public_frontier"
+                ),
+            )
+            branch.checkpoint_state = branch.checkpoint_store.reload(
+                branch.checkpoint
+            )
+            trace.add(
+                "checkpoint_committed",
+                candidate_id=branch.candidate_id,
+                checkpoint=branch.checkpoint.to_dict(),
+                reason="tool_evidence_applied",
+            )
         failure_codes = tuple(batch.failure_codes)
         if failure_codes:
             outcomes = self._skill_runtime.resolve_failures(
@@ -6041,10 +6393,15 @@ class MathForgeHarness:
         self,
         state: ReasoningState,
         trace: TraceBuilder,
+        *,
+        verified_fact_bank: VerifiedFactBank | None = None,
+        proof_backbone: ProofBackbone | None = None,
     ):
         compressed = self._reasoning_state_compressor.compress(
             state,
             max_tokens=REASONING_STATE_MAX_TOKENS,
+            verified_fact_bank=verified_fact_bank,
+            proof_backbone=proof_backbone,
         )
         trace.add(
             "compression_validated",
@@ -7532,6 +7889,8 @@ class MathForgeHarness:
                 {
                     "candidate_id": candidate.candidate_id,
                     "version": candidate.version,
+                    "assurance": getattr(candidate, "assurance", "standard"),
+                    "degraded": bool(candidate.degraded),
                     "status": status,
                     "verification_closure": (
                         session.verification_closures[candidate.candidate_id].to_dict()

@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from mathforge.agent_runtime.protocol import AgentTurnPayload
+from mathforge.harness.truncation import InformationGainScorer
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,7 @@ class ProgressGateDecision:
     stop_reason: str = ""
     obligation_delta: int = 0
     evidence_delta: int = 0
+    score_components: dict[str, int] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -25,6 +27,7 @@ class ProgressGateDecision:
             "stop_reason": self.stop_reason,
             "obligation_delta": self.obligation_delta,
             "evidence_delta": self.evidence_delta,
+            "score_components": dict(self.score_components or {}),
         }
 
 
@@ -58,11 +61,17 @@ class AgentProgressTracker:
         digest = sha256(canonical.encode("utf-8")).hexdigest()
         hashes = self._seen_hashes.setdefault(agent_id, set())
         if digest in hashes:
+            score = InformationGainScorer.score(
+                semantic,
+                previous_semantic_sha256=digest,
+                semantic_sha256=digest,
+            )
             return ProgressGateDecision(
                 False,
-                0,
+                score.score,
                 digest,
                 "repeated_public_artifact_hash",
+                score_components=score.components,
             )
         hashes.add(digest)
 
@@ -96,6 +105,22 @@ class AgentProgressTracker:
         seen_obligations.update(obligations)
         seen_evidence.update(evidence)
         information_gain += obligation_delta + evidence_delta
+        score = InformationGainScorer.score(semantic)
+        # Generic public summaries are still observable progress for
+        # compatibility with the 1.0 protocol.  IDs by themselves remain
+        # score-neutral; a novel public statement/summary earns one bounded
+        # unit when no stronger semantic component was classified.
+        if score.score == 0 and information_gain == 0:
+            public_text = {
+                fact
+                for fact in facts
+                if not fact.split(":", 1)[0].endswith("_id")
+                and not fact.split(":", 1)[0].endswith("_ids")
+            }
+            if public_text:
+                information_gain = 1
+        else:
+            information_gain = max(information_gain, score.score)
         if payload.action == "continue_reasoning" and information_gain <= 0:
             return ProgressGateDecision(
                 False,
@@ -104,6 +129,7 @@ class AgentProgressTracker:
                 "no_public_information_gain",
                 obligation_delta,
                 evidence_delta,
+                score.components,
             )
         return ProgressGateDecision(
             True,
@@ -111,6 +137,7 @@ class AgentProgressTracker:
             digest,
             obligation_delta=obligation_delta,
             evidence_delta=evidence_delta,
+            score_components=score.components,
         )
 
     @classmethod
@@ -173,3 +200,14 @@ class AgentProgressTracker:
         self._seen_facts.clear()
         self._seen_obligations.clear()
         self._seen_evidence.clear()
+
+    def clear_agent(self, agent_id: str) -> None:
+        """Reset public-progress memory after a checkpoint rollback."""
+
+        for store in (
+            self._seen_hashes,
+            self._seen_facts,
+            self._seen_obligations,
+            self._seen_evidence,
+        ):
+            store.pop(agent_id, None)

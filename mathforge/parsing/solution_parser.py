@@ -142,6 +142,7 @@ class SolutionParser:
                 or str(getattr(response, "finish_reason", "")).casefold()
                 in {"length", "length_inferred"}
             ),
+            assurance="answer_salvaged",
         )
         candidate.validate()
         return candidate
@@ -206,6 +207,11 @@ class SolutionParser:
             parse_status=parse_status,
             source=self._candidate_source(candidate_id, role),
             parse_tier=parse_tier,
+            assurance=(
+                "answer_salvaged"
+                if parse_tier == CandidateParseTier.ANSWER_RECOVERED.value
+                else "standard"
+            ),
         )
         candidate.validate()
         return candidate
@@ -777,6 +783,13 @@ class SolutionParser:
                 )
                 for index, claim in enumerate(claims, start=1)
             ]
+        parse_tier = SolutionParser._candidate_parse_tier(
+            status,
+            deviations,
+            final_answer,
+            public_solution_steps,
+            claims,
+        )
         candidate = CandidateSolution(
             candidate_id=candidate_id,
             role=role,
@@ -811,14 +824,13 @@ class SolutionParser:
             contract_deviations=sorted(set(deviations)),
             method_steps=method_steps,
             source=SolutionParser._candidate_source(candidate_id, role),
-            parse_tier=SolutionParser._candidate_parse_tier(
-                status,
-                deviations,
-                final_answer,
-                public_solution_steps,
-                claims,
-            ),
+            parse_tier=parse_tier,
             degraded="truncated" in status,
+            assurance=(
+                "answer_salvaged"
+                if parse_tier == CandidateParseTier.ANSWER_RECOVERED.value
+                else "standard"
+            ),
         )
         candidate.validate()
         return candidate
