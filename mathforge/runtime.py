@@ -650,6 +650,8 @@ class MathForgeHarness:
             session.problem_ir.validate()
             blackboard = MemoryBlackboard(session.working_memory)
             skill_check_plans: dict[str, Any] = {}
+            skill_execution_plans: dict[str, Any] = {}
+            skill_check_tasks: tuple[Any, ...] = ()
             reference_fragments: dict[str, list[Any]] = {}
             reference_disclosures: list[dict[str, Any]] = []
             memory_summary_ids: list[str] = []
@@ -952,6 +954,50 @@ class MathForgeHarness:
             skill_check_plans = self._skill_runtime.check_plans(
                 session.route_plan.selected_skills
             )
+            skill_execution_plans = self._skill_runtime.execution_plans(
+                session.route_plan.selected_skills,
+                role="PrimarySolver",
+                allow_degraded=False,
+            )
+            original_selected_skills = list(session.route_plan.selected_skills)
+            admitted_selected_skills = list(
+                dict.fromkeys(
+                    plan.skill_name
+                    for name in original_selected_skills
+                    for plan in (skill_execution_plans.get(name),)
+                    if plan is not None
+                    and plan.admission_status in {"admitted", "alternative"}
+                )
+            )
+            if admitted_selected_skills != original_selected_skills:
+                trace.add(
+                    "skill_admission_transition",
+                    from_skills=original_selected_skills,
+                    to_skills=admitted_selected_skills,
+                    rejected_skills=[
+                        name
+                        for name in original_selected_skills
+                        if name not in admitted_selected_skills
+                    ],
+                    plans=[plan.to_dict() for plan in skill_execution_plans.values()],
+                )
+                session.route_plan = replace(
+                    session.route_plan,
+                    selected_skills=admitted_selected_skills,
+                )
+                skill_check_plans = self._skill_runtime.check_plans(
+                    admitted_selected_skills
+                )
+                skill_execution_plans = self._skill_runtime.execution_plans(
+                    admitted_selected_skills,
+                    role="PrimarySolver",
+                    allow_degraded=False,
+                )
+            skill_check_tasks = self._skill_runtime.hook_tasks(
+                session.route_plan.selected_skills,
+                role="VerifierSkeptic",
+                allow_degraded=False,
+            )
             hook_tools = [
                 tool
                 for plan in skill_check_plans.values()
@@ -991,6 +1037,25 @@ class MathForgeHarness:
             )
             if route_summary_id:
                 memory_summary_ids.append(route_summary_id)
+            trace.add(
+                "skill_check_tasks_created",
+                selected_skills=list(session.route_plan.selected_skills),
+                tasks=[task.to_dict() for task in skill_check_tasks],
+                selected_hook_count=sum(
+                    len(plan.verification_hooks)
+                    for plan in skill_execution_plans.values()
+                    if plan.admitted
+                ),
+                materialized_hook_count=len(skill_check_tasks),
+                all_selected_hooks_materialized=(
+                    sum(
+                        len(plan.verification_hooks)
+                        for plan in skill_execution_plans.values()
+                        if plan.admitted
+                    )
+                    == len(skill_check_tasks)
+                ),
+            )
             skill_compositions = (
                 {
                     role: self._dynamic_skills.compose_for_role(
@@ -1120,6 +1185,10 @@ class MathForgeHarness:
                 skill_check_plans=[
                     plan.to_dict() for plan in skill_check_plans.values()
                 ],
+                skill_execution_plans=[
+                    plan.to_dict() for plan in skill_execution_plans.values()
+                ],
+                skill_check_tasks=[task.to_dict() for task in skill_check_tasks],
                 reference_disclosures=reference_disclosures,
                 memory_summary_ids=list(memory_summary_ids),
                 method_families=session.route_plan.method_families,
@@ -1164,6 +1233,8 @@ class MathForgeHarness:
                 skill_compositions,
                 selection_context="initial",
                 skill_check_plans=skill_check_plans,
+                skill_execution_plans=skill_execution_plans,
+                skill_check_tasks=skill_check_tasks,
                 reference_disclosures=reference_disclosures,
             )
             trace.add(
@@ -1250,6 +1321,7 @@ class MathForgeHarness:
                         trace,
                         role_skill_contexts=role_skill_contexts,
                         solver_contexts=solver_contexts,
+                        skill_names=session.route_plan.selected_skills,
                         direct_candidate_mode=direct_candidate_mode,
                     )
                 )
@@ -1617,6 +1689,25 @@ class MathForgeHarness:
                         )
                     ),
                 )
+            consumed_skill_check_tasks = self._skill_runtime.consume_hook_evidence(
+                skill_check_tasks,
+                session.evidence,
+            )
+            trace.add(
+                "skill_check_results_consumed",
+                tasks=[task.to_dict() for task in consumed_skill_check_tasks],
+                evidence_ids=[
+                    evidence_id
+                    for task in consumed_skill_check_tasks
+                    for evidence_id in task.evidence_ids
+                ],
+                incomplete_hooks=[
+                    task.hook
+                    for task in consumed_skill_check_tasks
+                    if task.status != "completed"
+                ],
+                evidence_consumer="EvidenceLedger",
+            )
             active_candidates = admitted_candidates
             if not active_candidates:
                 raise RuntimeError("all candidates failed admission")
@@ -1679,6 +1770,76 @@ class MathForgeHarness:
                     )
                 )
             )
+            skill_outcomes = self._skill_runtime.resolve_failures(
+                session.route_plan.selected_skills,
+                postcheck_failure_codes,
+                evidence_ids=(
+                    record.evidence_id
+                    for record in session.evidence
+                    if record.status in {"fail", "unknown", "error"}
+                ),
+            )
+            actionable_skill_outcomes = tuple(
+                outcome
+                for outcome in skill_outcomes
+                if outcome.status in {"fallback", "degraded"}
+            )
+            if actionable_skill_outcomes:
+                trace.add(
+                    "skill_outcome",
+                    failure_codes=list(postcheck_failure_codes),
+                    outcomes=[
+                        outcome.to_dict() for outcome in actionable_skill_outcomes
+                    ],
+                )
+                fallback_map = {
+                    outcome.source_skill_name: outcome.alternative_skill
+                    for outcome in actionable_skill_outcomes
+                    if outcome.status == "fallback"
+                    and outcome.source_skill_name
+                    and outcome.alternative_skill
+                }
+                if fallback_map:
+                    selected_after_fallback = [
+                        fallback_map.get(name, name)
+                        for name in session.route_plan.selected_skills
+                    ]
+                    selected_after_fallback = list(
+                        dict.fromkeys(selected_after_fallback)
+                    )
+                    session.route_plan = replace(
+                        session.route_plan,
+                        selected_skills=selected_after_fallback,
+                    )
+                    skill_check_plans = self._skill_runtime.check_plans(
+                        selected_after_fallback
+                    )
+                    skill_execution_plans = self._skill_runtime.execution_plans(
+                        selected_after_fallback,
+                        role="PrimarySolver",
+                        allow_degraded=False,
+                    )
+                    skill_check_tasks = self._skill_runtime.hook_tasks(
+                        selected_after_fallback,
+                        role="VerifierSkeptic",
+                        allow_degraded=False,
+                    )
+                    trace.add(
+                        "skill_fallback_transition",
+                        from_skills=sorted(fallback_map),
+                        to_skills=sorted(set(fallback_map.values())),
+                        failure_codes=list(postcheck_failure_codes),
+                        replan_required=any(
+                            outcome.replan_required
+                            for outcome in actionable_skill_outcomes
+                        ),
+                    )
+                    trace.add(
+                        "skill_check_tasks_replanned",
+                        tasks=[task.to_dict() for task in skill_check_tasks],
+                        selected_skills=list(selected_after_fallback),
+                        reason="skill_fallback_transition",
+                    )
             if self._config.enable_skills and postcheck_failure_codes:
                 postcheck_skills = {
                     role: self._dynamic_skills.compose_for_role(
@@ -1709,6 +1870,8 @@ class MathForgeHarness:
                     postcheck_skills,
                     selection_context="candidate_tool_feedback",
                     skill_check_plans=skill_check_plans,
+                    skill_execution_plans=skill_execution_plans,
+                    skill_check_tasks=skill_check_tasks,
                     reference_disclosures=reference_disclosures,
                 )
             lemma_eligible, lemma_reasons = self._lemma_eligibility(
@@ -4019,6 +4182,8 @@ class MathForgeHarness:
         plan_id: str,
         branches: list[_AutonomousBranch],
         response_mode: str,
+        *,
+        skill_names: Iterable[str] = (),
     ) -> TaskGraph:
         solver_nodes = tuple(
             TaskNode(
@@ -4046,6 +4211,31 @@ class MathForgeHarness:
             for branch in branches
         )
         solver_ids = tuple(node.node_id for node in solver_nodes)
+        skill_check_tasks = self._skill_runtime.hook_tasks(
+            skill_names,
+            dependencies=solver_ids,
+            role="VerifierSkeptic",
+            allow_degraded=False,
+        )
+        skill_check_nodes = tuple(
+            TaskNode(
+                node_id=task.node_id,
+                role="VerifierSkeptic",
+                action="skill_check",
+                task_id=task.task_id,
+                dependencies=task.dependencies,
+                priority=1,
+                expected_p50=stage_p95_seconds("verifier") * 0.25,
+                expected_p95=stage_p95_seconds("verifier"),
+                token_cap=0,
+                closure_value=1,
+                optional=False,
+                parallel_group="skill-check-wave",
+            )
+            for task in skill_check_tasks
+        )
+        skill_check_ids = tuple(node.node_id for node in skill_check_nodes)
+        review_dependencies = (*solver_ids, *skill_check_ids)
         review_nodes = tuple(
             TaskNode(
                 node_id=f"review:{branch.candidate_id}",
@@ -4056,7 +4246,7 @@ class MathForgeHarness:
                 ),
                 action="peer_review",
                 task_id=f"review:{branch.candidate_id}",
-                dependencies=solver_ids,
+                dependencies=review_dependencies,
                 priority=1,
                 expected_p50=stage_p95_seconds("peer_review") * 0.5,
                 expected_p95=stage_p95_seconds("peer_review"),
@@ -4068,7 +4258,7 @@ class MathForgeHarness:
             for branch in branches
         )
         review_ids = tuple(node.node_id for node in review_nodes)
-        verifier_dependencies = review_ids or solver_ids
+        verifier_dependencies = review_ids or review_dependencies
         verifier = TaskNode(
             "verification",
             "VerifierSkeptic",
@@ -4146,6 +4336,7 @@ class MathForgeHarness:
                     closure_value=1,
                 ),
                 *solver_nodes,
+                *skill_check_nodes,
                 *review_nodes,
                 verifier,
                 repair,
@@ -4162,6 +4353,7 @@ class MathForgeHarness:
         *,
         role_skill_contexts: dict[str, str],
         solver_contexts: dict[str, Any],
+        skill_names: Iterable[str] = (),
         direct_candidate_mode: bool = False,
     ) -> tuple[FanoutResult, ReasoningState, dict[str, Any]]:
         tracker = AgentProgressTracker()
@@ -4228,6 +4420,7 @@ class MathForgeHarness:
             effective.plan_id,
             branches,
             session.problem_ir.response_mode,
+            skill_names=skill_names,
         )
         budget_snapshot = session.budget.snapshot()
         scheduler_graph, pruned_scheduler_nodes = (
@@ -5566,6 +5759,54 @@ class MathForgeHarness:
                 batch.results
             )
             summary["evidence_ids"] = feedback["evidence_ids"]
+        failure_codes = tuple(batch.failure_codes)
+        if failure_codes:
+            outcomes = self._skill_runtime.resolve_failures(
+                session.route_plan.selected_skills,
+                (*failure_codes, "verification_failed"),
+                evidence_ids=summary.get("evidence_ids", ()),
+                role=branch.role,
+            )
+            transitions = tuple(
+                outcome
+                for outcome in outcomes
+                if outcome.status in {"fallback", "degraded"}
+            )
+            if transitions:
+                summary["skill_outcomes"] = [
+                    outcome.to_dict() for outcome in transitions
+                ]
+                fallback_map = {
+                    outcome.source_skill_name: outcome.alternative_skill
+                    for outcome in transitions
+                    if outcome.status == "fallback"
+                    and outcome.source_skill_name
+                    and outcome.alternative_skill
+                }
+                if fallback_map:
+                    session.route_plan = replace(
+                        session.route_plan,
+                        selected_skills=list(
+                            dict.fromkeys(
+                                fallback_map.get(name, name)
+                                for name in session.route_plan.selected_skills
+                            )
+                        ),
+                    )
+                    branch.skill_context += (
+                        "\n\nHost Skill fallback applied: "
+                        + ", ".join(
+                            f"{source}->{target}"
+                            for source, target in sorted(fallback_map.items())
+                        )
+                    )
+                trace.add(
+                    "skill_outcome",
+                    failure_codes=list(failure_codes),
+                    outcomes=[outcome.to_dict() for outcome in transitions],
+                    requester_role=branch.role,
+                    candidate_id=branch.candidate_id,
+                )
         trace.add(
             "agent_tool_request_completed",
             requester_role=branch.role,
@@ -5618,6 +5859,23 @@ class MathForgeHarness:
             )
             session.route_plan = outcome.route_plan
             session.agent_plan = outcome.authoritative_plan
+            replan_skill_plans = self._skill_runtime.execution_plans(
+                session.route_plan.selected_skills,
+                role=branch.role,
+                allow_degraded=False,
+            )
+            replan_skill_tasks = self._skill_runtime.hook_tasks(
+                session.route_plan.selected_skills,
+                role="VerifierSkeptic",
+                allow_degraded=False,
+            )
+            trace.add(
+                "skill_execution_plan_recomputed",
+                plan_version=session.agent_plan.version,
+                plans=[plan.to_dict() for plan in replan_skill_plans.values()],
+                tasks=[task.to_dict() for task in replan_skill_tasks],
+                reason="agent_requested_replan",
+            )
             methods = session.route_plan.method_families
             if branch.candidate_id.startswith("new-branch-"):
                 prior_methods = set(branch.forbidden_method_families)
@@ -5808,6 +6066,8 @@ class MathForgeHarness:
         *,
         selection_context: str,
         skill_check_plans: dict[str, Any] | None = None,
+        skill_execution_plans: dict[str, Any] | None = None,
+        skill_check_tasks: Iterable[Any] = (),
         reference_disclosures: list[dict[str, Any]] | None = None,
     ) -> None:
         trace.add(
@@ -5820,6 +6080,9 @@ class MathForgeHarness:
                     "role": role,
                     "rank": decision.rank,
                     "score": decision.score,
+                    "utility": decision.utility,
+                    "expected_gain": decision.expected_gain,
+                    "token_cost": decision.token_cost,
                     "reason": ";".join(decision.reasons),
                     "admission_status": decision.admission_status,
                     "required_capabilities": list(
@@ -5843,6 +6106,8 @@ class MathForgeHarness:
                         "name": decision.name,
                         "rank": decision.rank,
                         "score": decision.score,
+                        "utility": decision.utility,
+                        "expected_gain": decision.expected_gain,
                         "reasons": list(decision.reasons),
                         "admission_status": decision.admission_status,
                         "required_capabilities": list(
@@ -5867,6 +6132,13 @@ class MathForgeHarness:
             skill_check_plans=[
                 plan.to_dict()
                 for plan in (skill_check_plans or {}).values()
+            ],
+            skill_execution_plans=[
+                plan.to_dict()
+                for plan in (skill_execution_plans or {}).values()
+            ],
+            skill_check_tasks=[
+                task.to_dict() for task in tuple(skill_check_tasks)
             ],
             reference_disclosures=list(reference_disclosures or []),
         )

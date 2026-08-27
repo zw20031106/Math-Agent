@@ -35,6 +35,26 @@ def _list(value: str) -> tuple[str, ...]:
     )
 
 
+def _float_field(fields: dict[str, str], key: str, default: float) -> float:
+    value = fields.get(key)
+    if value is None or not str(value).strip():
+        return float(default)
+    try:
+        return float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"invalid Skill numeric field {key}: {value!r}") from error
+
+
+def _int_field(fields: dict[str, str], key: str, default: int) -> int:
+    value = fields.get(key)
+    if value is None or not str(value).strip():
+        return int(default)
+    try:
+        return int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"invalid Skill integer field {key}: {value!r}") from error
+
+
 def _sections(body: str) -> dict[str, str]:
     result: dict[str, list[str]] = {}
     current = ""
@@ -72,6 +92,9 @@ def load_v3_package(package_root: Path) -> SkillPackage:
         sections=_sections(body),
         package_root=source.parent,
         source_path=source,
+        expected_gain=_float_field(fields, "expected_gain", 0.0),
+        historical_precision=_float_field(fields, "historical_precision", 1.0),
+        token_cost=_int_field(fields, "token_cost", 0),
     )
     package.validate()
     return package

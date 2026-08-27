@@ -49,13 +49,16 @@
         "mathforge/skills/runtime.py",
         "mathforge/skills/projection.py",
         "mathforge/skills/reference_loader.py",
-        "mathforge/skills/evaluation.py"
+        "mathforge/skills/evaluation.py",
+        "mathforge/skills/execution_plan.py",
+        "mathforge/skills/quality.py",
+        "mathforge/skills/__init__.py"
       ],
-      "expected_count": 8,
-      "version": "skill-runtime-3.0-phase4",
-      "engineering_reviewer": "codex-0809-phase4-skill-audit",
-      "review_date": "2026-08-09",
-      "sha256": "7d6767932cdc2039221b26a10768ae532953916d1820d7adff0ae9ee43311d65"
+      "expected_count": 11,
+      "version": "skill-runtime-3.0-e3-executable",
+      "engineering_reviewer": "codex-e3-executable-skill-audit",
+      "review_date": "2026-08-27",
+      "sha256": "0abff6508bf24da3028269a5b3e392646ca706e34c9e5bf61b6d42424d4c2067"
     },
     {
       "id": "phase5-effective-agent-governance",
@@ -74,7 +77,7 @@
       "version": "effective-agent-governance-4-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "a808326203057a057eaf8b22366811fe439f618d900a59ebb7ca54c9ea799b30"
+      "sha256": "95746f053f41b93d2f691186ae0fd47a1e326f9b97c776d40cb1e03deb1cbeaa"
     },
     {
       "id": "prompt-contracts",
@@ -222,7 +225,7 @@
       "version": "verification-closure-19-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
         "review_date": "2026-08-24",
-      "sha256": "0e5dad4416e27af4aaa490c2b4695215479a7cf0f4ba2e023fe590e35c2c053e"
+      "sha256": "6b694c3bb308979c816406e801e5f6d65186269f1a93e0e0abaff4258d665884"
     },
     {
       "id": "phase-f6-agent-verification-protocol",
@@ -253,7 +256,7 @@
       "version": "phase-f6-agent-protocol-11-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "eae29fb0a0ecc09433e7c554ae2f52cacdd360aafec50639aff9e644df494535"
+      "sha256": "f48d6f5ef495122123bad38fff11fdac3e533b5fcb1bb5a17972bce953deb5ee"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -277,7 +280,7 @@
       "version": "phase-f7-runtime-9-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "062a805963c67e856587040bde4fb890bc73468627ee72375d1d4c334836689b"
+      "sha256": "108b49cd90b7c96dc46f55fcc982799f84c51a90b9d6b23963a7150001d5f1af"
     },
     {
       "id": "reviewed-method-cards",
@@ -349,7 +352,7 @@
       "version": "provider-controls-6-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "22cda91209f787df5689625109c11acb0e4f071c5e24f536f13b72f79801f357"
+      "sha256": "61a825fdeb66b04d41d74c9cc1b0ecb6e36340615d60953be737a745c61ee801"
     },
     {
       "id": "phase7-live-calibration",
@@ -400,7 +403,7 @@
       "version": "review-repair-communication-audit-2.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "4440063b4385b90567efdf17668b714ccd462a3697d91ec4c9b9b746bc0b1195"
+      "sha256": "a17c34066dc5a5091d25a3678bbedd07133d76765b6f6b3c55884488bfdfcc58"
     },
     {
       "id": "phase8-skill-context-memory",
@@ -427,7 +430,7 @@
       "version": "skill-context-memory-1-0825-phase8",
       "engineering_reviewer": "codex-0825-phase8-skill-context-memory",
       "review_date": "2026-08-25",
-      "sha256": "17635035115a031dd4a32e0bded68c1c48a248d186f82bde763a26c577955437"
+      "sha256": "42db42e55235e4d58f16ee7f6c4ed2a78ed0a2ff3fb691bba52657fe031bc703"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -448,7 +451,7 @@
       "version": "scheduler-runtime-2.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "d2d8b7f5398b598c390daaa6b8be996e1cf1808435d68100ab349676c1badf4d"
+      "sha256": "623d0b55bf4fd10582b8cd7bd37245b450a6ea5261044e14b723ccb76affb6df"
     },
     {
       "id": "phase9-provider-resource-governance",
@@ -475,7 +478,7 @@
       "version": "provider-resource-governance-1-0825-phase9",
       "engineering_reviewer": "codex-0825-phase9-provider-resource-governance",
       "review_date": "2026-08-25",
-      "sha256": "352b9a40d705d166e34f596c36385b889566cf5a8d13ee3b2bd7640d5aaf38c0"
+      "sha256": "e8e3b5a7d0de65e1f6dfc967d1dd6d6d3fca0f1f5c791dab4e3e0c8ac6f5ae1d"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -500,7 +503,7 @@
       "version": "production-preflight-release-governance-1.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "ec407ccfbfa4a7c2733b6759c29b10df7ceb019e3e526f6987312d1a3900c6c3"
+      "sha256": "00307d46a3f5294df6c763213bc35056647d0c0bc65851ecf4fa259275d6909a"
     },
     {
       "id": "router-e5-gold",

@@ -8,6 +8,107 @@ from typing import Any, Iterable
 from mathforge.evaluation.scoring import score_response as score_observed_response
 
 
+SKILL_BENCHMARK_CASE_TYPES = frozenset(
+    {"positive", "negative", "adversarial", "selection", "ablation"}
+)
+
+
+@dataclass(frozen=True)
+class SkillBenchmarkCase:
+    """A taxonomy-labelled case; correctness still comes from observed runs."""
+
+    case_id: str
+    skill_name: str
+    case_type: str
+    problem: str = ""
+    expected_skills: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not str(self.case_id).strip() or not str(self.skill_name).strip():
+            raise ValueError("SkillBenchmarkCase requires case_id and skill_name")
+        if self.case_type not in SKILL_BENCHMARK_CASE_TYPES:
+            raise ValueError(f"unsupported Skill benchmark case type: {self.case_type}")
+        object.__setattr__(
+            self,
+            "expected_skills",
+            tuple(dict.fromkeys(str(item) for item in self.expected_skills if str(item))),
+        )
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "SkillBenchmarkCase":
+        if not isinstance(payload, dict):
+            raise ValueError("Skill benchmark case must be an object")
+        return cls(
+            case_id=str(payload.get("case_id", "")),
+            skill_name=str(payload.get("skill_name", "")),
+            case_type=str(payload.get("case_type", "")),
+            problem=str(payload.get("problem", "")),
+            expected_skills=tuple(
+                str(item)
+                for item in payload.get("expected_skills", ())
+                if str(item)
+            ),
+            metadata=payload.get("metadata", {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "case_id": self.case_id,
+            "skill_name": self.skill_name,
+            "case_type": self.case_type,
+            "problem": self.problem,
+            "expected_skills": list(self.expected_skills),
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True)
+class SkillBenchmarkCoverage:
+    skill_name: str
+    case_counts: dict[str, int]
+    missing_case_types: tuple[str, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing_case_types
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "skill_name": self.skill_name,
+            "case_counts": dict(self.case_counts),
+            "missing_case_types": list(self.missing_case_types),
+            "complete": self.complete,
+        }
+
+
+@dataclass(frozen=True)
+class SkillSpecificBenchmarkReport:
+    coverage: tuple[SkillBenchmarkCoverage, ...]
+    ablation: "SkillAblationReport"
+
+    @property
+    def complete(self) -> bool:
+        return all(item.complete for item in self.coverage)
+
+    @property
+    def recommended_action(self) -> str:
+        if not self.complete:
+            return "collect_missing_cases"
+        if self.ablation.accuracy_delta <= 0.0:
+            return "downweight_or_disable"
+        return "retain_and_monitor"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "coverage": [item.to_dict() for item in self.coverage],
+            "ablation": self.ablation.to_dict(),
+            "complete": self.complete,
+            "recommended_action": self.recommended_action,
+        }
+
+
 @dataclass(frozen=True)
 class SkillAblationReport:
     evidence_scope: str
@@ -136,6 +237,80 @@ def evaluate_contract_canary(records: Iterable[dict[str, Any]]) -> SkillAblation
     observable runs per case.
     """
     return evaluate_paired_skill_runs(records)
+
+
+def skill_benchmark_coverage(
+    cases: Iterable[SkillBenchmarkCase | dict[str, Any]],
+    *,
+    skill_names: Iterable[str] | None = None,
+) -> tuple[SkillBenchmarkCoverage, ...]:
+    """Validate positive/negative/adversarial/selection/ablation coverage."""
+
+    normalized = tuple(
+        case if isinstance(case, SkillBenchmarkCase) else SkillBenchmarkCase.from_dict(case)
+        for case in cases
+    )
+    names = tuple(
+        dict.fromkeys(
+            str(name) for name in (skill_names or ()) if str(name).strip()
+        )
+    ) or tuple(dict.fromkeys(case.skill_name for case in normalized))
+    result: list[SkillBenchmarkCoverage] = []
+    for name in names:
+        counts = {case_type: 0 for case_type in sorted(SKILL_BENCHMARK_CASE_TYPES)}
+        for case in normalized:
+            if case.skill_name == name:
+                counts[case.case_type] += 1
+        missing = tuple(
+            case_type for case_type in sorted(SKILL_BENCHMARK_CASE_TYPES) if counts[case_type] == 0
+        )
+        result.append(SkillBenchmarkCoverage(name, counts, missing))
+    return tuple(result)
+
+
+def validate_skill_benchmark_cases(
+    cases: Iterable[SkillBenchmarkCase | dict[str, Any]],
+    *,
+    skill_names: Iterable[str] | None = None,
+) -> tuple[SkillBenchmarkCoverage, ...]:
+    coverage = skill_benchmark_coverage(cases, skill_names=skill_names)
+    incomplete = [item for item in coverage if not item.complete]
+    if incomplete:
+        details = ", ".join(
+            f"{item.skill_name}:missing={','.join(item.missing_case_types)}"
+            for item in incomplete
+        )
+        raise ValueError(f"Skill benchmark coverage incomplete: {details}")
+    return coverage
+
+
+def evaluate_skill_specific_benchmark(
+    cases: Iterable[SkillBenchmarkCase | dict[str, Any]],
+    records: Iterable[dict[str, Any]],
+    *,
+    require_complete: bool = True,
+) -> SkillSpecificBenchmarkReport:
+    normalized_cases = tuple(
+        case if isinstance(case, SkillBenchmarkCase) else SkillBenchmarkCase.from_dict(case)
+        for case in cases
+    )
+    coverage = skill_benchmark_coverage(normalized_cases)
+    if require_complete:
+        incomplete = [item for item in coverage if not item.complete]
+        if incomplete:
+            details = ", ".join(
+                f"{item.skill_name}:missing={','.join(item.missing_case_types)}"
+                for item in incomplete
+            )
+            raise ValueError(f"Skill benchmark coverage incomplete: {details}")
+    return SkillSpecificBenchmarkReport(
+        coverage=coverage,
+        ablation=evaluate_paired_skill_runs(records),
+    )
+
+
+# Short alias for callers that use the task wording.
+evaluate_skill_benchmark = evaluate_skill_specific_benchmark
 
 
 def score_response(row: dict[str, Any]) -> dict[str, Any]:

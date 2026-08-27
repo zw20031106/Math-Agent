@@ -25,6 +25,7 @@ _CLOSURE_ACTIONS = frozenset(
         "replan",
         "final_audit",
         "finalization",
+        "skill_check",
     }
 )
 

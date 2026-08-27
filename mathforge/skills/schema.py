@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 
 from mathforge.agents.registry import FIXED_ROLES
@@ -56,6 +57,11 @@ class SkillPackage:
     package_root: Path
     source_path: Path
     legacy: bool = False
+    # Optional offline priors used by SkillExecutionPlan.  They are not
+    # model-generated and default conservatively for historical V2 Skills.
+    expected_gain: float = 0.0
+    historical_precision: float = 1.0
+    token_cost: int = 0
 
     @property
     def subject(self) -> str:
@@ -81,3 +87,9 @@ class SkillPackage:
             raise ValueError(f"{self.name} sections missing: {', '.join(missing)}")
         if self.kind == "method" and not self.problem_patterns:
             raise ValueError(f"{self.name} method Skill must declare problem_patterns")
+        if not math.isfinite(float(self.expected_gain)) or self.expected_gain < 0:
+            raise ValueError(f"{self.name} expected_gain must be finite and nonnegative")
+        if not 0.0 <= float(self.historical_precision) <= 1.0:
+            raise ValueError(f"{self.name} historical_precision must be in [0, 1]")
+        if type(self.token_cost) is not int or self.token_cost < 0:
+            raise ValueError(f"{self.name} token_cost must be a nonnegative integer")

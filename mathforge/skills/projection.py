@@ -4,7 +4,14 @@ from mathforge.skills.schema import SkillPackage
 
 
 ROLE_SECTIONS = {
-    "PrimarySolver": ("recognition", "core theorem", "exact preconditions", "procedure", "branch conditions"),
+    "PrimarySolver": (
+        "recognition",
+        "core theorem",
+        "exact preconditions",
+        "procedure",
+        "branch conditions",
+        "alternative strategy",
+    ),
     "AlternativeSolver": ("recognition", "procedure", "branch conditions", "alternative strategy", "counterexample patterns"),
     "LemmaCurator": ("core theorem", "exact preconditions", "procedure", "stop / escalate conditions"),
     "VerifierSkeptic": ("do not use when", "exact preconditions", "failure modes", "counterexample patterns", "verification recipe"),

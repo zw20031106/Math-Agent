@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Completed E3 executable-Skill work. Added the immutable
+  `SkillExecutionPlan`/`SkillOutcome`/`SkillCheckTask` contracts with
+  offline utility priors, fail-closed capability admission, alternative and
+  degraded outcomes, real verification-hook task materialization, Evidence
+  consumption, and failure-signal fallback/replan transitions.  V3 method
+  packages now pass a content quality gate with Solver/Verifier-specific
+  projections, and Skill-specific benchmarks require positive, negative,
+  adversarial, selection, and ablation coverage with paired observable
+  scoring.  Added E3 invariant and regression tests.
 - Completed E2 Prompt and Structured Output reduction work. Added the
   Host-owned `ModelSemanticPayload` boundary and minimal Candidate profiles,
   an additive `AgentTurnPayload 1.1-lite` parser/wrapper with P0/P1 metrics,

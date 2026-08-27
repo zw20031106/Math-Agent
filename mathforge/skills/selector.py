@@ -6,6 +6,10 @@ from typing import Any, Iterable, Mapping
 
 from mathforge.harness.reasoning_state import ReasoningState
 from mathforge.harness.schemas import ProblemIR
+from mathforge.skills.execution_plan import (
+    SkillExecutionPlan,
+    skill_utility,
+)
 from mathforge.skills.projection import project
 from mathforge.skills.registry import SkillRegistry
 
@@ -26,6 +30,13 @@ class SkillFragmentDecision:
     required_capabilities: tuple[str, ...] = ()
     verification_hooks: tuple[str, ...] = ()
     reference_hashes: tuple[str, ...] = ()
+    expected_gain: float = 0.0
+    token_cost: int = 0
+    capability_available: bool = True
+    historical_precision: float = 1.0
+    expected_accuracy_gain: float = 0.0
+    utility: float = 0.0
+    source_skill_name: str = ""
 
     def to_trace_dict(self) -> dict[str, Any]:
         return {
@@ -40,6 +51,13 @@ class SkillFragmentDecision:
             "required_capabilities": list(self.required_capabilities),
             "verification_hooks": list(self.verification_hooks),
             "reference_hashes": list(self.reference_hashes),
+            "expected_gain": self.expected_gain,
+            "token_cost": self.token_cost,
+            "capability_available": self.capability_available,
+            "historical_precision": self.historical_precision,
+            "expected_accuracy_gain": self.expected_accuracy_gain,
+            "utility": self.utility,
+            "source_skill_name": self.source_skill_name,
         }
 
 
@@ -102,7 +120,7 @@ class DynamicSkillSelector:
             )
         )
         context = self._context(problem, state, failures)
-        ranked: list[tuple[int, str, tuple[str, ...]]] = []
+        ranked: list[tuple[float, int, str, tuple[str, ...], float, int, float]] = []
         for name in self._registry.names():
             definition = self._registry.definition(name)
             if role not in getattr(definition, "roles", ()):
@@ -115,8 +133,27 @@ class DynamicSkillSelector:
                 failures,
                 state,
             )
-            ranked.append((score, name, reasons))
-        ranked.sort(key=lambda item: (-item[0], item[1]))
+            expected_gain = _expected_gain(definition, score)
+            historical_precision = _historical_precision(definition)
+            token_cost = _token_cost(definition)
+            utility = skill_utility(
+                expected_gain,
+                token_cost,
+                capability_available=True,
+                historical_precision=historical_precision,
+            )
+            ranked.append(
+                (
+                    utility,
+                    score,
+                    name,
+                    reasons,
+                    expected_gain,
+                    token_cost,
+                    historical_precision,
+                )
+            )
+        ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
 
         references = reference_fragments or {}
         blocks: list[str] = []
@@ -124,45 +161,86 @@ class DynamicSkillSelector:
         omitted: list[SkillFragmentDecision] = []
         used = 0
         v3_included = 0
-        for rank, (score, name, reasons) in enumerate(ranked, start=1):
+        seen_effective: set[str] = set()
+        for rank, (
+            utility,
+            score,
+            name,
+            reasons,
+            expected_gain,
+            token_cost,
+            historical_precision,
+        ) in enumerate(ranked, start=1):
             definition = self._registry.definition(name)
-            selected, unselected = self._project_sections(definition, role)
-            admission_status, required, hooks, admission_reasons = (
-                self._admission(definition)
+            plan = self._execution_plan(
+                definition,
+                role=role,
+                score=score,
+                reasons=reasons,
+                expected_gain=expected_gain,
+                historical_precision=historical_precision,
+                token_cost=token_cost,
             )
-            skill_refs = tuple(references.get(name, ()))
+            effective_definition = definition
+            if plan.admission_status == "alternative":
+                effective_definition = self._registry.definition(plan.skill_name)
+            selected, unselected = self._project_sections(effective_definition, role)
+            effective_name = str(getattr(effective_definition, "name", name))
+            effective_gain = float(plan.expected_gain)
+            effective_precision = float(plan.historical_precision)
+            effective_cost = int(plan.token_cost)
+            effective_utility = float(plan.utility)
+            skill_refs = tuple(
+                references.get(effective_name, references.get(name, ()))
+            )
             reference_hashes = tuple(
                 str(getattr(item, "sha256", ""))
                 for item in skill_refs
                 if str(getattr(item, "sha256", ""))
             )
             decision = SkillFragmentDecision(
-                name=name,
-                version=str(getattr(definition, "version", "")),
+                name=effective_name,
+                version=str(getattr(effective_definition, "version", "")),
                 rank=rank,
                 score=score,
                 included_sections=selected,
                 omitted_sections=unselected,
-                reasons=(*reasons, *admission_reasons),
-                admission_status=admission_status,
-                required_capabilities=required,
-                verification_hooks=hooks,
+                reasons=(*reasons, *plan.admission_reasons),
+                admission_status=plan.admission_status,
+                required_capabilities=plan.required_capabilities,
+                verification_hooks=plan.verification_hooks,
                 reference_hashes=reference_hashes,
+                expected_gain=effective_gain,
+                token_cost=effective_cost,
+                capability_available=plan.capability_available,
+                historical_precision=effective_precision,
+                expected_accuracy_gain=plan.expected_accuracy_gain,
+                utility=effective_utility,
+                source_skill_name=(
+                    plan.source_skill_name
+                    if plan.source_skill_name != effective_name
+                    else ""
+                ),
             )
             if score <= 0 or not selected:
                 omitted.append(decision)
                 continue
-            if admission_status != "admitted":
+            if plan.admission_status not in {"admitted", "alternative"}:
                 omitted.append(decision)
                 continue
+            if effective_name in seen_effective:
+                omitted.append(
+                    replace(decision, reasons=(*decision.reasons, "duplicate_effective_skill"))
+                )
+                continue
             if (
-                self._is_v3(definition)
+                self._is_v3(effective_definition)
                 and self._top_k is not None
                 and v3_included >= self._top_k
             ):
                 omitted.append(replace(decision, reasons=(*decision.reasons, "top_k")))
                 continue
-            block = self._render(definition, selected, skill_refs)
+            block = self._render(effective_definition, selected, skill_refs)
             separator = 2 if blocks else 0
             if used + separator + len(block) > max_chars:
                 omitted.append(
@@ -171,7 +249,8 @@ class DynamicSkillSelector:
                 continue
             blocks.append(block)
             included.append(decision)
-            if self._is_v3(definition):
+            seen_effective.add(effective_name)
+            if self._is_v3(effective_definition):
                 v3_included += 1
             used += separator + len(block)
         return DynamicSkillComposition(
@@ -219,6 +298,40 @@ class DynamicSkillSelector:
                 ),
             )
         return "admitted", required, hooks, ()
+
+    def _execution_plan(
+        self,
+        definition: Any,
+        *,
+        role: str,
+        score: int,
+        reasons: tuple[str, ...],
+        expected_gain: float,
+        historical_precision: float,
+        token_cost: int,
+    ) -> SkillExecutionPlan:
+        if self._runtime is not None:
+            builder = getattr(self._runtime, "execution_plan", None)
+            if callable(builder):
+                return builder(
+                    definition.name,
+                    role=role,
+                    selection_score=score,
+                    selection_reasons=reasons,
+                    expected_gain=expected_gain,
+                    historical_precision=historical_precision,
+                    token_cost=token_cost,
+                    allow_degraded=False,
+                )
+        return SkillExecutionPlan.from_definition(
+            definition,
+            role=role,
+            selection_score=score,
+            selection_reasons=reasons,
+            expected_gain=expected_gain,
+            historical_precision=historical_precision,
+            token_cost=token_cost,
+        )
 
     @staticmethod
     def _is_v3(definition: Any) -> bool:
@@ -428,3 +541,40 @@ def _matches(needle: str, context: str) -> bool:
     needle_tokens = set(_TOKEN.findall(normalized))
     context_tokens = set(_TOKEN.findall(context))
     return bool(needle_tokens) and needle_tokens.issubset(context_tokens)
+
+
+def _expected_gain(definition: Any, score: int) -> float:
+    """Return an offline-only prior for utility ordering.
+
+    Packages may publish a benchmark prior in frontmatter.  Until that is
+    present, the existing rule score is retained as a small deterministic
+    feature rather than pretending that an online estimate exists.
+    """
+
+    explicit = getattr(definition, "expected_gain", None)
+    try:
+        explicit_value = float(explicit) if explicit is not None else 0.0
+    except (TypeError, ValueError):
+        explicit_value = 0.0
+    if explicit_value > 0.0:
+        return explicit_value
+    return max(0.01, min(1.0, (max(0, int(score)) + 1) / 100.0))
+
+
+def _historical_precision(definition: Any) -> float:
+    value = getattr(definition, "historical_precision", 1.0)
+    try:
+        return min(1.0, max(0.0, float(value)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _token_cost(definition: Any) -> int:
+    value = getattr(definition, "token_cost", 0)
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        value = 0
+    if value > 0:
+        return value
+    return max(1, int(round(len(str(getattr(definition, "body", ""))) / 4.0)))

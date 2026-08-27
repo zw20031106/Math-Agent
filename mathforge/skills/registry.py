@@ -9,6 +9,7 @@ from mathforge.agents.registry import SkillRegistry as LegacySkillRegistry
 from mathforge.harness.fingerprints import content_tree_fingerprint
 from mathforge.resources import resource_path
 from mathforge.skills.loader import load_legacy_v2_skill, load_v3_package
+from mathforge.skills.quality import SkillQualityGate, SkillQualityReport
 from mathforge.skills.schema import SkillPackage
 
 
@@ -32,6 +33,9 @@ class SkillRegistry:
                     raise ValueError(f"duplicate Skill: {package.name}")
                 loaded[package.name] = package
         self._skills = loaded
+        self._quality_report: SkillQualityReport = SkillQualityGate(
+            minimum_high_value_count=20
+        ).assert_valid(loaded.values())
         value = (
             f"{content_tree_fingerprint(self._legacy_root)}:"
             f"{content_tree_fingerprint(self._package_root)}"
@@ -41,6 +45,12 @@ class SkillRegistry:
     @property
     def fingerprint(self) -> str:
         return self._fingerprint
+
+    @property
+    def quality_report(self) -> SkillQualityReport:
+        """Immutable content-gate result bound to this registry load."""
+
+        return self._quality_report
 
     @property
     def manifest(self) -> list[dict[str, str]]:
