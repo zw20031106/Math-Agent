@@ -81,5 +81,6 @@
   "enable_final_audit": true,
   "enable_shadow": false,
   "enable_frozen_lemma_store": false,
-  "enable_long_horizon": false
+  "enable_long_horizon": false,
+  "enable_simple_direct_candidate": false
 }

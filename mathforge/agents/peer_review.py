@@ -85,6 +85,7 @@ class SolverPeerReviewAgent:
             input_artifact_id=candidate_artifact_id,
             budget=budget,
             max_tokens=min(max_tokens or compilation.max_output_tokens, compilation.max_output_tokens),
+            prompt_component_tokens=compilation.prompt_component_tokens,
         )
         parsed = self._parse(
             response,
@@ -155,6 +156,7 @@ class SolverPeerReviewAgent:
             input_artifact_id=review.artifact_id,
             budget=budget,
             max_tokens=min(max_tokens or compilation.max_output_tokens, compilation.max_output_tokens),
+            prompt_component_tokens=compilation.prompt_component_tokens,
         )
         parsed = self._parse(
             response,
@@ -200,6 +202,7 @@ class SolverPeerReviewAgent:
         input_artifact_id: str,
         budget: CallBudget,
         max_tokens: int,
+        prompt_component_tokens: dict[str, int] | None = None,
     ) -> str:
         stage = "primary" if reviewer_role == "PrimarySolver" else "alternative"
         budget.consume(
@@ -207,7 +210,10 @@ class SolverPeerReviewAgent:
             optional=False,
             action_category="peer_review_response",
         )
-        budget.record_prompt_chars(sum(len(item["content"]) for item in messages))
+        budget.record_prompt_chars(
+            sum(len(item["content"]) for item in messages),
+            components=prompt_component_tokens,
+        )
         return self._provider.chat(
             messages=messages,
             temperature=0.0,

@@ -11,13 +11,19 @@ from mathforge.agents.registry import PromptContractLoader
 from mathforge.skills.registry import SkillRegistry
 from mathforge.skills.runtime import SkillRuntime
 from mathforge.skills.selector import DynamicSkillSelector
-from mathforge.agents.router_planner import RouterPlanner, method_families_for
+from mathforge.agents.router_planner import (
+    RouterPlanner,
+    is_simple_direct_candidate,
+    method_families_for,
+    simple_direct_candidate_reasons,
+)
 from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.harness.adaptive_fanout import AdaptiveFanoutPolicy
 from mathforge.agent_runtime.session_call_budget import SessionCallBudget
 from mathforge.agent_runtime.definitions import AgentRegistry
 from mathforge.agent_runtime.runtime import SessionAgentRuntime
 from mathforge.agent_runtime.autonomy import AgentProgressTracker
+from mathforge.agent_runtime.protocol import LITE_PROTOCOL_SCHEMA_VERSION
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.cancellation import CancellationToken
 from mathforge.harness.debug import DebugSink, sanitized_failure_record
@@ -785,6 +791,16 @@ class MathForgeHarness:
                 record_prompt_chars=(
                     session.budget.record_prompt_chars if router_enabled else None
                 ),
+                record_prompt_components=(
+                    (
+                        lambda components: session.budget.record_prompt_chars(
+                            0,
+                            components=components,
+                        )
+                    )
+                    if router_enabled
+                    else None
+                ),
                 record_protocol_telemetry=(
                     session.budget.record_model_protocol_telemetry
                     if router_enabled
@@ -794,14 +810,47 @@ class MathForgeHarness:
             session.route_plan = router_outcome.route_plan
             session.agent_plan = router_outcome.authoritative_plan
             router_protocol_refs = {}
-            if not self._config.enable_alternatives:
+            direct_candidate_eligible = is_simple_direct_candidate(
+                session.problem_ir,
+                session.route_plan,
+            )
+            direct_candidate_mode = bool(
+                self._config.enable_simple_direct_candidate
+                and direct_candidate_eligible
+            )
+            trace.add(
+                "simple_direct_candidate_mode",
+                enabled=self._config.enable_simple_direct_candidate,
+                eligible=direct_candidate_eligible,
+                active=direct_candidate_mode,
+                blocker_reasons=list(
+                    simple_direct_candidate_reasons(
+                        session.problem_ir,
+                        session.route_plan,
+                    )
+                ),
+            )
+            if direct_candidate_mode:
+                session.route_plan = replace(
+                    session.route_plan,
+                    candidate_count=1,
+                    max_reasoning_rounds=1,
+                    use_rag=False,
+                    use_lemma_loop=False,
+                    use_llm_finalizer=False,
+                )
+            elif not self._config.enable_alternatives:
                 session.route_plan = replace(session.route_plan, candidate_count=1)
             else:
                 session.route_plan = replace(
                     session.route_plan,
                     candidate_count=max(2, session.route_plan.candidate_count),
                 )
-            if self._config.enable_long_horizon and router_enabled:
+            if (
+                self._config.enable_long_horizon
+                and router_enabled
+                and not direct_candidate_mode
+            ):
                 # Competition runs do not admit a low-difficulty fast path;
                 # the Router still decides the method, but the runtime keeps
                 # a medium-risk verification floor for every admitted case.
@@ -867,7 +916,11 @@ class MathForgeHarness:
                 max_calls=self._config.max_model_calls,
                 router_calls=session.budget.used_calls,
                 candidate_count=(
-                    max(2, session.route_plan.candidate_count)
+                    (
+                        session.route_plan.candidate_count
+                        if direct_candidate_mode
+                        else max(2, session.route_plan.candidate_count)
+                    )
                     if self._config.enable_alternatives
                     else session.route_plan.candidate_count
                 ),
@@ -1197,6 +1250,7 @@ class MathForgeHarness:
                         trace,
                         role_skill_contexts=role_skill_contexts,
                         solver_contexts=solver_contexts,
+                        direct_candidate_mode=direct_candidate_mode,
                     )
                 )
             if not autonomous_agents_enabled:
@@ -4108,6 +4162,7 @@ class MathForgeHarness:
         *,
         role_skill_contexts: dict[str, str],
         solver_contexts: dict[str, Any],
+        direct_candidate_mode: bool = False,
     ) -> tuple[FanoutResult, ReasoningState, dict[str, Any]]:
         tracker = AgentProgressTracker()
         effective = session.agent_runtime.effective_execution_plan
@@ -4219,6 +4274,17 @@ class MathForgeHarness:
         action_turns = 0
         progress_turns = 0
         stall_stops = 0
+        if direct_candidate_mode:
+            for branch in branches:
+                branch.status = "ready_to_synthesize"
+                branch.stop_reason = "simple_direct_candidate"
+            trace.add(
+                "simple_candidate_direct_path",
+                candidate_count=len(branches),
+                progress_turns=0,
+                progress_artifact_created=False,
+                protocol_variant=LITE_PROTOCOL_SCHEMA_VERSION,
+            )
         while any(branch.status == "exploring" for branch in branches):
             cycle_advanced = False
             progress_tasks = []
@@ -4568,6 +4634,11 @@ class MathForgeHarness:
                             else max(self._config.primary_temperature, 0.35)
                         ),
                         max_tokens=self._config.primary_max_tokens,
+                        protocol_variant=(
+                            LITE_PROTOCOL_SCHEMA_VERSION
+                            if direct_candidate_mode
+                            else "1.0"
+                        ),
                     )
                 except ModelTransportError as error:
                     if session.problem_ir.response_mode != "proof_full":
@@ -4587,6 +4658,11 @@ class MathForgeHarness:
                         temperature=0.0,
                         max_tokens=8192,
                         compact=True,
+                        protocol_variant=(
+                            LITE_PROTOCOL_SCHEMA_VERSION
+                            if direct_candidate_mode
+                            else "1.0"
+                        ),
                     )
                 if turn.partial and turn.candidate is None:
                     compact_recovery = True
@@ -4604,6 +4680,11 @@ class MathForgeHarness:
                         temperature=0.0,
                         max_tokens=self._config.primary_max_tokens,
                         compact=True,
+                        protocol_variant=(
+                            LITE_PROTOCOL_SCHEMA_VERSION
+                            if direct_candidate_mode
+                            else "1.0"
+                        ),
                     )
                 candidate = (
                     None
@@ -4757,6 +4838,12 @@ class MathForgeHarness:
                     branch.candidate_id: branch.stop_reason
                     for branch in branches
                 },
+                "simple_direct_candidate": direct_candidate_mode,
+                "protocol_variant": (
+                    LITE_PROTOCOL_SCHEMA_VERSION
+                    if direct_candidate_mode
+                    else "1.0"
+                ),
             },
         )
 
@@ -5519,6 +5606,12 @@ class MathForgeHarness:
                     if is_semantic_hard_pass(record)
                 ),
                 record_prompt_chars=session.budget.record_prompt_chars,
+                record_prompt_components=(
+                    lambda components: session.budget.record_prompt_chars(
+                        0,
+                        components=components,
+                    )
+                ),
                 record_protocol_telemetry=(
                     session.budget.record_model_protocol_telemetry
                 ),

@@ -80,7 +80,8 @@ class LLMFinalizer:
             )
             messages = compilation.messages
             budget.record_prompt_chars(
-                sum(len(message["content"]) for message in messages)
+                sum(len(message["content"]) for message in messages),
+                components=compilation.prompt_component_tokens,
             )
             response = self._provider.chat(
                 messages=messages,

@@ -38,6 +38,14 @@ class RunMetrics:
     model_calls: int = 0
     estimated_tokens: int = 0
     prompt_tokens: int = 0
+    prompt_component_tokens: dict[str, int] = field(default_factory=lambda: {
+        "contract_tokens": 0,
+        "runtime_protocol_tokens": 0,
+        "skill_tokens": 0,
+        "state_tokens": 0,
+        "problem_tokens": 0,
+        "schema_tokens": 0,
+    })
     official_prompt_tokens: int = 0
     fallback_prompt_tokens: int = 0
     requested_output_tokens: int = 0
@@ -165,6 +173,21 @@ class RunMetrics:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"RunMetrics.{name} must be a nonnegative integer")
+        expected_prompt_components = {
+            "contract_tokens",
+            "runtime_protocol_tokens",
+            "skill_tokens",
+            "state_tokens",
+            "problem_tokens",
+            "schema_tokens",
+        }
+        if set(self.prompt_component_tokens) != expected_prompt_components:
+            raise ValueError("RunMetrics prompt component fields are invalid")
+        if any(
+            type(value) is not int or value < 0
+            for value in self.prompt_component_tokens.values()
+        ):
+            raise ValueError("RunMetrics prompt component values must be nonnegative integers")
         for name in (
             "tool_seconds",
             "elapsed_seconds",
@@ -314,6 +337,20 @@ def collect_run_metrics(
         model_calls=budget.used_calls,
         estimated_tokens=budget.used_tokens,
         prompt_tokens=budget.prompt_tokens,
+        prompt_component_tokens=dict(
+            getattr(
+                budget,
+                "prompt_component_tokens",
+                {
+                    "contract_tokens": 0,
+                    "runtime_protocol_tokens": 0,
+                    "skill_tokens": 0,
+                    "state_tokens": 0,
+                    "problem_tokens": 0,
+                    "schema_tokens": 0,
+                },
+            )
+        ),
         official_prompt_tokens=budget.official_prompt_tokens,
         fallback_prompt_tokens=budget.fallback_prompt_tokens,
         requested_output_tokens=budget.requested_output_tokens,

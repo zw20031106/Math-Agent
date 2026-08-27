@@ -97,6 +97,7 @@ class VerificationClosureAgent:
             ordinal=ordinal,
             action_category="verification",
             input_artifact_ids=input_artifact_ids,
+            prompt_component_tokens=compilation.prompt_component_tokens,
         )
         parsed = self._parse(
             response,
@@ -250,6 +251,7 @@ class VerificationClosureAgent:
             ordinal=ordinal,
             action_category="final_audit",
             input_artifact_ids=input_artifact_ids,
+            prompt_component_tokens=compilation.prompt_component_tokens,
         )
         parsed = self._parse(
             response,
@@ -307,9 +309,13 @@ class VerificationClosureAgent:
         ordinal: int,
         action_category: str,
         input_artifact_ids: tuple[str, ...],
+        prompt_component_tokens: dict[str, int] | None = None,
     ) -> str:
         budget.consume(stage="verifier", optional=False, action_category=action_category)
-        budget.record_prompt_chars(sum(len(item["content"]) for item in messages))
+        budget.record_prompt_chars(
+            sum(len(item["content"]) for item in messages),
+            components=prompt_component_tokens,
+        )
         return self._provider.chat(
             messages=messages,
             temperature=0.0,

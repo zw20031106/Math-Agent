@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from threading import Lock
+from typing import ClassVar
 
 from mathforge.agent_runtime.call_ledger import CallLedger
 from mathforge.agent_runtime.resource_governor import ResourceGovernor
@@ -13,6 +14,15 @@ from mathforge.harness.errors import BudgetExceeded
 
 @dataclass
 class CallBudget:
+    PROMPT_COMPONENT_KEYS: ClassVar[tuple[str, ...]] = (
+        "contract_tokens",
+        "runtime_protocol_tokens",
+        "skill_tokens",
+        "state_tokens",
+        "problem_tokens",
+        "schema_tokens",
+    )
+
     max_calls: int
     used_calls: int = 0
     max_tokens: int = 0
@@ -86,6 +96,9 @@ class CallBudget:
         self.used_evidence_records = 0
         self.used_prompt_chars = 0
         self.prompt_tokens = 0
+        self.prompt_component_tokens = {
+            name: 0 for name in self.PROMPT_COMPONENT_KEYS
+        }
         self.official_prompt_tokens = 0
         self.fallback_prompt_tokens = 0
         self.requested_output_tokens = 0
@@ -654,13 +667,37 @@ class CallBudget:
                 raise BudgetExceeded("evidence record budget exhausted")
             self.used_evidence_records = proposed
 
-    def record_prompt_chars(self, count: int) -> None:
+    def record_prompt_chars(
+        self,
+        count: int,
+        *,
+        components: dict[str, int] | None = None,
+    ) -> None:
         with self._lock:
             self._ensure_mutable_locked()
             proposed = self.used_prompt_chars + max(0, int(count))
             if proposed > self.max_prompt_chars_total:
                 raise BudgetExceeded("prompt character budget exhausted")
             self.used_prompt_chars = proposed
+            if components:
+                unknown = set(components) - set(self.PROMPT_COMPONENT_KEYS)
+                if unknown:
+                    raise ValueError(
+                        "unknown prompt component token fields: "
+                        + ", ".join(sorted(unknown))
+                    )
+                for name in self.PROMPT_COMPONENT_KEYS:
+                    value = components.get(name, 0)
+                    if type(value) is not int or value < 0:
+                        raise ValueError(
+                            f"prompt component {name} must be a nonnegative integer"
+                        )
+                    self.prompt_component_tokens[name] += value
+
+    def record_prompt_components(self, components: dict[str, int]) -> None:
+        """Record token components without charging prompt characters twice."""
+
+        self.record_prompt_chars(0, components=components)
 
     def record_model_retry(self, reason: str) -> None:
         normalized = str(reason).strip() or "unspecified"
@@ -728,6 +765,7 @@ class CallBudget:
                 "model_context_window_tokens": self.model_context_window_tokens,
                 "context_safety_margin_tokens": self.context_safety_margin_tokens,
                 "prompt_tokens": self.prompt_tokens,
+                "prompt_component_tokens": dict(self.prompt_component_tokens),
                 "official_prompt_tokens": self.official_prompt_tokens,
                 "fallback_prompt_tokens": self.fallback_prompt_tokens,
                 "requested_output_tokens": self.requested_output_tokens,

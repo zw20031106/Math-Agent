@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 import re
 from typing import Any
@@ -11,6 +11,10 @@ from mathforge.parsing.structured_output import StructuredOutputRecoveryLayer
 
 
 PROTOCOL_SCHEMA_VERSION = "1.0"
+LITE_PROTOCOL_SCHEMA_VERSION = "1.1-lite"
+AGENT_TURN_PROTOCOL_VARIANTS = frozenset(
+    {PROTOCOL_SCHEMA_VERSION, LITE_PROTOCOL_SCHEMA_VERSION}
+)
 
 ARTIFACT_TYPES = frozenset(
     {
@@ -141,6 +145,110 @@ class AgentTurnPayload:
         }
 
 
+LITE_AGENT_TURN_FIELDS = frozenset(
+    {"action", "payload", "outbound", "stop_reason"}
+)
+# Friendly aliases make the experiment discoverable without changing the
+# production 1.0 type imported by existing callers.
+AGENT_TURN_LITE_FIELDS = LITE_AGENT_TURN_FIELDS
+
+
+def _lite_default_result_type(action: str) -> str:
+    return {
+        "publish_candidate": "CandidateArtifact",
+        "request_tool_check": "ToolRequestArtifact",
+        "challenge_candidate": "CritiqueArtifact",
+        "publish_rebuttal": "RebuttalArtifact",
+        "complete": "CandidateArtifact",
+        "abstain": "CheckpointArtifact",
+    }.get(action, "ProgressArtifact")
+
+
+@dataclass(frozen=True)
+class AgentTurnPayloadLite:
+    """Model-owned 1.1-lite turn payload.
+
+    The model emits only an Action, mathematical/public payload, optional
+    outbound intent data, and a stop reason.  The Host wraps it into the
+    existing 1.0 envelope after assigning task/result/identity metadata.
+    """
+
+    action: str
+    payload: dict[str, Any]
+    outbound: tuple[dict[str, Any], ...] = ()
+    stop_reason: str = ""
+
+    def __post_init__(self) -> None:
+        if self.action not in ACTION_TYPES:
+            raise ValueError("invalid AgentTurnPayload 1.1-lite action")
+        if not isinstance(self.payload, dict):
+            raise ValueError("AgentTurnPayload 1.1-lite payload must be an object")
+        if not isinstance(self.outbound, tuple) or any(
+            not isinstance(item, dict) for item in self.outbound
+        ):
+            raise ValueError("AgentTurnPayload 1.1-lite outbound must contain objects")
+        forbidden = _nested_host_fields(
+            self.payload,
+            fields=_LITE_HOST_OWNED_FIELDS,
+        )
+        if forbidden:
+            raise ValueError(
+                "AgentTurnPayload 1.1-lite payload contains Host-owned fields: "
+                + ", ".join(sorted(forbidden))
+            )
+        if self.action in {"publish_candidate", "continue_reasoning"} and not self.payload:
+            raise ValueError(
+                f"{self.action} requires a non-empty 1.1-lite payload"
+            )
+        if self.action in {"abstain", "complete"} and not str(self.stop_reason).strip():
+            raise ValueError(f"{self.action} requires stop_reason")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "action": self.action,
+            "payload": deepcopy(self.payload),
+            "outbound": [deepcopy(item) for item in self.outbound],
+            "stop_reason": self.stop_reason,
+        }
+
+    def to_agent_turn(
+        self,
+        *,
+        task_result_type: str = "",
+        progress_summary: str = "",
+        protocol_version: str = PROTOCOL_SCHEMA_VERSION,
+    ) -> "AgentTurnPayload":
+        """Wrap the lite result with deterministic Host-owned defaults."""
+
+        if protocol_version not in AGENT_TURN_PROTOCOL_VARIANTS:
+            raise ValueError("unsupported AgentTurnPayload protocol version")
+        result_type = str(task_result_type or "").strip() or _lite_default_result_type(
+            self.action
+        )
+        is_progress = self.action == "continue_reasoning" or result_type in {
+            "ProgressArtifact",
+            "ToolRequestArtifact",
+            "CheckpointArtifact",
+        }
+        return AgentTurnPayload(
+            protocol_version=PROTOCOL_SCHEMA_VERSION,
+            task_result_type=result_type,
+            action=self.action,
+            public_state_delta=deepcopy(self.payload) if is_progress else {},
+            result_payload=deepcopy(self.payload) if not is_progress else {},
+            outbound_intents=tuple(deepcopy(item) for item in self.outbound),
+            progress_summary=(
+                str(progress_summary).strip()
+                or str(self.stop_reason).strip()
+                or "Host-wrapped 1.1-lite result"
+            ),
+            stop_reason=str(self.stop_reason).strip(),
+        )
+
+
+AgentTurnPayload11Lite = AgentTurnPayloadLite
+
+
 @dataclass(frozen=True)
 class ParsedAgentTurn:
     payload: AgentTurnPayload
@@ -150,6 +258,37 @@ class ParsedAgentTurn:
     parse_tier: str = "strict_json"
     recovery_reason: str = ""
     assurance_degradation: str = "none"
+
+
+@dataclass(frozen=True)
+class ParsedAgentTurnLite:
+    payload: AgentTurnPayloadLite
+    response_sha256: str
+    partial: bool = False
+    truncation_reason: str = ""
+    parse_tier: str = "strict_json"
+    recovery_reason: str = ""
+    assurance_degradation: str = "none"
+
+    def to_agent_turn(
+        self,
+        *,
+        task_result_type: str = "",
+        progress_summary: str = "",
+    ) -> ParsedAgentTurn:
+        wrapped = self.payload.to_agent_turn(
+            task_result_type=task_result_type,
+            progress_summary=progress_summary,
+        )
+        return ParsedAgentTurn(
+            payload=wrapped,
+            response_sha256=self.response_sha256,
+            partial=self.partial,
+            truncation_reason=self.truncation_reason,
+            parse_tier=f"lite:{self.parse_tier}",
+            recovery_reason=self.recovery_reason,
+            assurance_degradation=self.assurance_degradation,
+        )
 
 
 AGENT_TURN_FIELDS = frozenset(
@@ -176,6 +315,45 @@ _HOST_OWNED_TURN_FIELDS = frozenset(
         "session_id",
         "requested_max_output_tokens",
         "stage_timeout_seconds",
+    }
+)
+
+
+def _nested_host_fields(
+    value: Any,
+    *,
+    fields: frozenset[str] | None = None,
+) -> set[str]:
+    found: set[str] = set()
+    owned_fields = _HOST_OWNED_TURN_FIELDS if fields is None else fields
+    if isinstance(value, dict):
+        found.update(owned_fields.intersection(value))
+        for nested in value.values():
+            found.update(_nested_host_fields(nested, fields=fields))
+    elif isinstance(value, list):
+        for nested in value:
+            found.update(_nested_host_fields(nested, fields=fields))
+    return found
+
+
+_LITE_HOST_OWNED_FIELDS = frozenset(
+    {
+        *_HOST_OWNED_TURN_FIELDS,
+        "priority",
+        "status",
+        "token_limit",
+        "token_limits",
+        "max_tokens",
+        "max_output_tokens",
+        "token_budget",
+        "timeout",
+        "timeout_seconds",
+        "protocol_version",
+        "task_result_type",
+        "public_state_delta",
+        "result_payload",
+        "outbound_intents",
+        "progress_summary",
     }
 )
 
@@ -254,6 +432,128 @@ class AgentTurnPayloadParser:
             assurance_degradation=recovered_degradation,
         )
 
+    def parse_lite(
+        self,
+        response: str,
+        *,
+        allowed_actions: tuple[str, ...] | frozenset[str] | None = None,
+        truncated: bool = False,
+        truncation_reason: str = "",
+    ) -> "ParsedAgentTurnLite":
+        """Parse the experimental 1.1-lite model envelope."""
+
+        recovery = StructuredOutputRecoveryLayer()
+        model_text = prepare_model_text(response)
+        raw_response = model_text.public_text
+        truncated = truncated or model_text.think_truncated
+        if any(
+            re.search(rf'"{re.escape(field)}"\s*:', raw_response)
+            for field in _LITE_HOST_OWNED_FIELDS
+        ):
+            raise ValueError("AgentTurnPayload 1.1-lite contains Host-owned fields")
+        try:
+            recovered = recovery.parse_object(raw_response, truncated=truncated)
+            decoded = recovered.value
+            parse_tier = recovered.parse_tier
+            recovery_reason = recovered.recovery_reason
+            degradation = recovered.assurance_degradation
+        except (TypeError, ValueError) as error:
+            decoded = self._semantic_salvage_lite(recovery, raw_response)
+            if decoded is None:
+                raise ValueError("AgentTurnPayload 1.1-lite is not valid JSON") from error
+            parse_tier = "semantic_salvage"
+            recovery_reason = "complete_lite_public_fields_from_truncated_turn"
+            degradation = "high"
+        if not isinstance(decoded, dict) or set(decoded) != LITE_AGENT_TURN_FIELDS:
+            semantic = self._semantic_salvage_lite(recovery, raw_response)
+            if semantic is None:
+                raise ValueError(
+                    "AgentTurnPayload 1.1-lite fields do not match the public schema"
+                )
+            decoded = semantic
+            parse_tier = "semantic_salvage"
+            recovery_reason = "complete_lite_public_fields_from_truncated_turn"
+            degradation = "high"
+        forbidden = _nested_host_fields(decoded, fields=_LITE_HOST_OWNED_FIELDS)
+        if forbidden:
+            raise ValueError(
+                "AgentTurnPayload 1.1-lite contains Host-owned fields: "
+                + ", ".join(sorted(forbidden))
+            )
+        outbound = decoded["outbound"]
+        if not isinstance(outbound, list):
+            raise ValueError("AgentTurnPayload 1.1-lite outbound must be a list")
+        payload = AgentTurnPayloadLite(
+            action=str(decoded["action"]).strip(),
+            payload=deepcopy(decoded["payload"]),
+            outbound=tuple(deepcopy(item) for item in outbound),
+            stop_reason=str(decoded["stop_reason"]).strip(),
+        )
+        if allowed_actions is not None and payload.action not in set(allowed_actions):
+            raise ValueError("AgentTurnPayload 1.1-lite action is not allowed")
+        reason = str(truncation_reason).strip()
+        return ParsedAgentTurnLite(
+            payload=payload,
+            response_sha256=sha256(raw_response.encode("utf-8")).hexdigest(),
+            partial=bool(truncated),
+            truncation_reason=reason if truncated else "",
+            parse_tier=parse_tier,
+            recovery_reason=recovery_reason,
+            assurance_degradation=degradation,
+        )
+
+    @staticmethod
+    def _semantic_salvage_lite(
+        recovery: StructuredOutputRecoveryLayer,
+        response: str,
+    ) -> dict[str, Any] | None:
+        fields = recovery.salvage_top_level_fields(response, LITE_AGENT_TURN_FIELDS)
+        action = fields.get("action")
+        payload = fields.get("payload")
+        if not isinstance(action, str) or not isinstance(payload, dict):
+            return None
+        return {
+            "action": action,
+            "payload": payload,
+            "outbound": (
+                fields["outbound"]
+                if isinstance(fields.get("outbound"), list)
+                else []
+            ),
+            "stop_reason": str(fields.get("stop_reason", "")),
+        }
+
+    def parse_any(
+        self,
+        response: str,
+        *,
+        protocol_version: str = PROTOCOL_SCHEMA_VERSION,
+        allowed_actions: tuple[str, ...] | frozenset[str] | None = None,
+        truncated: bool = False,
+        truncation_reason: str = "",
+        task_result_type: str = "",
+        progress_summary: str = "",
+    ) -> ParsedAgentTurn:
+        if protocol_version == LITE_PROTOCOL_SCHEMA_VERSION:
+            lite = self.parse_lite(
+                response,
+                allowed_actions=allowed_actions,
+                truncated=truncated,
+                truncation_reason=truncation_reason,
+            )
+            return lite.to_agent_turn(
+                task_result_type=task_result_type,
+                progress_summary=progress_summary,
+            )
+        if protocol_version != PROTOCOL_SCHEMA_VERSION:
+            raise ValueError("unsupported AgentTurnPayload protocol version")
+        return self.parse(
+            response,
+            allowed_actions=allowed_actions,
+            truncated=truncated,
+            truncation_reason=truncation_reason,
+        )
+
     @staticmethod
     def _semantic_salvage(
         recovery: StructuredOutputRecoveryLayer,
@@ -310,6 +610,159 @@ class AgentTurnPayloadParser:
         elif isinstance(value, list):
             for nested in value:
                 self._reject_host_fields(nested)
+
+
+@dataclass
+class AgentTurnABMetrics:
+    """Comparable P0/P1 measurements for the lite-envelope experiment."""
+
+    variant: str
+    calls: int = 0
+    json_valid: int = 0
+    truncations: int = 0
+    accuracy_successes: int = 0
+    output_tokens: int = 0
+    latency_ms: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.variant not in {"P0", "P1"}:
+            raise ValueError("AgentTurnABMetrics variant must be P0 or P1")
+
+    def record(
+        self,
+        *,
+        json_valid: bool,
+        truncated: bool,
+        accurate: bool | None = None,
+        output_tokens: int = 0,
+        latency_ms: float = 0.0,
+    ) -> None:
+        self.calls += 1
+        self.json_valid += int(bool(json_valid))
+        self.truncations += int(bool(truncated))
+        if accurate is not None:
+            self.accuracy_successes += int(bool(accurate))
+        self.output_tokens += max(0, int(output_tokens))
+        self.latency_ms += max(0.0, float(latency_ms))
+
+    @property
+    def json_valid_rate(self) -> float:
+        return self.json_valid / self.calls if self.calls else 0.0
+
+    @property
+    def truncation_rate(self) -> float:
+        return self.truncations / self.calls if self.calls else 0.0
+
+    @property
+    def accuracy_rate(self) -> float:
+        return self.accuracy_successes / self.calls if self.calls else 0.0
+
+    @property
+    def mean_output_tokens(self) -> float:
+        return self.output_tokens / self.calls if self.calls else 0.0
+
+    @property
+    def mean_latency_ms(self) -> float:
+        return self.latency_ms / self.calls if self.calls else 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "variant": self.variant,
+            "calls": self.calls,
+            "json_valid": self.json_valid,
+            "json_valid_rate": round(self.json_valid_rate, 6),
+            "truncations": self.truncations,
+            "truncation_rate": round(self.truncation_rate, 6),
+            "accuracy_successes": self.accuracy_successes,
+            "accuracy_rate": round(self.accuracy_rate, 6),
+            "output_tokens": self.output_tokens,
+            "mean_output_tokens": round(self.mean_output_tokens, 6),
+            "latency_ms": round(self.latency_ms, 6),
+            "mean_latency_ms": round(self.mean_latency_ms, 6),
+        }
+
+
+@dataclass(frozen=True)
+class AgentTurnABDecision:
+    winner: str
+    migration_eligible: bool
+    reason_codes: tuple[str, ...]
+    p0: dict[str, Any]
+    p1: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "winner": self.winner,
+            "migration_eligible": self.migration_eligible,
+            "reason_codes": list(self.reason_codes),
+            "p0": deepcopy(self.p0),
+            "p1": deepcopy(self.p1),
+        }
+
+
+@dataclass
+class AgentTurnABExperiment:
+    """Record P0 (1.0) and P1 (1.1-lite) without changing production policy."""
+
+    p0: AgentTurnABMetrics = field(
+        default_factory=lambda: AgentTurnABMetrics("P0")
+    )
+    p1: AgentTurnABMetrics = field(
+        default_factory=lambda: AgentTurnABMetrics("P1")
+    )
+
+    def metrics(self, variant: str) -> AgentTurnABMetrics:
+        if variant == "P0":
+            return self.p0
+        if variant == "P1":
+            return self.p1
+        raise ValueError("AgentTurnABExperiment variant must be P0 or P1")
+
+    def record(self, variant: str, **kwargs: Any) -> None:
+        self.metrics(variant).record(**kwargs)
+
+    def evaluate(self) -> AgentTurnABDecision:
+        p0 = self.p0
+        p1 = self.p1
+        reasons: list[str] = []
+        if not p0.calls or not p1.calls:
+            reasons.append("both_variants_require_observations")
+            return AgentTurnABDecision(
+                "undetermined",
+                False,
+                tuple(reasons),
+                p0.to_dict(),
+                p1.to_dict(),
+            )
+        no_regression = (
+            p1.json_valid_rate >= p0.json_valid_rate
+            and p1.accuracy_rate >= p0.accuracy_rate
+            and p1.truncation_rate <= p0.truncation_rate
+            and p1.mean_output_tokens <= p0.mean_output_tokens
+            and p1.mean_latency_ms <= p0.mean_latency_ms
+        )
+        strict_improvement = (
+            p1.json_valid_rate > p0.json_valid_rate
+            or p1.accuracy_rate > p0.accuracy_rate
+            or p1.truncation_rate < p0.truncation_rate
+            or p1.mean_output_tokens < p0.mean_output_tokens
+            or p1.mean_latency_ms < p0.mean_latency_ms
+        )
+        if no_regression and strict_improvement:
+            reasons.append("p1_non_regression_with_strict_improvement")
+            return AgentTurnABDecision(
+                "P1", True, tuple(reasons), p0.to_dict(), p1.to_dict()
+            )
+        reasons.append("p1_did_not_win_all_required_metrics")
+        return AgentTurnABDecision(
+            "P0", False, tuple(reasons), p0.to_dict(), p1.to_dict()
+        )
+
+
+LiteAgentTurnABExperiment = AgentTurnABExperiment
+AgentTurnAB = AgentTurnABExperiment
+AgentTurnLitePayload = AgentTurnPayloadLite
+ParsedAgentTurn11Lite = ParsedAgentTurnLite
 
 
 @dataclass(frozen=True)

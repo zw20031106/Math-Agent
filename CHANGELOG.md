@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Completed E2 Prompt and Structured Output reduction work. Added the
+  Host-owned `ModelSemanticPayload` boundary and minimal Candidate profiles,
+  an additive `AgentTurnPayload 1.1-lite` parser/wrapper with P0/P1 metrics,
+  and a config-gated simple-task direct-Candidate path that skips progress
+  artifacts. Compiled prompts now expose answer-free golden snapshots bound to
+  contract/version and hash metadata, while CallBudget and RunMetrics report
+  contract, runtime-protocol, skill, state, problem, and schema token costs.
+  Added E2 invariant, golden, compatibility, and end-to-end regression tests.
 - Completed E1 Source-of-Truth and protocol-consistency work. Prompt versions
   now come directly from contract frontmatter; ActionRegistry owns declared
   role/phase actions, prompt enums, and Host routing checks; all model-facing

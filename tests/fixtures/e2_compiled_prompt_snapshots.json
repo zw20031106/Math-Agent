@@ -1,0 +1,132 @@
+{
+  "router_planner:role": {
+    "role_directory": "router_planner",
+    "profile": "router",
+    "protocol_version": "1.0",
+    "contract_version": "5",
+    "contract_sha256": "8343d183b3a120ed2e181d5af8d8cafc409c01175b567f8a6e5455f8e1e9f343",
+    "prompt_sha256": "6059d77004e0800df60008a3a5cf6123643363b0f84352ff230b4c91eaac179e",
+    "output_schema_name": "role:router_planner:router",
+    "output_schema_fields": [
+      "alternative_methods",
+      "needs_long_horizon",
+      "patterns",
+      "preferred_methods",
+      "primary_domain",
+      "risk",
+      "secondary_domain"
+    ],
+    "selected_skill_summary": "general-math",
+    "max_output_cap": 8192
+  },
+  "lemma_curator:role": {
+    "role_directory": "lemma_curator",
+    "profile": "lemma",
+    "protocol_version": "1.0",
+    "contract_version": "5",
+    "contract_sha256": "de529c34277c0d3c20e6a5f5c9c4350340eefd14ad5bbff98f881e982005973f",
+    "prompt_sha256": "b84ff2865b7156aade6754dd29119bc87f3e6dc781e33304c8f2bced47713aae",
+    "output_schema_name": "role:lemma_curator:lemma",
+    "output_schema_fields": [
+      "action",
+      "outbound_intents",
+      "progress_summary",
+      "protocol_version",
+      "public_state_delta",
+      "result_payload",
+      "stop_reason",
+      "task_result_type"
+    ],
+    "selected_skill_summary": "general-math",
+    "max_output_cap": 16384
+  },
+  "verifier_skeptic:role": {
+    "role_directory": "verifier_skeptic",
+    "profile": "verifier",
+    "protocol_version": "1.0",
+    "contract_version": "8",
+    "contract_sha256": "9c51917a2c36f4861d26ad087569e412b0abd0d43d9501c81bd4f80b9d5960ea",
+    "prompt_sha256": "ce94220b144c9fa8cfb609e1084b03b0307a8f0a65898bdf05378c019416aad3",
+    "output_schema_name": "role:verifier_skeptic:verifier",
+    "output_schema_fields": ["findings"],
+    "selected_skill_summary": "general-math",
+    "max_output_cap": 16384
+  },
+  "repair:role": {
+    "role_directory": "repair",
+    "profile": "repair",
+    "protocol_version": "1.0",
+    "contract_version": "7",
+    "contract_sha256": "6987742449393f1f8fa56da43cd410c7448afe21f6ec8aa9abacc78a3178a8fd",
+    "prompt_sha256": "b4e9ba3665f487d2885fa16fa10da2ae307c146ad01d0ae0101e58dfe9451f42",
+    "output_schema_name": "role:repair:repair",
+    "output_schema_fields": [
+      "final_answer",
+      "public_solution_steps",
+      "replacement_claims",
+      "unresolved_obligations"
+    ],
+    "selected_skill_summary": "general-math",
+    "max_output_cap": 24576
+  },
+  "finalizer:role": {
+    "role_directory": "finalizer",
+    "profile": "finalizer",
+    "protocol_version": "1.0",
+    "contract_version": "6",
+    "contract_sha256": "dbf2ac1b72a129f3cbe0fe9bd5304fd2780f4de58a9e0e8d1ff3cd8d16eaf416",
+    "prompt_sha256": "3c226619f1dfe255c5f4d9e6dd732d6695222b58cb314dce0de44a71aa6f011e",
+    "output_schema_name": "role:finalizer:finalizer",
+    "output_schema_fields": ["final_answer", "solution_text"],
+    "selected_skill_summary": "general-math",
+    "max_output_cap": 8192
+  },
+  "primary_solver:candidate-lite": {
+    "role_directory": "primary_solver",
+    "profile": "minimal",
+    "protocol_version": "1.1-lite",
+    "contract_version": "12",
+    "contract_sha256": "7c81686e4c72cdfd3b51349cfdbdb7a691a6dd38ecc7ec477020f2b686497ad6",
+    "prompt_sha256": "c87e6995ac12a4544e1ccfe5223560122450b86c4679ce9910b3a85d554684f5",
+    "output_schema_name": "agent_turn:1.1-lite:candidate:answer_only",
+    "output_schema_fields": ["action", "outbound", "payload", "stop_reason"],
+    "selected_skill_summary": "general-math",
+    "max_output_cap": 2048
+  },
+  "primary_solver:progress-lite": {
+    "role_directory": "primary_solver",
+    "profile": "minimal:explore",
+    "protocol_version": "1.1-lite",
+    "contract_version": "12",
+    "contract_sha256": "7c81686e4c72cdfd3b51349cfdbdb7a691a6dd38ecc7ec477020f2b686497ad6",
+    "prompt_sha256": "c52bf265b6b1a3807b11d8c5d3c8761d65195c3041739fd606456b9e8bb9a0f7",
+    "output_schema_name": "agent_turn:1.1-lite:progress:explore",
+    "output_schema_fields": ["action", "outbound", "payload", "stop_reason"],
+    "selected_skill_summary": "general-math",
+    "max_output_cap": 12288
+  },
+  "alternative_solver:candidate-lite": {
+    "role_directory": "alternative_solver",
+    "profile": "minimal",
+    "protocol_version": "1.1-lite",
+    "contract_version": "11",
+    "contract_sha256": "aed2aef0f25c0270c56f1ee715a710c4465fdd5dc23f8ccaf1c135a994547b0c",
+    "prompt_sha256": "70b015f6319588fc7b752527d9ab4074324ee79247e13935f93c70116187e986",
+    "output_schema_name": "agent_turn:1.1-lite:candidate:answer_only",
+    "output_schema_fields": ["action", "outbound", "payload", "stop_reason"],
+    "selected_skill_summary": "general-math",
+    "max_output_cap": 2048
+  },
+  "alternative_solver:progress-lite": {
+    "role_directory": "alternative_solver",
+    "profile": "minimal:explore",
+    "protocol_version": "1.1-lite",
+    "contract_version": "11",
+    "contract_sha256": "aed2aef0f25c0270c56f1ee715a710c4465fdd5dc23f8ccaf1c135a994547b0c",
+    "prompt_sha256": "39d4003d25287e98cf336a025adaedcaaae9f8d1d8d300efe59588c8ae70c358",
+    "output_schema_name": "agent_turn:1.1-lite:progress:explore",
+    "output_schema_fields": ["action", "outbound", "payload", "stop_reason"],
+    "selected_skill_summary": "general-math",
+    "max_output_cap": 12288
+  }
+}

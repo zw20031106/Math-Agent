@@ -98,7 +98,8 @@ class LLMLemmaCuratorAgent:
             action_category="speculative_exploration",
         )
         budget.record_prompt_chars(
-            sum(len(message["content"]) for message in compilation.messages)
+            sum(len(message["content"]) for message in compilation.messages),
+            components=compilation.prompt_component_tokens,
         )
         response = self._provider.chat(
             messages=compilation.messages,

@@ -444,6 +444,73 @@ def derive_route_policy(risk_level: str, problem_type: str) -> RoutePolicy:
     )
 
 
+_SIMPLE_DIRECT_PROBLEM_TYPES = frozenset(
+    {"calculation", "fill_blank", "multiple_choice"}
+)
+_LONG_HORIZON_COMPLEXITY_FLAGS = frozenset(
+    {
+        "long_problem",
+        "many_conditions",
+        "many_symbols",
+        "piecewise_or_absolute",
+        "theorem_direction_or_interchange",
+        "existence_and_uniqueness",
+        "proof_depth",
+        "mixed_domain",
+        "candidate_conflict",
+        "multiple_targets",
+        "long_condition_chain",
+        "nested_quantifiers",
+        "multi_stage_proof",
+    }
+)
+
+
+def simple_direct_candidate_reasons(
+    problem: ProblemIR,
+    route: RoutePlan,
+) -> tuple[str, ...]:
+    """Return deterministic blockers for E2's one-call simple path."""
+
+    reasons: list[str] = []
+    if problem.problem_type not in _SIMPLE_DIRECT_PROBLEM_TYPES:
+        reasons.append("problem_type_not_simple")
+    if route.risk_level == "high":
+        reasons.append("route_risk_high")
+    confidence_only_ambiguities = {
+        "low_answer_type_confidence",
+        "low_target_confidence",
+        "low_response_mode_confidence",
+    }
+    substantive_ambiguities = tuple(
+        item
+        for item in getattr(problem, "ambiguities", ())
+        if item not in confidence_only_ambiguities
+    )
+    if bool(getattr(problem, "requires_router_disambiguation", False)) and (
+        substantive_ambiguities
+        or tuple(getattr(problem, "interpretation_conflicts", ()))
+    ):
+        reasons.append("router_disambiguation_required")
+    if substantive_ambiguities or tuple(
+        getattr(problem, "interpretation_conflicts", ())
+    ):
+        reasons.append("problem_ambiguity_present")
+    if route.ambiguity_margin < 0.12 and route.auxiliary_subject:
+        reasons.append("route_subject_ambiguity")
+    if route.max_reasoning_rounds > 1:
+        reasons.append("long_horizon_rounds_required")
+    if _LONG_HORIZON_COMPLEXITY_FLAGS.intersection(route.complexity_flags):
+        reasons.append("long_horizon_complexity_flag")
+    if route.use_lemma_loop or route.use_llm_finalizer:
+        reasons.append("downstream_long_horizon_stage_required")
+    return tuple(dict.fromkeys(reasons))
+
+
+def is_simple_direct_candidate(problem: ProblemIR, route: RoutePlan) -> bool:
+    return not simple_direct_candidate_reasons(problem, route)
+
+
 def method_families_for(subject: str, problem_type: str) -> list[str]:
     families = list(_METHOD_FAMILIES.get(subject, _METHOD_FAMILIES["general-math"]))
     if problem_type == "proof" and "contradiction" not in " ".join(families):
@@ -775,6 +842,7 @@ class RouterPlanner:
         max_tokens: int = 0,
         context_view: RoleContextView | None = None,
         record_prompt_chars: Callable[[int], None] | None = None,
+        record_prompt_components: Callable[[dict[str, int]], None] | None = None,
         record_protocol_telemetry: Callable[
             [int | None, str, str, str], None
         ]
@@ -787,6 +855,7 @@ class RouterPlanner:
             max_tokens=max_tokens,
             context_view=context_view,
             record_prompt_chars=record_prompt_chars,
+            record_prompt_components=record_prompt_components,
             record_protocol_telemetry=record_protocol_telemetry,
         ).route_plan
 
@@ -799,6 +868,7 @@ class RouterPlanner:
         max_tokens: int = 0,
         context_view: RoleContextView | None = None,
         record_prompt_chars: Callable[[int], None] | None = None,
+        record_prompt_components: Callable[[dict[str, int]], None] | None = None,
         record_protocol_telemetry: Callable[
             [int | None, str, str, str], None
         ]
@@ -896,6 +966,8 @@ class RouterPlanner:
                 record_prompt_chars(
                     sum(len(message["content"]) for message in messages)
                 )
+            if record_prompt_components is not None:
+                record_prompt_components(compilation.prompt_component_tokens)
             response = llm_chat(
                 messages=messages,
                 temperature=0.0,

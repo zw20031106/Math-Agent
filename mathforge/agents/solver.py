@@ -9,6 +9,7 @@ from mathforge.agent_runtime.protocol import (
     AgentTurnPayload,
     AgentTurnPayloadParser,
     ParsedAgentTurn,
+    LITE_PROTOCOL_SCHEMA_VERSION,
     PROTOCOL_SCHEMA_VERSION,
 )
 from mathforge.agents.prompt_compiler import PromptCompilation, PromptCompiler
@@ -71,6 +72,8 @@ class PrimarySolver:
         *,
         autonomous: bool = False,
         compact: bool = False,
+        protocol_variant: str = PROTOCOL_SCHEMA_VERSION,
+        semantic_payload: bool = False,
     ) -> PromptCompilation:
         context = (
             f"\nAuthorized context view:\n{request.context_view.to_prompt_json()}"
@@ -100,6 +103,8 @@ class PrimarySolver:
             ),
             autonomous=autonomous,
             compact=compact,
+            protocol_variant=protocol_variant,
+            semantic_payload=semantic_payload,
         )
 
     def compile_progress_prompt(
@@ -108,6 +113,7 @@ class PrimarySolver:
         *,
         mode: str,
         autonomous: bool = False,
+        protocol_variant: str = PROTOCOL_SCHEMA_VERSION,
     ) -> PromptCompilation:
         context = (
             f"\nAuthorized context view:\n{request.context_view.to_prompt_json()}"
@@ -128,6 +134,7 @@ class PrimarySolver:
             user_content=user,
             mode=mode,
             autonomous=autonomous,
+            protocol_variant=protocol_variant,
         )
 
     def compile_emergency_prompt(
@@ -159,6 +166,8 @@ class AlternativeSolver:
         *,
         autonomous: bool = False,
         compact: bool = False,
+        protocol_variant: str = PROTOCOL_SCHEMA_VERSION,
+        semantic_payload: bool = False,
     ) -> PromptCompilation:
         forbidden = ", ".join(request.forbidden_method_families) or "none"
         context = (
@@ -187,6 +196,8 @@ class AlternativeSolver:
             ),
             autonomous=autonomous,
             compact=compact,
+            protocol_variant=protocol_variant,
+            semantic_payload=semantic_payload,
         )
 
     def compile_progress_prompt(
@@ -195,6 +206,7 @@ class AlternativeSolver:
         *,
         mode: str,
         autonomous: bool = False,
+        protocol_variant: str = PROTOCOL_SCHEMA_VERSION,
     ) -> PromptCompilation:
         context = (
             f"\nAuthorized context view:\n{request.context_view.to_prompt_json()}"
@@ -221,6 +233,7 @@ class AlternativeSolver:
                 "request the Primary candidate before publishing your own."
             ),
             autonomous=autonomous,
+            protocol_variant=protocol_variant,
         )
 
 
@@ -297,7 +310,12 @@ class SolverExecutor:
                 ]
             )
             budget.record_prompt_chars(
-                sum(len(message["content"]) for message in attempt_messages)
+                sum(len(message["content"]) for message in attempt_messages),
+                components=(
+                    compilation.prompt_component_tokens
+                    if attempt == 0
+                    else {}
+                ),
             )
             try:
                 turn_kind = (
@@ -429,7 +447,8 @@ class SolverExecutor:
             action_category="candidate_completion",
         )
         budget.record_prompt_chars(
-            sum(len(message["content"]) for message in compilation.messages)
+            sum(len(message["content"]) for message in compilation.messages),
+            components=compilation.prompt_component_tokens,
         )
         response = self._provider.chat(
             messages=compilation.messages,
@@ -490,7 +509,8 @@ class SolverExecutor:
             action_category="speculative_exploration",
         )
         budget.record_prompt_chars(
-            sum(len(message["content"]) for message in compilation.messages)
+            sum(len(message["content"]) for message in compilation.messages),
+            components=compilation.prompt_component_tokens,
         )
         response = self._provider.chat(
             messages=compilation.messages,
@@ -537,11 +557,13 @@ class SolverExecutor:
         temperature: float,
         max_tokens: int,
         optional: bool,
+        protocol_variant: str = PROTOCOL_SCHEMA_VERSION,
     ) -> AutonomousSolverTurn:
         compilation = solver.compile_progress_prompt(
             request,
             mode=mode,
             autonomous=True,
+            protocol_variant=protocol_variant,
         )
         stage = "primary" if solver.role == "PrimarySolver" else "alternative"
         budget.consume(
@@ -550,7 +572,8 @@ class SolverExecutor:
             action_category="speculative_exploration",
         )
         budget.record_prompt_chars(
-            sum(len(message["content"]) for message in compilation.messages)
+            sum(len(message["content"]) for message in compilation.messages),
+            components=compilation.prompt_component_tokens,
         )
         response = self._provider.chat(
             messages=compilation.messages,
@@ -576,6 +599,9 @@ class SolverExecutor:
             ),
             truncated=_response_was_truncated(response),
             truncation_reason=_response_truncation_reason(response),
+            protocol_variant=protocol_variant,
+            task_result_type="ProgressArtifact",
+            progress_summary="public progress turn",
         )
         if parsed.payload.task_result_type not in {
             "ProgressArtifact",
@@ -631,11 +657,14 @@ class SolverExecutor:
         max_tokens: int,
         compact: bool = False,
         input_artifact_ids: tuple[str, ...] = (),
+        protocol_variant: str = PROTOCOL_SCHEMA_VERSION,
     ) -> AutonomousSolverTurn:
         compilation = solver.compile_prompt(
             request,
             autonomous=True,
             compact=compact,
+            protocol_variant=protocol_variant,
+            semantic_payload=(protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION),
         )
         stage = "primary" if solver.role == "PrimarySolver" else "alternative"
         turn_kind = (
@@ -653,7 +682,8 @@ class SolverExecutor:
             action_category="candidate_completion",
         )
         budget.record_prompt_chars(
-            sum(len(message["content"]) for message in compilation.messages)
+            sum(len(message["content"]) for message in compilation.messages),
+            components=compilation.prompt_component_tokens,
         )
         response = self._provider.chat(
             messages=compilation.messages,
@@ -679,6 +709,9 @@ class SolverExecutor:
                 ),
                 truncated=_response_was_truncated(response),
                 truncation_reason=_response_truncation_reason(response),
+                protocol_variant=protocol_variant,
+                task_result_type="CandidateArtifact",
+                progress_summary="candidate turn",
             )
         except ModelResponseError:
             candidate = self._parser.recover_answer_candidate(
@@ -890,14 +923,49 @@ class SolverExecutor:
         allowed_actions: tuple[str, ...],
         truncated: bool,
         truncation_reason: str,
+        protocol_variant: str = PROTOCOL_SCHEMA_VERSION,
+        task_result_type: str = "",
+        progress_summary: str = "",
     ) -> ParsedAgentTurn:
         try:
-            parsed = AgentTurnPayloadParser().parse(
-                response,
-                allowed_actions=allowed_actions,
-                truncated=truncated,
-                truncation_reason=truncation_reason,
-            )
+            parser = AgentTurnPayloadParser()
+            if protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION:
+                try:
+                    parsed = parser.parse_lite(
+                        response,
+                        allowed_actions=allowed_actions,
+                        truncated=truncated,
+                        truncation_reason=truncation_reason,
+                    ).to_agent_turn(
+                        task_result_type=task_result_type,
+                        progress_summary=progress_summary,
+                    )
+                except (TypeError, ValueError):
+                    # P1 is additive.  A provider that still emits the P0
+                    # envelope remains parseable during the experiment, while
+                    # the strict lite parser continues to reject it in tests.
+                    parsed = parser.parse(
+                        response,
+                        allowed_actions=allowed_actions,
+                        truncated=truncated,
+                        truncation_reason=truncation_reason,
+                    )
+                    parsed = ParsedAgentTurn(
+                        payload=parsed.payload,
+                        response_sha256=parsed.response_sha256,
+                        partial=parsed.partial,
+                        truncation_reason=parsed.truncation_reason,
+                        parse_tier=f"lite_compat:{parsed.parse_tier}",
+                        recovery_reason="provider_emitted_p0_envelope",
+                        assurance_degradation=parsed.assurance_degradation,
+                    )
+            else:
+                parsed = parser.parse(
+                    response,
+                    allowed_actions=allowed_actions,
+                    truncated=truncated,
+                    truncation_reason=truncation_reason,
+                )
             budget.record_model_protocol_telemetry(
                 getattr(response, "model_call_index", None),
                 parsed.parse_tier,

@@ -130,6 +130,16 @@ def build_effective_config_snapshot(
             ),
         },
         "features": {
+            "simple_direct_candidate": {
+                "enabled": config.enable_simple_direct_candidate,
+                "eligibility": [
+                    "simple_problem_type",
+                    "route_risk_not_high",
+                    "no_ambiguity",
+                    "no_long_horizon_need",
+                ],
+                "skips_progress_artifact": True,
+            },
             "long_horizon_reasoning": {
                 "enabled": config.enable_long_horizon,
                 "protocols": ["explore", "continue", "synthesize"],

@@ -1,17 +1,23 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 import json
 
 from mathforge.agent_runtime.action_registry import ActionRegistry
-from mathforge.agent_runtime.protocol import AGENT_TURN_FIELDS
+from mathforge.agent_runtime.protocol import (
+    AGENT_TURN_FIELDS,
+    LITE_AGENT_TURN_FIELDS,
+    LITE_PROTOCOL_SCHEMA_VERSION,
+    PROTOCOL_SCHEMA_VERSION,
+)
 from mathforge.agent_runtime.router_protocol import (
     ROUTER_INTENT_FIELDS,
     ROUTER_INTENT_STRUCTURAL_SHAPE,
 )
 from mathforge.agents.registry import PromptContract, PromptContractLoader
 from mathforge.context.errors import ContextBudgetExceeded
+from mathforge.harness.context_budget import InternS2TokenCounter
 from mathforge.harness.model_candidate_contract import (
     MODEL_CANDIDATE_PATCH_FIELDS,
     MODEL_CANDIDATE_PATCH_STRUCTURAL_SHAPE,
@@ -19,6 +25,8 @@ from mathforge.harness.model_candidate_contract import (
     candidate_profile_example,
     candidate_profile_for_response_mode,
     candidate_profile_shape,
+    model_semantic_payload_example,
+    MODEL_SEMANTIC_REQUIRED_FIELDS,
 )
 from mathforge.harness.model_policy import stage_output_cap
 from mathforge.harness.schemas import ProblemIR, RoutePlan
@@ -67,6 +75,13 @@ _AGENT_TURN_ENVELOPE_PROTOCOL = (
     "task_id, turn_id, artifact_id, message_id, thread_id, token limits, or "
     "timeouts; the Host owns them. Return one bare JSON object only. "
 )
+_AGENT_TURN_LITE_ENVELOPE_PROTOCOL = (
+    "Return one AgentTurnPayload 1.1-lite object with exactly these outer fields: "
+    "action, payload, outbound, stop_reason. The Host assigns protocol_version, "
+    "task_result_type, all identifiers, versions, statuses, priorities, token "
+    "limits, timeouts, progress summaries, and other workflow metadata. Never "
+    "generate those Host-owned fields. Return one bare JSON object only. "
+)
 
 
 def _agent_turn_candidate_example(profile: str) -> dict[str, object]:
@@ -82,16 +97,56 @@ def _agent_turn_candidate_example(profile: str) -> dict[str, object]:
     }
 
 
-def _candidate_profile_protocol(profile: str, *, autonomous: bool) -> str:
+def _candidate_profile_protocol(
+    profile: str,
+    *,
+    autonomous: bool,
+    protocol_variant: str = PROTOCOL_SCHEMA_VERSION,
+    semantic_payload: bool = False,
+) -> str:
     normalized = candidate_profile_for_response_mode(profile)
+    lite = protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION
+    if protocol_variant not in {PROTOCOL_SCHEMA_VERSION, LITE_PROTOCOL_SCHEMA_VERSION}:
+        raise ValueError("unsupported AgentTurnPayload protocol version")
+    use_semantic = bool(semantic_payload or lite)
     shape = (
         json.dumps(
-            _agent_turn_candidate_example(normalized),
+            (
+                {
+                    "action": "publish_candidate",
+                    "payload": model_semantic_payload_example(normalized),
+                    "outbound": [],
+                    "stop_reason": "candidate_complete",
+                }
+                if lite
+                else {
+                    "protocol_version": "1.0",
+                    "task_result_type": "CandidateArtifact",
+                    "action": "publish_candidate",
+                    "public_state_delta": {},
+                    "result_payload": (
+                        model_semantic_payload_example(normalized)
+                        if use_semantic
+                        else candidate_profile_example(normalized)
+                    ),
+                    "outbound_intents": [],
+                    "progress_summary": "<public completion summary>",
+                    "stop_reason": "candidate_complete",
+                }
+            ),
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        if autonomous
-        else candidate_profile_shape(normalized)
+        if autonomous or lite
+        else (
+            json.dumps(
+                model_semantic_payload_example(normalized),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            if use_semantic
+            else candidate_profile_shape(normalized)
+        )
     )
     profile_instruction = {
         "answer_only": (
@@ -107,15 +162,39 @@ def _candidate_profile_protocol(profile: str, *, autonomous: bool) -> str:
             "semantic proof_steps, and open_conditions."
         ),
     }[normalized]
-    envelope = _AGENT_TURN_ENVELOPE_PROTOCOL if autonomous else (
-        "Return one bare Candidate response object only. "
+    envelope = (
+        _AGENT_TURN_LITE_ENVELOPE_PROTOCOL
+        if lite
+        else _AGENT_TURN_ENVELOPE_PROTOCOL
+        if autonomous
+        else "Return one bare Candidate response object only. "
     )
+    if use_semantic:
+        profile_instruction = {
+            "answer_only": (
+                "payload has only final_answer and solution_text; solution_text is "
+                "one short public check."
+            ),
+            "worked_solution": (
+                "payload has final_answer and solution_text; add method or "
+                "structured claims only when verification needs them."
+            ),
+            "proof_full": (
+                "payload has final_answer, solution_text, ordered proof_steps, "
+                "critical_claims when needed, and open_conditions."
+            ),
+        }[normalized]
     return (
         envelope
         + f"Candidate response mode is {normalized}; {profile_instruction} "
-        "Every semantic step contains exactly statement, claim_kind, and "
-        "depends_on, where depends_on uses zero-based indices of prior steps. "
-        "The model supplies mathematics and claim_kind only; the Host assigns "
+        + (
+            "The model supplies only mathematical semantic fields; keep the "
+            "payload minimal and do not repeat a full Candidate/ClaimGraph. "
+            if use_semantic
+            else "Every semantic step contains exactly statement, claim_kind, and "
+            "depends_on, where depends_on uses zero-based indices of prior steps. "
+        )
+        + "The model supplies mathematics and claim_kind only; the Host assigns "
         "Candidate, Claim, MethodStep, version, status, and Artifact identifiers. "
         "Use plain exact final_answer text without labels or presentation "
         "delimiters. JSON-escape LaTeX backslashes. Return no prose outside JSON. "
@@ -169,10 +248,20 @@ def _progress_delta_protocol(
     *,
     autonomous: bool,
     role: str = "PrimarySolver",
+    protocol_variant: str = PROTOCOL_SCHEMA_VERSION,
 ) -> str:
+    if protocol_variant not in {PROTOCOL_SCHEMA_VERSION, LITE_PROTOCOL_SCHEMA_VERSION}:
+        raise ValueError("unsupported AgentTurnPayload protocol version")
     delta = _progress_delta_example()
     example: dict[str, object]
-    if autonomous:
+    if autonomous and protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION:
+        example = {
+            "action": "continue_reasoning",
+            "payload": delta,
+            "outbound": [],
+            "stop_reason": "",
+        }
+    elif autonomous:
         example = {
             "protocol_version": "1.0",
             "task_result_type": "ProgressArtifact",
@@ -188,11 +277,25 @@ def _progress_delta_protocol(
     action_enum = ", ".join(
         _ACTION_REGISTRY.prompt_actions(role, phase="progress")
     )
+    if autonomous and protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION:
+        envelope = _AGENT_TURN_LITE_ENVELOPE_PROTOCOL
+        fields = "action, payload, outbound, stop_reason"
+    else:
+        envelope = _AGENT_TURN_ENVELOPE_PROTOCOL if autonomous else "Return one bare JSON object. "
+        fields = (
+            "public_summary, strategy, subgoals, claims, open_obligations, "
+            "closed_obligation_ids, contradictions, next_step, stop_reason"
+        )
+    field_clause = (
+        "these nine fields and no others: public_summary, strategy, subgoals, "
+        "claims, open_obligations, closed_obligation_ids, contradictions, "
+        "next_step, stop_reason"
+        if protocol_variant == PROTOCOL_SCHEMA_VERSION
+        else f"these fields and no others: {fields}"
+    )
     return (
     f"Public protocol mode is {mode}. Construct one semantic ProgressDelta with "
-    "these nine fields and no others: public_summary, strategy, subgoals, "
-    "claims, open_obligations, closed_obligation_ids, contradictions, "
-    "next_step, stop_reason. This is a public, auditable ProgressDelta, not a "
+    f"{field_clause}. This is a public, auditable ProgressDelta, not a "
     "final Candidate response. public_summary, strategy, "
     "next_step, and stop_reason are strings. subgoals is an array of objects "
     "with exactly statement, depends_on, and exit_condition. claims contains "
@@ -210,7 +313,7 @@ def _progress_delta_protocol(
         if autonomous
         else ""
     )
-    + (_AGENT_TURN_ENVELOPE_PROTOCOL if autonomous else "Return one bare JSON object. ")
+    + envelope
     + "Exact JSON schema example: "
     + json.dumps(example, ensure_ascii=False, separators=(",", ":"))
     + "."
@@ -345,6 +448,172 @@ class PromptCompilation:
     output_schema_name: str = ""
     prompt_sha256: str = ""
     contract_sha256: str = ""
+    role_directory: str = ""
+    protocol_version: str = PROTOCOL_SCHEMA_VERSION
+    contract_version: str = ""
+    selected_skill_summary: str = ""
+    prompt_tokens: int = 0
+    prompt_counting_mode: str = ""
+    tokenizer_revision: str = ""
+    tokenizer_sha256: str = ""
+    contract_tokens: int = 0
+    runtime_protocol_tokens: int = 0
+    skill_tokens: int = 0
+    state_tokens: int = 0
+    problem_tokens: int = 0
+    schema_tokens: int = 0
+    prompt_component_tokens: dict[str, int] = field(default_factory=dict)
+
+    def snapshot(self) -> "CompiledPromptSnapshot":
+        return CompiledPromptSnapshot.from_compilation(self)
+
+    @property
+    def prompt_hash(self) -> str:
+        return self.prompt_sha256
+
+    @property
+    def max_output_cap(self) -> int:
+        return self.max_output_tokens
+
+
+@dataclass(frozen=True)
+class CompiledPromptSnapshot:
+    """Stable, answer-free metadata for a compiled Prompt contract.
+
+    Golden snapshots intentionally contain hashes, schema metadata, and token
+    accounting only; they never persist a problem answer or model transcript.
+    """
+
+    role_directory: str
+    profile: str
+    protocol_version: str
+    contract_version: str
+    contract_sha256: str
+    prompt_sha256: str
+    output_schema_name: str
+    output_schema_fields: tuple[str, ...]
+    selected_skill_summary: str
+    max_output_cap: int
+    prompt_tokens: int
+    prompt_component_tokens: dict[str, int]
+
+    @property
+    def prompt_contract_version(self) -> str:
+        return self.contract_version
+
+    @property
+    def prompt_hash(self) -> str:
+        return self.prompt_sha256
+
+    @property
+    def max_output_tokens(self) -> int:
+        return self.max_output_cap
+
+    @property
+    def output_schema(self) -> dict[str, object]:
+        return {
+            "name": self.output_schema_name,
+            "fields": list(self.output_schema_fields),
+        }
+
+    @classmethod
+    def from_compilation(cls, compilation: PromptCompilation) -> "CompiledPromptSnapshot":
+        components = {
+            name: max(0, int(value))
+            for name, value in compilation.prompt_component_tokens.items()
+        }
+        return cls(
+            role_directory=compilation.role_directory,
+            profile=compilation.profile,
+            protocol_version=compilation.protocol_version,
+            contract_version=compilation.contract_version,
+            contract_sha256=compilation.contract_sha256,
+            prompt_sha256=compilation.prompt_sha256,
+            output_schema_name=compilation.output_schema_name,
+            output_schema_fields=tuple(compilation.output_schema_fields),
+            selected_skill_summary=compilation.selected_skill_summary,
+            max_output_cap=compilation.max_output_tokens,
+            prompt_tokens=compilation.prompt_tokens,
+            prompt_component_tokens=components,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "role_directory": self.role_directory,
+            "profile": self.profile,
+            "protocol_version": self.protocol_version,
+            "contract_version": self.contract_version,
+            "prompt_contract_version": self.contract_version,
+            "contract_sha256": self.contract_sha256,
+            "prompt_sha256": self.prompt_sha256,
+            "prompt_hash": self.prompt_sha256,
+            "output_schema_name": self.output_schema_name,
+            "output_schema": {
+                "name": self.output_schema_name,
+                "fields": list(self.output_schema_fields),
+            },
+            "output_schema_fields": list(self.output_schema_fields),
+            "selected_skill_summary": self.selected_skill_summary,
+            "max_output_cap": self.max_output_cap,
+            "prompt_tokens": self.prompt_tokens,
+            "prompt_component_tokens": dict(self.prompt_component_tokens),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, object]) -> "CompiledPromptSnapshot":
+        if not isinstance(payload, dict):
+            raise ValueError("CompiledPromptSnapshot must be an object")
+        schema = payload.get("output_schema", {})
+        if isinstance(schema, dict):
+            schema_name = str(
+                payload.get("output_schema_name", schema.get("name", ""))
+            )
+            schema_fields = payload.get(
+                "output_schema_fields", schema.get("fields", [])
+            )
+        else:
+            schema_name = str(payload.get("output_schema_name", ""))
+            schema_fields = payload.get("output_schema_fields", [])
+        if not isinstance(schema_fields, list):
+            raise ValueError("CompiledPromptSnapshot output schema fields must be a list")
+        components = payload.get("prompt_component_tokens", {})
+        if not isinstance(components, dict):
+            raise ValueError("CompiledPromptSnapshot token components must be an object")
+        contract_version = str(
+            payload.get(
+                "contract_version",
+                payload.get("prompt_contract_version", ""),
+            )
+        )
+        prompt_hash = str(payload.get("prompt_sha256", payload.get("prompt_hash", "")))
+        return cls(
+            role_directory=str(payload.get("role_directory", "")),
+            profile=str(payload.get("profile", "")),
+            protocol_version=str(payload.get("protocol_version", PROTOCOL_SCHEMA_VERSION)),
+            contract_version=contract_version,
+            contract_sha256=str(payload.get("contract_sha256", "")),
+            prompt_sha256=prompt_hash,
+            output_schema_name=schema_name,
+            output_schema_fields=tuple(str(item) for item in schema_fields),
+            selected_skill_summary=str(payload.get("selected_skill_summary", "")),
+            max_output_cap=int(payload.get("max_output_cap", 0)),
+            prompt_tokens=int(payload.get("prompt_tokens", 0)),
+            prompt_component_tokens={str(k): int(v) for k, v in components.items()},
+        )
+
+    @staticmethod
+    def assert_contract_binding(
+        before: "CompiledPromptSnapshot",
+        after: "CompiledPromptSnapshot",
+    ) -> None:
+        if before.contract_sha256 != after.contract_sha256:
+            if before.prompt_sha256 == after.prompt_sha256:
+                raise AssertionError(
+                    "Prompt contract changed without changing compiled prompt hash"
+                )
+
+
+PromptSnapshot = CompiledPromptSnapshot
 
 
 @dataclass(frozen=True)
@@ -368,6 +637,7 @@ class PromptCompiler:
         contracts: PromptContractLoader | None = None,
     ) -> None:
         self._contracts = contracts or PromptContractLoader()
+        self._token_counter = InternS2TokenCounter()
 
     def compile_solver(
         self,
@@ -379,17 +649,32 @@ class PromptCompiler:
         runtime_instructions: str = "",
         autonomous: bool = False,
         compact: bool = False,
+        protocol_variant: str = PROTOCOL_SCHEMA_VERSION,
+        semantic_payload: bool = False,
     ) -> PromptCompilation:
         if role_directory not in {"primary_solver", "alternative_solver"}:
             raise ValueError("solver prompt role is invalid")
         profile = self.solver_profile(problem, route)
         output_profile = self.candidate_output_profile(problem, route)
         instructions = [
-            _candidate_profile_protocol(output_profile, autonomous=autonomous),
+            _candidate_profile_protocol(
+                output_profile,
+                autonomous=autonomous,
+                protocol_variant=protocol_variant,
+                semantic_payload=semantic_payload,
+            ),
             self._response_mode_protocol(problem),
             self._solver_profile_protocol(profile),
         ]
-        if autonomous:
+        if protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION:
+            instructions.append(
+                "Use AgentTurnPayload 1.1-lite. For a complete solution choose "
+                "action publish_candidate and put the minimal model semantic "
+                "Candidate payload in payload; use outbound [] and stop_reason "
+                "candidate_complete. If no sound candidate can be produced, "
+                "choose abstain with a non-empty stop_reason."
+            )
+        elif autonomous:
             instructions.append(
                 "For a complete solution use task_result_type "
                 "CandidateArtifact and action publish_candidate; place the "
@@ -443,15 +728,26 @@ class PromptCompiler:
             "\n".join(instructions),
             output_tokens,
             output_schema_fields=(
-                tuple(sorted(AGENT_TURN_FIELDS))
+                tuple(sorted(LITE_AGENT_TURN_FIELDS))
+                if protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION
+                else tuple(sorted(AGENT_TURN_FIELDS))
                 if autonomous
-                else tuple(sorted(MODEL_CANDIDATE_PROFILE_FIELDS[output_profile]))
+                else (
+                    tuple(sorted(MODEL_SEMANTIC_REQUIRED_FIELDS))
+                    if semantic_payload
+                    else tuple(sorted(MODEL_CANDIDATE_PROFILE_FIELDS[output_profile]))
+                )
             ),
             output_schema_name=(
-                f"agent_turn:candidate:{output_profile}"
+                f"agent_turn:1.1-lite:candidate:{output_profile}"
+                if protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION
+                else f"agent_turn:candidate:{output_profile}"
                 if autonomous
+                else f"candidate:semantic:{output_profile}"
+                if semantic_payload
                 else f"candidate:{output_profile}"
             ),
+            protocol_version=protocol_variant,
         )
 
     def compile_solver_progress(
@@ -464,6 +760,7 @@ class PromptCompiler:
         mode: str,
         runtime_instructions: str = "",
         autonomous: bool = False,
+        protocol_variant: str = PROTOCOL_SCHEMA_VERSION,
     ) -> PromptCompilation:
         if role_directory not in {"primary_solver", "alternative_solver"}:
             raise ValueError("solver progress prompt role is invalid")
@@ -480,9 +777,16 @@ class PromptCompiler:
                 mode,
                 autonomous=autonomous,
                 role=role,
+                protocol_variant=protocol_variant,
             )
         ]
-        if autonomous:
+        if protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION:
+            instructions.append(
+                "Use AgentTurnPayload 1.1-lite. Put the public ProgressDelta in "
+                "payload for continue_reasoning or a bounded progress action; "
+                "the Host supplies result type, IDs, status, and progress summary."
+            )
+        elif autonomous:
             instructions.append(
                 "Use task_result_type ProgressArtifact. Put the exact "
                 "ProgressDelta object inside public_state_delta and use empty "
@@ -520,15 +824,20 @@ class PromptCompiler:
             "\n".join(instructions),
             12288,
             output_schema_fields=(
-                tuple(sorted(AGENT_TURN_FIELDS))
+                tuple(sorted(LITE_AGENT_TURN_FIELDS))
+                if protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION
+                else tuple(sorted(AGENT_TURN_FIELDS))
                 if autonomous
                 else _PROGRESS_DELTA_FIELDS
             ),
             output_schema_name=(
-                f"agent_turn:progress:{mode}"
+                f"agent_turn:1.1-lite:progress:{mode}"
+                if protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION
+                else f"agent_turn:progress:{mode}"
                 if autonomous
                 else f"progress:{mode}"
             ),
+            protocol_version=protocol_variant,
         )
 
     def compile_emergency_answer(
@@ -750,7 +1059,12 @@ class PromptCompiler:
         *,
         output_schema_fields: tuple[str, ...] = (),
         output_schema_name: str = "",
+        protocol_version: str = PROTOCOL_SCHEMA_VERSION,
+        selected_skill_summary: str = "",
+        component_texts: dict[str, str] | None = None,
     ) -> PromptCompilation:
+        if protocol_version not in {PROTOCOL_SCHEMA_VERSION, LITE_PROTOCOL_SCHEMA_VERSION}:
+            raise ValueError("unsupported AgentTurnPayload protocol version")
         contract = self._contracts.load(role_directory)
         spec = PromptSpec(
             role_directory=role_directory,
@@ -771,6 +1085,30 @@ class PromptCompiler:
             {"role": "system", "content": system},
             {"role": "user", "content": user_content},
         ]
+        counted_prompt = self._token_counter.count_messages(messages)
+        schema_text = json.dumps(
+            {
+                "name": output_schema_name,
+                "fields": list(output_schema_fields),
+                "protocol_version": protocol_version,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        component_sources = self._prompt_component_sources(
+            contract=contract,
+            instructions=instructions,
+            user_content=user_content,
+            schema_text=schema_text,
+            selected_skill_summary=selected_skill_summary,
+            explicit=component_texts,
+        )
+        component_counts = {
+            name: self._token_counter.count_text(text).tokens
+            for name, text in component_sources.items()
+        }
+        skill_summary = selected_skill_summary.strip() or self._skill_summary(user_content)
         prompt_digest = sha256(
             json.dumps(
                 messages,
@@ -788,7 +1126,81 @@ class PromptCompiler:
             output_schema_name=output_schema_name,
             prompt_sha256=prompt_digest,
             contract_sha256=contract.source_sha256,
+            role_directory=role_directory,
+            protocol_version=protocol_version,
+            contract_version=contract.fields.get("version", ""),
+            selected_skill_summary=skill_summary,
+            prompt_tokens=counted_prompt.tokens,
+            prompt_counting_mode=counted_prompt.counting_mode,
+            tokenizer_revision=counted_prompt.tokenizer_revision,
+            tokenizer_sha256=counted_prompt.tokenizer_sha256,
+            contract_tokens=component_counts["contract_tokens"],
+            runtime_protocol_tokens=component_counts["runtime_protocol_tokens"],
+            skill_tokens=component_counts["skill_tokens"],
+            state_tokens=component_counts["state_tokens"],
+            problem_tokens=component_counts["problem_tokens"],
+            schema_tokens=component_counts["schema_tokens"],
+            prompt_component_tokens=component_counts,
         )
+
+    @staticmethod
+    def _skill_summary(user_content: str) -> str:
+        names = [
+            line.strip()[len("# Skill:") :].strip()
+            for line in user_content.splitlines()
+            if line.strip().startswith("# Skill:")
+        ]
+        return ", ".join(dict.fromkeys(name for name in names if name))
+
+    @staticmethod
+    def _prompt_component_sources(
+        *,
+        contract: PromptContract,
+        instructions: str,
+        user_content: str,
+        schema_text: str,
+        selected_skill_summary: str,
+        explicit: dict[str, str] | None,
+    ) -> dict[str, str]:
+        if explicit is not None:
+            missing = {
+                "contract_tokens",
+                "runtime_protocol_tokens",
+                "skill_tokens",
+                "state_tokens",
+                "problem_tokens",
+                "schema_tokens",
+            } - set(explicit)
+            if missing:
+                raise ValueError(
+                    "prompt component telemetry is missing: "
+                    + ", ".join(sorted(missing))
+                )
+            return {name: str(explicit[name]) for name in sorted(explicit)}
+        skill_text = selected_skill_summary.strip()
+        if not skill_text:
+            skill_text = "\n".join(
+                line for line in user_content.splitlines() if "# Skill:" in line
+            )
+        state_markers = ("Authorized context view:", "Public ReasoningState JSON:")
+        state_parts = [
+            user_content[user_content.find(marker) :]
+            for marker in state_markers
+            if marker in user_content
+        ]
+        problem_text = user_content
+        if "Required core method family:" in problem_text:
+            problem_text = problem_text.split(
+                "Required core method family:", 1
+            )[0]
+        return {
+            "contract_tokens": contract.render_system(""),
+            "runtime_protocol_tokens": instructions,
+            "skill_tokens": skill_text,
+            "state_tokens": "\n".join(state_parts),
+            "problem_tokens": problem_text,
+            "schema_tokens": schema_text,
+        }
 
     @staticmethod
     def _prioritized_tools(tools: list[str]) -> list[str]:

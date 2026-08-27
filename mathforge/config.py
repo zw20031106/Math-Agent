@@ -121,6 +121,7 @@ class HarnessConfig:
     enable_shadow: bool = False
     enable_frozen_lemma_store: bool = False
     enable_long_horizon: bool = False
+    enable_simple_direct_candidate: bool = False
 
     def __post_init__(self) -> None:
         incoming_logical_limit = self.max_logical_model_calls_per_problem
@@ -226,6 +227,7 @@ class HarnessConfig:
             "enable_shadow",
             "enable_frozen_lemma_store",
             "enable_long_horizon",
+            "enable_simple_direct_candidate",
         }
         for name in bool_fields:
             if type(getattr(self, name)) is not bool:
