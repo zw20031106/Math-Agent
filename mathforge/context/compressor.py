@@ -309,6 +309,10 @@ class ContextCompressor:
         payload = {
             "original_problem": snapshot.original_problem,
             "conditions": list(snapshot.conditions),
+            "problem_condition_envelope": snapshot.metadata.get(
+                "problem_condition_envelope",
+                {},
+            ),
             "final_answer": snapshot.final_answer,
             "hard_evidence": [
                 record for record in snapshot.evidence

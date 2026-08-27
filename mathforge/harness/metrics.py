@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, ClassVar
 
+from mathforge.harness.errors import InternalErrorClass
+
 
 RUN_METRICS_SCHEMA_VERSION = "1.5"
 _OUTCOMES = frozenset({"primary", "fallback", "error", "timeout"})
@@ -21,6 +23,7 @@ _ERROR_CODES = frozenset(
         "case_execution_failed",
     }
 )
+_ERROR_CLASSES = frozenset({"", *(item.value for item in InternalErrorClass)})
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,7 @@ class RunMetrics:
     outcome: str = "error"
     final_phase: str = ""
     error_code: str = ""
+    error_class: str = ""
     fallback_used: bool = False
     terminalizer_failed_steps: list[str] = field(default_factory=list)
     context_view_attempts: int = 0
@@ -106,6 +110,8 @@ class RunMetrics:
             raise ValueError(f"invalid RunMetrics outcome: {self.outcome!r}")
         if self.error_code not in _ERROR_CODES:
             raise ValueError(f"invalid RunMetrics error code: {self.error_code!r}")
+        if self.error_class not in _ERROR_CLASSES:
+            raise ValueError(f"invalid RunMetrics error class: {self.error_class!r}")
         integer_fields = (
             "model_calls",
             "estimated_tokens",
@@ -174,6 +180,7 @@ class RunMetrics:
             "request_fingerprint",
             "final_phase",
             "error_code",
+            "error_class",
             "token_limit_mode",
             "final_response_counting_mode",
             "deadline_phase",
@@ -274,6 +281,7 @@ def collect_run_metrics(
     outcome: str,
     final_phase: str,
     error_code: str,
+    error_class: str = "",
 ) -> RunMetrics:
     context_successes = _event_count(internal_events, "context_view_built")
     context_failures = _event_count(internal_events, "context_budget_infeasible")
@@ -355,6 +363,7 @@ def collect_run_metrics(
         outcome=outcome,
         final_phase=final_phase,
         error_code=error_code,
+        error_class=error_class,
         fallback_used=outcome == "fallback",
         context_view_attempts=context_successes + context_failures,
         context_view_failures=context_failures,

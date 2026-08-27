@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mathforge.agent_runtime.action_registry import ActionRegistry
 from mathforge.agent_runtime.protocol import ACTION_TYPES, ARTIFACT_TYPES, TASK_TYPES
 
 
@@ -66,17 +67,14 @@ def _permission(
     )
 
 
-_SOLVE_ACTIONS = {
-    "continue_reasoning",
-    "publish_candidate",
-    "request_tool_check",
-    "request_lemma",
-    "send_message",
-    "request_peer_review",
-    "request_replan",
-    "abstain",
-    "complete",
-}
+_ACTION_REGISTRY = ActionRegistry()
+
+
+def _actions(role: str, phase: str) -> set[str]:
+    return set(_ACTION_REGISTRY.actions_for(role, phase=phase))
+
+
+_SOLVE_ACTIONS = _actions("PrimarySolver", "solve")
 _SOLVE_MESSAGES = {
     "progress_shared",
     "candidate_published",
@@ -92,14 +90,14 @@ _PERMISSIONS: dict[tuple[str, str], PhasePermission] = {
     ("RouterPlanner", "route_and_plan"): _permission(
         _PLAN_READ | {"EvidenceArtifact", "ObligationArtifact"},
         {"RouteArtifact", "PlanArtifact", "ProgressArtifact", "CheckpointArtifact"},
-        {"continue_reasoning", "send_message", "complete", "abstain"},
+        _actions("RouterPlanner", "router"),
         {"plan_published", "progress_shared", "task_abstained"},
         {"progress_shared", "tool_check_requested", "replan_requested", "task_abstained"},
     ),
     ("RouterPlanner", "replan"): _permission(
         _PLAN_READ | {"EvidenceArtifact", "ObligationArtifact", "CritiqueArtifact"},
         {"RouteArtifact", "PlanArtifact", "ProgressArtifact", "CheckpointArtifact"},
-        {"continue_reasoning", "send_message", "complete", "abstain"},
+        _actions("RouterPlanner", "router"),
         {"plan_published", "progress_shared", "task_abstained"},
         {"progress_shared", "tool_check_requested", "replan_requested", "task_abstained"},
     ),
@@ -148,70 +146,70 @@ _PERMISSIONS: dict[tuple[str, str], PhasePermission] = {
     ("PrimarySolver", "peer_review_candidate"): _permission(
         _REVIEW_READ,
         {"PeerReviewArtifact", "ProgressArtifact", "CheckpointArtifact"},
-        {"challenge_candidate", "send_message", "complete", "abstain"},
+        _actions("PrimarySolver", "peer_review"),
         {"peer_review_published", "progress_shared", "task_abstained"},
         {"candidate_published", "peer_review_requested", "lemma_published", "evidence_available", "progress_shared"},
     ),
     ("AlternativeSolver", "peer_review_candidate"): _permission(
         _REVIEW_READ,
         {"PeerReviewArtifact", "ProgressArtifact", "CheckpointArtifact"},
-        {"challenge_candidate", "send_message", "complete", "abstain"},
+        _actions("AlternativeSolver", "peer_review"),
         {"peer_review_published", "progress_shared", "task_abstained"},
         {"candidate_published", "peer_review_requested", "lemma_published", "evidence_available", "progress_shared"},
     ),
     ("PrimarySolver", "respond_to_peer_review"): _permission(
         _REVIEW_READ,
         {"RebuttalArtifact", "ProgressArtifact", "CheckpointArtifact"},
-        {"publish_rebuttal", "send_message", "complete", "abstain"},
+        _actions("PrimarySolver", "rebuttal"),
         {"rebuttal_published", "progress_shared", "task_abstained"},
         {"peer_review_published", "lemma_published", "evidence_available", "progress_shared"},
     ),
     ("AlternativeSolver", "respond_to_peer_review"): _permission(
         _REVIEW_READ,
         {"RebuttalArtifact", "ProgressArtifact", "CheckpointArtifact"},
-        {"publish_rebuttal", "send_message", "complete", "abstain"},
+        _actions("AlternativeSolver", "rebuttal"),
         {"rebuttal_published", "progress_shared", "task_abstained"},
         {"peer_review_published", "lemma_published", "evidence_available", "progress_shared"},
     ),
     ("LemmaCurator", "curate_lemmas"): _permission(
         _SOLVER_PUBLIC_READ,
         {"LemmaArtifact", "ProgressArtifact", "CheckpointArtifact"},
-        {"continue_reasoning", "send_message", "complete", "abstain"},
+        _actions("LemmaCurator", "lemma"),
         {"lemma_published", "progress_shared", "task_abstained"},
         {"lemma_requested", "progress_shared"},
     ),
     ("LemmaCurator", "answer_lemma_request"): _permission(
         _SOLVER_PUBLIC_READ,
         {"LemmaArtifact", "ProgressArtifact", "CheckpointArtifact"},
-        {"continue_reasoning", "send_message", "complete", "abstain"},
+        _actions("LemmaCurator", "lemma"),
         {"lemma_published", "progress_shared", "task_abstained"},
         {"lemma_requested", "progress_shared"},
     ),
     ("VerifierSkeptic", "cross_exam_candidates"): _permission(
         _VERIFY_READ,
         {"PeerReviewArtifact", "CritiqueArtifact", "ProgressArtifact", "CheckpointArtifact"},
-        {"continue_reasoning", "challenge_candidate", "request_tool_check", "request_replan", "request_repair", "send_message", "complete", "abstain"},
+        _actions("VerifierSkeptic", "verifier"),
         {"conflict_escalated", "tool_check_requested", "replan_requested", "repair_requested", "progress_shared", "task_abstained"},
         {"candidate_published", "peer_review_published", "rebuttal_published", "evidence_available", "progress_shared"},
     ),
     ("VerifierSkeptic", "final_audit"): _permission(
         _VERIFY_READ | {"AuditArtifact", "DecisionArtifact"},
         {"AuditArtifact", "ProgressArtifact", "CheckpointArtifact"},
-        {"request_replan", "request_repair", "send_message", "complete", "abstain"},
+        _actions("VerifierSkeptic", "final_audit"),
         {"audit_published", "replan_requested", "repair_requested", "progress_shared", "task_abstained"},
         {"candidate_published", "repair_published", "evidence_available", "audit_requested", "progress_shared"},
     ),
     ("RepairAgent", "repair_claims"): _permission(
         _VERIFY_READ,
         {"RepairPatchArtifact", "RepairResultArtifact", "CandidateArtifact", "ProgressArtifact", "CheckpointArtifact"},
-        {"continue_reasoning", "request_tool_check", "send_message", "complete", "abstain"},
+        _actions("RepairAgent", "repair"),
         {"repair_published", "tool_check_requested", "progress_shared", "task_abstained"},
         {"repair_requested", "evidence_available", "progress_shared"},
     ),
     ("LLMFinalizer", "copy_finalize"): _permission(
         _VERIFY_READ | {"AuditArtifact", "DecisionArtifact"},
         {"DecisionArtifact", "CandidateArtifact", "ProgressArtifact", "CheckpointArtifact"},
-        {"send_message", "complete", "abstain"},
+        _actions("LLMFinalizer", "finalize"),
         {"audit_published", "progress_shared", "task_abstained"},
         {"audit_published", "progress_shared"},
     ),
@@ -235,3 +233,19 @@ def permissions_for_role(role: str) -> tuple[PhasePermission, ...]:
         for (permission_role, _), permission in _PERMISSIONS.items()
         if permission_role == role
     )
+
+
+def _validate_action_registry_alignment() -> None:
+    """Fail at import time if a phase authorizes an undeclared role action."""
+
+    _ACTION_REGISTRY.validate()
+    for (role, task_type), permission in _PERMISSIONS.items():
+        declared = _ACTION_REGISTRY.actions_for(role)
+        if not permission.allowed_action_types <= declared:
+            missing = sorted(permission.allowed_action_types - declared)
+            raise ValueError(
+                f"{role}/{task_type} authorizes undeclared Actions: {missing}"
+            )
+
+
+_validate_action_registry_alignment()

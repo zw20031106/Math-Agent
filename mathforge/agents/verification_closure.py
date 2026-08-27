@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import json
 
+from mathforge.agent_runtime.action_registry import ActionRegistry
 from mathforge.agent_runtime.protocol import AgentTurnPayloadParser
 from mathforge.agents.prompt_compiler import PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import ModelResponseError
 from mathforge.harness.provider import OfficialClientProvider
+from mathforge.harness.problem_conditions import build_problem_condition_envelope
 from mathforge.harness.schemas import (
     CandidateSolution,
     EvidenceRecord,
@@ -18,6 +20,9 @@ from mathforge.harness.schemas import (
 from mathforge.verification.peer_review import PeerReviewRecord, RebuttalRecord
 from mathforge.verification.verification_closure import AuditRecord, CritiqueRecord
 from mathforge.verification.review_repair_audit_v2 import AuditRequirements
+
+
+_ACTION_REGISTRY = ActionRegistry()
 
 
 @dataclass(frozen=True)
@@ -58,9 +63,11 @@ class VerificationClosureAgent:
         max_tokens: int,
         ordinal: int = 1,
     ) -> CrossExamOutcome:
+        condition_envelope = build_problem_condition_envelope(problem)
         payload = {
             "problem": problem.normalized_problem,
-            "conditions": list(problem.assumptions),
+            "problem_condition_envelope": condition_envelope.to_dict(),
+            "conditions": list(condition_envelope.assumptions),
             "response_mode": problem.response_mode,
             "candidate_pool": list(candidate_pool),
             "candidates": [_public_candidate(item) for item in candidates],
@@ -91,7 +98,12 @@ class VerificationClosureAgent:
             action_category="verification",
             input_artifact_ids=input_artifact_ids,
         )
-        parsed = self._parse(response, "challenge_candidate", "CritiqueArtifact")
+        parsed = self._parse(
+            response,
+            "challenge_candidate",
+            "CritiqueArtifact",
+            role="VerifierSkeptic",
+        )
         turn_id = str(getattr(response, "protocol_turn_id", ""))
         try:
             record = CritiqueRecord.from_model_payload(
@@ -133,6 +145,7 @@ class VerificationClosureAgent:
         requirements: AuditRequirements | None = None,
         ordinal: int = 1,
     ) -> FinalAuditOutcome:
+        condition_envelope = build_problem_condition_envelope(problem)
         valid_finding_ids = {
             item.finding_id
             for critique in critiques
@@ -192,6 +205,7 @@ class VerificationClosureAgent:
         ]
         payload = {
             "problem": problem.normalized_problem,
+            "problem_condition_envelope": condition_envelope.to_dict(),
             "response_mode": problem.response_mode,
             "final_active_candidate": _public_candidate(candidate),
             "obligations": [item.to_dict() for item in obligations],
@@ -237,7 +251,12 @@ class VerificationClosureAgent:
             action_category="final_audit",
             input_artifact_ids=input_artifact_ids,
         )
-        parsed = self._parse(response, "complete", "AuditArtifact")
+        parsed = self._parse(
+            response,
+            "complete",
+            "AuditArtifact",
+            role="VerifierSkeptic",
+        )
         turn_id = str(getattr(response, "protocol_turn_id", ""))
         try:
             record = AuditRecord.from_model_payload(
@@ -304,9 +323,25 @@ class VerificationClosureAgent:
         )
 
     @staticmethod
-    def _parse(response: str, action: str, artifact_type: str):
+    def _parse(
+        response: str,
+        action: str,
+        artifact_type: str,
+        *,
+        role: str,
+    ):
         try:
-            parsed = AgentTurnPayloadParser().parse(response, allowed_actions=(action,))
+            parsed = AgentTurnPayloadParser().parse(
+                response,
+                allowed_actions=_ACTION_REGISTRY.prompt_actions(
+                    role,
+                    phase=(
+                        "final_audit_turn"
+                        if action == "complete"
+                        else "verifier_turn"
+                    ),
+                ),
+            )
         except (TypeError, ValueError) as error:
             raise ModelResponseError("verification_turn_payload_invalid") from error
         if parsed.payload.task_result_type != artifact_type:

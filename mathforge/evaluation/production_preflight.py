@@ -5,6 +5,7 @@ from time import perf_counter
 from typing import Any
 
 from mathforge.agent_runtime.protocol import AgentTurnPayloadParser
+from mathforge.agent_runtime.action_registry import ActionRegistry
 from mathforge.agents.router_planner import RouterPlanner
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.agents.verifier import VerifierSkepticAgent
@@ -21,6 +22,7 @@ from mathforge.parsing.solution_parser import SolutionParser
 PRODUCTION_PREFLIGHT_SCHEMA_VERSION = "2.0"
 PREFLIGHT_L1_MAX_TOKENS = 4096
 PREFLIGHT_STAGE_MAX_TOKENS = 2048
+_ACTION_REGISTRY = ActionRegistry()
 
 _AGENT_TURN_REQUEST = (
     "Return exactly one JSON object with these eight fields and no Host-owned IDs: "
@@ -106,9 +108,15 @@ def run_production_preflight(
             raise ModelTransportError("empty_response")
         parsed_turn = AgentTurnPayloadParser().parse(
             l2_response,
-            allowed_actions=("complete",),
+            allowed_actions=_ACTION_REGISTRY.prompt_actions(
+                "LLMFinalizer",
+                phase="finalize",
+            ),
         )
-        if parsed_turn.payload.result_payload != {"status": "ok"}:
+        if (
+            parsed_turn.payload.action != "complete"
+            or parsed_turn.payload.result_payload != {"status": "ok"}
+        ):
             raise ModelResponseError("agent_turn_semantics_invalid")
     except Exception as error:
         return _record_failure(

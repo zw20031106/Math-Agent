@@ -92,6 +92,7 @@ def minimal_fallback_metrics() -> dict[str, Any]:
         "outcome": "fallback",
         "final_phase": "fallback_completed",
         "error_code": "all_candidates_failed",
+        "error_class": "EXPECTED_DEGRADATION",
         "fallback_used": True,
     }
 

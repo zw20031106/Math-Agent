@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 
+from mathforge.agent_runtime.action_registry import ActionRegistry
 from mathforge.agent_runtime.protocol import AGENT_TURN_FIELDS
 from mathforge.agent_runtime.router_protocol import (
     ROUTER_INTENT_FIELDS,
@@ -30,6 +31,16 @@ _ROLE_DIRECTORY_TO_STAGE = {
     "repair": "repair",
     "finalizer": "finalizer",
 }
+_ROLE_DIRECTORY_TO_ROLE = {
+    "router_planner": "RouterPlanner",
+    "primary_solver": "PrimarySolver",
+    "alternative_solver": "AlternativeSolver",
+    "lemma_curator": "LemmaCurator",
+    "verifier_skeptic": "VerifierSkeptic",
+    "repair": "RepairAgent",
+    "finalizer": "LLMFinalizer",
+}
+_ACTION_REGISTRY = ActionRegistry()
 _SOLVER_OUTPUT_TOKENS = {
     "minimal": {
         "primary_solver": 2048,
@@ -153,7 +164,12 @@ def _progress_delta_example() -> dict[str, object]:
     }
 
 
-def _progress_delta_protocol(mode: str, *, autonomous: bool) -> str:
+def _progress_delta_protocol(
+    mode: str,
+    *,
+    autonomous: bool,
+    role: str = "PrimarySolver",
+) -> str:
     delta = _progress_delta_example()
     example: dict[str, object]
     if autonomous:
@@ -169,6 +185,9 @@ def _progress_delta_protocol(mode: str, *, autonomous: bool) -> str:
         }
     else:
         example = delta
+    action_enum = ", ".join(
+        _ACTION_REGISTRY.prompt_actions(role, phase="progress")
+    )
     return (
     f"Public protocol mode is {mode}. Construct one semantic ProgressDelta with "
     "these nine fields and no others: public_summary, strategy, subgoals, "
@@ -186,6 +205,11 @@ def _progress_delta_protocol(mode: str, *, autonomous: bool) -> str:
     "atomic, publicly checkable mathematics. "
     "Do not emit a final answer, CandidateSolution, tool call, raw model "
     "response, or Host-owned lifecycle fields. "
+    + (
+        f"Canonical ActionRegistry actions for this Turn: {action_enum}. "
+        if autonomous
+        else ""
+    )
     + (_AGENT_TURN_ENVELOPE_PROTOCOL if autonomous else "Return one bare JSON object. ")
     + "Exact JSON schema example: "
     + json.dumps(example, ensure_ascii=False, separators=(",", ":"))
@@ -375,6 +399,16 @@ class PromptCompiler:
                 "task_result_type CheckpointArtifact, empty result_payload, "
                 "and explain the public reason in stop_reason."
             )
+            instructions.append(
+                "Canonical ActionRegistry actions for this Candidate Turn: "
+                + ", ".join(
+                    _ACTION_REGISTRY.prompt_actions(
+                        _ROLE_DIRECTORY_TO_ROLE[role_directory],
+                        phase="candidate",
+                    )
+                )
+                + "."
+            )
         if compact:
             instructions.append(
                 "This is compact_synthesis recovery. Consume only the supplied "
@@ -436,14 +470,25 @@ class PromptCompiler:
         if mode not in {"explore", "continue"}:
             raise ValueError("progress mode must be explore or continue")
         profile = self.solver_profile(problem, route)
-        instructions = [_progress_delta_protocol(mode, autonomous=autonomous)]
+        role = (
+            "PrimarySolver"
+            if role_directory == "primary_solver"
+            else "AlternativeSolver"
+        )
+        instructions = [
+            _progress_delta_protocol(
+                mode,
+                autonomous=autonomous,
+                role=role,
+            )
+        ]
         if autonomous:
             instructions.append(
                 "Use task_result_type ProgressArtifact. Put the exact "
                 "ProgressDelta object inside public_state_delta and use empty "
-                "result_payload. Choose one action: continue_reasoning, "
-                "request_lemma, request_tool_check, request_replan, complete, "
-                "or abstain. Use complete with a non-empty stop_reason when the "
+                "result_payload. Choose one action from the canonical "
+                f"ActionRegistry enum: {', '.join(_ACTION_REGISTRY.prompt_actions(role, phase='progress'))}. "
+                "Use complete with a non-empty stop_reason when the "
                 "public exploration is ready for a separate Candidate synthesis "
                 "Turn. "
                 "For a request action include one matching outbound_intent with "
@@ -528,6 +573,17 @@ class PromptCompiler:
             protocol = _REBUTTAL_PROTOCOL
         else:
             raise ValueError("solver collaboration mode is invalid")
+        role = _ROLE_DIRECTORY_TO_ROLE[role_directory]
+        phase = (
+            "peer_review_turn"
+            if mode == "peer_review"
+            else "rebuttal_turn"
+        )
+        protocol += (
+            "\nCanonical ActionRegistry actions for this Turn: "
+            + ", ".join(_ACTION_REGISTRY.prompt_actions(role, phase=phase))
+            + "."
+        )
         return self._compile(
             role_directory,
             mode,
@@ -550,6 +606,20 @@ class PromptCompiler:
             protocol = _FINAL_AUDIT_PROTOCOL
         else:
             raise ValueError("Verifier closure mode is invalid")
+        protocol += (
+            "\nCanonical ActionRegistry actions for this Turn: "
+            + ", ".join(
+                _ACTION_REGISTRY.prompt_actions(
+                    "VerifierSkeptic",
+                    phase=(
+                        "final_audit_turn"
+                        if mode == "final_audit"
+                        else "verifier_turn"
+                    ),
+                )
+            )
+            + "."
+        )
         return self._compile(
             "verifier_skeptic",
             mode,
@@ -571,6 +641,12 @@ class PromptCompiler:
         if protocol is None:
             raise ValueError(f"role prompt compiler is unavailable: {role_directory}")
         instructions = protocol
+        role = _ROLE_DIRECTORY_TO_ROLE[role_directory]
+        instructions += (
+            "\nCanonical ActionRegistry actions for this role: "
+            + ", ".join(_ACTION_REGISTRY.prompt_actions(role))
+            + "."
+        )
         if runtime_instructions.strip():
             instructions += "\n" + runtime_instructions.strip()
         stage = _ROLE_DIRECTORY_TO_STAGE[role_directory]

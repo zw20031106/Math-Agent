@@ -5,6 +5,7 @@ from hashlib import sha256
 import json
 import re
 
+from mathforge.agent_runtime.action_registry import ActionRegistry
 from mathforge.agent_runtime.protocol import AgentTurnPayloadParser, ParsedAgentTurn
 from mathforge.agents.prompt_compiler import PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
@@ -12,6 +13,7 @@ from mathforge.context.claim_graph import namespaced_claim_id
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import ModelResponseError
 from mathforge.harness.provider import OfficialClientProvider
+from mathforge.harness.problem_conditions import build_problem_condition_envelope
 from mathforge.harness.schemas import (
     CandidateSolution,
     LemmaCard,
@@ -20,6 +22,7 @@ from mathforge.harness.schemas import (
 
 
 _TOKEN = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+")
+_ACTION_REGISTRY = ActionRegistry()
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,7 @@ class LLMLemmaRequest:
     request_text: str
     recipient_role: str
     source_round: int = 1
+    condition_envelope: ProblemConditionEnvelope | None = None
 
 
 @dataclass(frozen=True)
@@ -62,9 +66,13 @@ class LLMLemmaCuratorAgent:
         max_tokens: int,
         optional: bool = False,
     ) -> LLMLemmaOutcome:
+        envelope = request.condition_envelope or build_problem_condition_envelope(
+            request
+        )
         user_content = json.dumps(
             {
                 "problem": request.problem,
+                "problem_condition_envelope": envelope.to_dict(),
                 "plan_id": request.plan_id,
                 "plan_summary": request.plan_summary,
                 "conditions": list(request.conditions),
@@ -108,7 +116,10 @@ class LLMLemmaCuratorAgent:
         try:
             parsed = AgentTurnPayloadParser().parse(
                 response,
-                allowed_actions=("complete", "abstain"),
+                allowed_actions=_ACTION_REGISTRY.prompt_actions(
+                    self.role,
+                    phase="lemma_turn",
+                ),
                 truncated=bool(
                     getattr(response, "output_budget_exceeded", False)
                     or str(getattr(response, "finish_reason", "")).casefold()

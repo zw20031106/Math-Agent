@@ -44,6 +44,96 @@ class ModelResponseError(ContractViolation):
         super().__init__(f"model response rejected: {self.code}")
 
 
+class InternalErrorClass(str, Enum):
+    """Non-sensitive internal outcome classes used by trace and metrics."""
+
+    EXPECTED_DEGRADATION = "EXPECTED_DEGRADATION"
+    PROVIDER_FAILURE = "PROVIDER_FAILURE"
+    DEADLINE = "DEADLINE"
+    INVARIANT_VIOLATION = "INVARIANT_VIOLATION"
+    PROGRAMMING_ERROR = "PROGRAMMING_ERROR"
+
+
+_EXPECTED_RUNTIME_MARKERS = (
+    "all solver",
+    "all candidate",
+    "candidate failed",
+    "candidate unavailable",
+    "verifier unavailable",
+    "replan failed",
+    "repair failed",
+    "fallback",
+    "no complete",
+    "downstream",
+    "formatter",
+)
+_INVARIANT_MARKERS = (
+    "invariant",
+    "unknown agent",
+    "unknown role",
+    "unknown stage",
+    "invalid task",
+    "stale ",
+    "protocol",
+    "permission",
+    "artifact",
+    "turn",
+    "transition",
+)
+
+
+def classify_internal_error(
+    error: Exception,
+    phase: RuntimePhase | None = None,
+) -> InternalErrorClass:
+    """Classify an exception without exposing its message or traceback."""
+
+    del phase
+    if isinstance(error, ModelTransportError):
+        return InternalErrorClass.PROVIDER_FAILURE
+    if isinstance(error, (BudgetExceeded, TimeoutError)):
+        return InternalErrorClass.DEADLINE
+    message = str(error).casefold()
+    if any(marker in message for marker in ("deadline", "timed out", "timeout")):
+        return InternalErrorClass.DEADLINE
+    if isinstance(error, ModelResponseError):
+        return InternalErrorClass.EXPECTED_DEGRADATION
+    if isinstance(error, ContractViolation):
+        return InternalErrorClass.EXPECTED_DEGRADATION
+    if type(error).__name__ == "ContextBudgetExceeded":
+        return InternalErrorClass.EXPECTED_DEGRADATION
+    if isinstance(error, AssertionError) or type(error).__name__ == "InvalidRuntimeTransition":
+        return InternalErrorClass.INVARIANT_VIOLATION
+    if isinstance(error, PermissionError):
+        return InternalErrorClass.INVARIANT_VIOLATION
+    if any(marker in message for marker in _INVARIANT_MARKERS):
+        return InternalErrorClass.INVARIANT_VIOLATION
+    if isinstance(error, RuntimeError) and any(
+        marker in message for marker in _EXPECTED_RUNTIME_MARKERS
+    ):
+        return InternalErrorClass.EXPECTED_DEGRADATION
+    if isinstance(error, MathForgeError):
+        return InternalErrorClass.EXPECTED_DEGRADATION
+    if isinstance(error, (TypeError, AttributeError, NameError, ImportError, IndexError)):
+        return InternalErrorClass.PROGRAMMING_ERROR
+    if isinstance(error, KeyError):
+        return (
+            InternalErrorClass.INVARIANT_VIOLATION
+            if "artifact" in message or "protocol" in message
+            else InternalErrorClass.PROGRAMMING_ERROR
+        )
+    if isinstance(error, ValueError):
+        return InternalErrorClass.EXPECTED_DEGRADATION
+    return InternalErrorClass.PROGRAMMING_ERROR
+
+
+def should_reraise_in_test(error_class: InternalErrorClass) -> bool:
+    return error_class in {
+        InternalErrorClass.INVARIANT_VIOLATION,
+        InternalErrorClass.PROGRAMMING_ERROR,
+    }
+
+
 class FailureCode(str, Enum):
     PARSE = "parse"
     CONTEXT = "context"

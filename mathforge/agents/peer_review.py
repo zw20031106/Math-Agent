@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import json
 
+from mathforge.agent_runtime.action_registry import ActionRegistry
 from mathforge.agent_runtime.protocol import AgentTurnPayloadParser
 from mathforge.agents.prompt_compiler import PromptCompiler
 from mathforge.agents.registry import PromptContractLoader
@@ -12,6 +13,9 @@ from mathforge.harness.provider import OfficialClientProvider
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, ProofObligation
 from mathforge.verification.peer_review import PeerReviewRecord, RebuttalRecord
 from mathforge.verification.cross_review import candidate_review_segments
+
+
+_ACTION_REGISTRY = ActionRegistry()
 
 
 @dataclass(frozen=True)
@@ -82,7 +86,12 @@ class SolverPeerReviewAgent:
             budget=budget,
             max_tokens=min(max_tokens or compilation.max_output_tokens, compilation.max_output_tokens),
         )
-        parsed = self._parse(response, "challenge_candidate", "PeerReviewArtifact")
+        parsed = self._parse(
+            response,
+            "challenge_candidate",
+            "PeerReviewArtifact",
+            role=reviewer_role,
+        )
         turn_id = str(getattr(response, "protocol_turn_id", ""))
         review_id = f"review-{turn_id}" if turn_id else f"review-{candidate.candidate_id}-{reviewer_role}"
         try:
@@ -147,7 +156,12 @@ class SolverPeerReviewAgent:
             budget=budget,
             max_tokens=min(max_tokens or compilation.max_output_tokens, compilation.max_output_tokens),
         )
-        parsed = self._parse(response, "publish_rebuttal", "RebuttalArtifact")
+        parsed = self._parse(
+            response,
+            "publish_rebuttal",
+            "RebuttalArtifact",
+            role=author_role,
+        )
         turn_id = str(getattr(response, "protocol_turn_id", ""))
         rebuttal_id = f"rebuttal-{turn_id}" if turn_id else f"rebuttal-{review.review_id}"
         try:
@@ -207,11 +221,18 @@ class SolverPeerReviewAgent:
         )
 
     @staticmethod
-    def _parse(response: str, action: str, artifact_type: str):
+    def _parse(response: str, action: str, artifact_type: str, *, role: str):
         try:
             parsed = AgentTurnPayloadParser().parse(
                 response,
-                allowed_actions=(action,),
+                allowed_actions=_ACTION_REGISTRY.prompt_actions(
+                    role,
+                    phase=(
+                        "peer_review_turn"
+                        if action == "challenge_candidate"
+                        else "rebuttal_turn"
+                    ),
+                ),
             )
         except (TypeError, ValueError) as error:
             raise ModelResponseError("collaboration_turn_payload_invalid") from error

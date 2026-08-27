@@ -4,6 +4,10 @@ from uuid import uuid4
 from mathforge.config import HarnessConfig, load_competition_config
 from mathforge.model_identity import official_client_model_identity
 from mathforge.harness.terminalizer import MINIMAL_FALLBACK_RESPONSE
+from mathforge.harness.errors import (
+    classify_internal_error,
+    should_reraise_in_test,
+)
 from mathforge.output.public_result import (
     build_public_result,
     identifier_from_metadata,
@@ -24,6 +28,7 @@ class ReasoningAgent:
         if config is not None and not isinstance(config, HarnessConfig):
             raise TypeError("config must be a HarnessConfig")
         active_config = config or load_competition_config()
+        self._config = active_config
         self._harness = MathForgeHarness(
             client,
             active_config,
@@ -44,7 +49,14 @@ class ReasoningAgent:
                     raw_response_key=response_key,
                 )
                 return build_public_result(identifier, result)
-        except Exception:
+        except Exception as error:
+            error_class = classify_internal_error(error)
+            config_status = getattr(getattr(self, "_config", None), "status", "")
+            if (
+                config_status in {"test", "ci"}
+                and should_reraise_in_test(error_class)
+            ):
+                raise
             try:
                 salvaged = salvage_any_answer(
                     [
@@ -65,7 +77,9 @@ class ReasoningAgent:
                     salvaged or MINIMAL_FALLBACK_RESPONSE,
                     "expression",
                 ),
-                "trace": minimal_official_trace(),
+                "trace": minimal_official_trace(
+                    error_code=f"internal_{error_class.value.casefold()}"
+                ),
             }
         finally:
             try:

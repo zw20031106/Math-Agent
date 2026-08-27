@@ -10,6 +10,7 @@ from mathforge.context.snapshots import RoleContextView
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import ModelResponseError
 from mathforge.harness.provider import OfficialClientProvider
+from mathforge.harness.problem_conditions import build_problem_condition_envelope
 from mathforge.harness.schemas import CandidateSolution, ProblemIR
 from mathforge.output.deterministic_formatter import DeterministicFormatter
 from mathforge.parsing.solution_parser import SolutionParser
@@ -49,6 +50,7 @@ class LLMFinalizer:
         skill_context: str = "",
     ) -> FinalizationResult:
         try:
+            condition_envelope = build_problem_condition_envelope(problem)
             budget.consume(stage="finalizer", optional=True)
             selected = (
                 f"Authorized finalizer context:\n{context_view.to_prompt_json()}"
@@ -57,6 +59,7 @@ class LLMFinalizer:
             )
             user = (
                 f"Problem:\n{problem.normalized_problem}\n\n{selected}\n\n"
+                f"{condition_envelope.to_prompt()}\n\n"
                 f"Exact final answer (must not change): {candidate.final_answer}"
                 + (
                     f"\n\nAuthorized skill guidance:\n{skill_context}"

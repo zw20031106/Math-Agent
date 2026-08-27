@@ -28,6 +28,11 @@ _ROLE_BY_STAGE = {
     "router": "RouterPlanner", "primary": "PrimarySolver", "alternative": "AlternativeSolver",
     "lemma": "LemmaCurator", "verifier": "VerifierSkeptic", "repair": "RepairAgent", "finalizer": "LLMFinalizer",
 }
+_COMPATIBLE_ROLES_BY_STAGE = {
+    # Verified-lemma expansion is a solver-owned turn using the lemma budget
+    # bucket, while direct lemma curation remains owned by LemmaCurator.
+    "lemma": frozenset({"LemmaCurator", "PrimarySolver", "AlternativeSolver"}),
+}
 _MODE_BY_ROLE = {
     "RouterPlanner": "plan", "PrimarySolver": "solve", "AlternativeSolver": "solve",
     "LemmaCurator": "curate", "VerifierSkeptic": "cross_exam", "RepairAgent": "repair", "LLMFinalizer": "finalize",
@@ -35,6 +40,38 @@ _MODE_BY_ROLE = {
 _TASK_BY_ROLE = {
     "RouterPlanner": "route_and_plan", "PrimarySolver": "solve_primary", "AlternativeSolver": "solve_alternative",
     "LemmaCurator": "curate_lemmas", "VerifierSkeptic": "cross_exam_candidates", "RepairAgent": "repair_claims", "LLMFinalizer": "copy_finalize",
+}
+_TURN_KINDS_BY_ROLE = {
+    "RouterPlanner": frozenset({"router", "replan"}),
+    "PrimarySolver": frozenset(
+        {
+            "primary",
+            "solver_progress",
+            "solver_candidate_standard",
+            "solver_candidate_proof",
+            "solver_compact_synthesis",
+            "replacement_compact_candidate",
+            "emergency_direct_answer",
+            "lemma_curator",
+            "peer_review",
+        }
+    ),
+    "AlternativeSolver": frozenset(
+        {
+            "alternative",
+            "solver_progress",
+            "solver_candidate_standard",
+            "solver_candidate_proof",
+            "solver_compact_synthesis",
+            "replacement_compact_candidate",
+            "lemma_curator",
+            "peer_review",
+        }
+    ),
+    "LemmaCurator": frozenset({"lemma", "lemma_curator"}),
+    "VerifierSkeptic": frozenset({"verifier", "peer_review", "final_audit"}),
+    "RepairAgent": frozenset({"repair"}),
+    "LLMFinalizer": frozenset({"finalizer"}),
 }
 _OUTPUT_BY_ROLE = {
     "RouterPlanner": ("PlanArtifact", "plan_published", "PrimarySolver"),
@@ -394,8 +431,36 @@ class SessionAgentRuntime:
             if self._released:
                 raise RuntimeError("Agent runtime has been released")
             self._ensure_active()
-            hinted_role = str(agent_hint).split(":", 1)[0]
-            role = hinted_role if hinted_role in self.definitions.roles() else _ROLE_BY_STAGE.get(stage, "PrimarySolver")
+            normalized_stage = str(stage).strip()
+            normalized_hint = str(agent_hint).strip()
+            hinted_role = normalized_hint.split(":", 1)[0]
+            known_roles = set(self.definitions.roles())
+            if normalized_hint and hinted_role not in known_roles:
+                raise ValueError(f"unknown Agent role: {hinted_role}")
+            expected_role = _ROLE_BY_STAGE.get(normalized_stage)
+            if expected_role is None:
+                raise ValueError(f"unknown Agent stage: {normalized_stage}")
+            if (
+                expected_role
+                and hinted_role
+                and expected_role != hinted_role
+                and hinted_role
+                not in _COMPATIBLE_ROLES_BY_STAGE.get(
+                    normalized_stage,
+                    frozenset({expected_role}),
+                )
+            ):
+                raise ValueError(
+                    f"Agent role {hinted_role} is invalid for stage {normalized_stage}"
+                )
+            role = hinted_role or expected_role
+            if role is None or role not in known_roles:
+                raise ValueError("Agent role could not be resolved")
+            normalized_turn_kind = str(turn_kind).strip()
+            if normalized_turn_kind not in _TURN_KINDS_BY_ROLE.get(role, frozenset()):
+                raise ValueError(
+                    f"invalid task turn kind for {role}: {normalized_turn_kind}"
+                )
             if (
                 self._replan_barrier is not None
                 and self._replan_barrier.status == "paused"

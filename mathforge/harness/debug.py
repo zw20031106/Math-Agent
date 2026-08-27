@@ -56,6 +56,7 @@ def sanitized_failure_record(
     session_id: str,
     phase: str,
     error_code: str,
+    error_class: str = "",
     internal_events: list[dict[str, Any]],
 ) -> dict[str, Any]:
     stack = "".join(traceback.format_list(traceback.extract_tb(error.__traceback__)))
@@ -63,6 +64,7 @@ def sanitized_failure_record(
         "session_id": session_id,
         "phase": phase,
         "error_code": error_code,
+        "error_class": str(error_class),
         "exception_type": type(error).__name__,
         "stack": _sanitize_text(stack)[:12000],
         "internal_events": _sanitize_value(internal_events[-128:]),

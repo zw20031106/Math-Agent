@@ -12,6 +12,7 @@ from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.errors import BudgetExceeded, ModelTransportError
 from mathforge.harness.provider import OfficialClientProvider
+from mathforge.harness.problem_conditions import build_problem_condition_envelope
 from mathforge.harness.schemas import (
     CandidateSolution,
     EvidenceRecord,
@@ -191,6 +192,7 @@ class VerifierSkepticAgent:
         peer_reviews: list[Any] | None = None,
         rebuttals: list[Any] | None = None,
     ) -> dict:
+        condition_envelope = build_problem_condition_envelope(problem)
         summaries = [
             CandidateReviewSummary.from_candidate(candidate)
             for candidate in candidates
@@ -221,6 +223,7 @@ class VerifierSkepticAgent:
         }
         return {
             "problem": problem.normalized_problem,
+            "problem_condition_envelope": condition_envelope.to_dict(),
             "response_mode": problem.response_mode,
             "answer_type": problem.answer_type,
             "conditions": list(problem.assumptions),
@@ -284,6 +287,9 @@ class VerifierSkepticAgent:
         evidence = payload.get("evidence", [])
         return {
             "problem": payload.get("original_problem", ""),
+            "problem_condition_envelope": payload.get(
+                "metadata", {}
+            ).get("problem_condition_envelope", {}),
             "candidates": [
                 (
                     {

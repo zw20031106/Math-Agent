@@ -6,6 +6,7 @@ from uuid import uuid4
 from mathforge.context.claim_graph import ClaimGraph
 from mathforge.context.errors import ContextBudgetExceeded
 from mathforge.context.snapshots import ContextSnapshot
+from mathforge.harness.problem_conditions import build_problem_condition_envelope
 from mathforge.harness.schemas import CandidateSolution, EvidenceRecord, ProblemIR, ProofObligation
 
 
@@ -51,6 +52,7 @@ class ContextAssembler:
         final_answer: str = "",
     ) -> ContextSnapshot:
         reference = self._raw_store.register(problem.raw_problem)
+        condition_envelope = build_problem_condition_envelope(problem)
         return ContextSnapshot(
             snapshot_id=f"ctx-{uuid4().hex[:12]}",
             raw_context_ref=reference,
@@ -65,4 +67,9 @@ class ContextAssembler:
                 for obligation in items
             ],
             claim_graph=ClaimGraph.from_candidates(candidates).to_nodes_dict(),
+            metadata={
+                "problem_condition_envelope": condition_envelope.to_dict(
+                    include_target=False
+                ),
+            },
         )

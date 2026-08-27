@@ -11,6 +11,11 @@ from mathforge.harness.state import (
     RuntimePhase,
     transition_allowed,
 )
+from mathforge.harness.problem_conditions import (
+    ProblemConditionBuilder,
+    ProblemConditionEnvelope,
+    build_problem_condition_envelope,
+)
 
 
 CORE_SCHEMA_VERSION = "1.2"

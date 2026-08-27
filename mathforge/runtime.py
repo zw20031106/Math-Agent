@@ -26,6 +26,8 @@ from mathforge.harness.errors import (
     ModelCallRejected,
     ModelTransportError,
     classify_failure,
+    classify_internal_error,
+    should_reraise_in_test,
 )
 from mathforge.harness.fallback import FallbackSolver
 from mathforge.harness.fingerprints import (
@@ -67,6 +69,7 @@ from mathforge.harness.orchestration import (
     public_candidate_content,
 )
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
+from mathforge.harness.problem_conditions import build_problem_condition_envelope
 from mathforge.harness.session import create_session
 from mathforge.harness.schemas import MethodFamily
 from mathforge.harness.stages import (
@@ -601,6 +604,7 @@ class MathForgeHarness:
         terminalizer = NoThrowTerminalizer()
         outcome = "fallback"
         error_code = ""
+        error_class = ""
         failure: Exception | None = None
         failed_phase = RuntimePhase.CREATED
         selected_candidate_id = ""
@@ -3397,11 +3401,28 @@ class MathForgeHarness:
             failure = error
             caught_error = error
             failed_phase = session.phase
+            classified_error = classify_internal_error(caught_error, failed_phase)
+            error_class = classified_error.value
             error_code = terminalizer.safe(
                 "failure_classification",
                 lambda: classify_failure(caught_error, failed_phase).value,
                 "all_candidates_failed",
             )
+            terminalizer.safe(
+                "error_classification_trace",
+                lambda: trace.add(
+                    "internal_error_classified",
+                    error_class=error_class,
+                    error_code=error_code,
+                    failed_phase=failed_phase.value,
+                ),
+                None,
+            )
+            if (
+                self._config.status in {"test", "ci"}
+                and should_reraise_in_test(classified_error)
+            ):
+                raise
             transition = terminalizer.safe(
                 "failure_transition",
                 lambda: session.transition(
@@ -3496,11 +3517,12 @@ class MathForgeHarness:
                     lambda: trace.add(
                         "candidate_salvaged",
                         candidate_id=selected_candidate_id,
-                         checkpoint=last_safe_checkpoint,
-                         reason="downstream_failure_preserved_unrefuted_candidate",
-                         error_code=error_code,
-                         best_available_state=salvage_state,
-                         public_solution={
+                        checkpoint=last_safe_checkpoint,
+                        reason="downstream_failure_preserved_unrefuted_candidate",
+                        error_code=error_code,
+                        error_class=error_class,
+                        best_available_state=salvage_state,
+                        public_solution={
                             "public_solution_steps": list(
                                 last_safe_candidate.public_solution_steps
                             ),
@@ -3619,6 +3641,7 @@ class MathForgeHarness:
                         "fallback_used",
                         reason=error_code,
                         error_code=error_code,
+                        error_class=error_class,
                         failed_phase=failed_phase.value,
                     ),
                     None,
@@ -3845,6 +3868,7 @@ class MathForgeHarness:
                 "run_completed",
                 outcome=outcome,
                 error_code=error_code,
+                error_class=error_class,
                 final_phase=session.phase.value,
             ),
             None,
@@ -3869,6 +3893,7 @@ class MathForgeHarness:
                 outcome=outcome,
                 final_phase=session.phase.value,
                 error_code=error_code,
+                error_class=error_class,
             ).to_dict(),
             minimal_fallback_metrics(),
         )
@@ -3882,6 +3907,7 @@ class MathForgeHarness:
                         session_id=session.session_id,
                         phase=failed_phase.value,
                         error_code=error_code,
+                        error_class=error_class,
                         internal_events=trace.internal_events,
                     )
                 ),
@@ -5312,6 +5338,9 @@ class MathForgeHarness:
                         subgoal.objective for subgoal in plan.subgoals
                     ),
                     conditions=conditions,
+                    condition_envelope=build_problem_condition_envelope(
+                        session.problem_ir
+                    ),
                     target_obligation_ids=tuple(
                         subgoal.subgoal_id for subgoal in plan.subgoals
                     ),
@@ -5387,6 +5416,9 @@ class MathForgeHarness:
                     plan_id=session.agent_plan.plan_id,
                     plan_summary=branch.state.strategy,
                     conditions=tuple(session.problem_ir.assumptions),
+                    condition_envelope=build_problem_condition_envelope(
+                        session.problem_ir
+                    ),
                     target_obligation_ids=obligation_ids,
                     request_text=request_text,
                     recipient_role=branch.role,

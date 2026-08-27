@@ -12,6 +12,7 @@ from mathforge.harness.model_candidate_contract import (
     MODEL_CANDIDATE_PATCH_FIELDS,
 )
 from mathforge.harness.provider import OfficialClientProvider
+from mathforge.harness.problem_conditions import build_problem_condition_envelope
 from mathforge.harness.schemas import (
     CandidatePatch,
     CandidateSolution,
@@ -49,6 +50,7 @@ class RepairAgent:
         critique: dict | None = None,
         critique_artifact_id: str = "",
     ) -> CandidatePatch:
+        condition_envelope = build_problem_condition_envelope(problem)
         local_claims = [
             claim.to_dict() for claim in candidate.claims if claim.claim_id in affected_claim_ids
         ]
@@ -61,6 +63,7 @@ class RepairAgent:
         budget.consume(stage="repair")
         user = (
             f"Problem:\n{problem.normalized_problem}\n\n"
+            f"{condition_envelope.to_prompt()}\n\n"
             + (
                 f"Authorized repair context:\n{context_view.to_prompt_json()}"
                 if context_view is not None

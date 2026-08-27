@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Completed E1 Source-of-Truth and protocol-consistency work. Prompt versions
+  now come directly from contract frontmatter; ActionRegistry owns declared
+  role/phase actions, prompt enums, and Host routing checks; all model-facing
+  condition views use one immutable ProblemConditionEnvelope; the legacy Skill
+  selector path is an alias of the canonical implementation; Provider protocol
+  admission is fail-closed for invalid, stale, unknown-role, and missing-
+  artifact turns; and internal failures are classified for precise metrics and
+  test/competition handling. Added E1 invariant and regression coverage.
 - Completed E0 evidence-freeze and characterization work.  Benchmark and
   per-case manifests now carry a complete current-run identity (commit,
   competition configuration, Prompt/Skill/Tool, dataset, model, Python, and

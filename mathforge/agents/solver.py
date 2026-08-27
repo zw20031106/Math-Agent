@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 
+from mathforge.agent_runtime.action_registry import ActionRegistry
 from mathforge.agent_runtime.protocol import (
     AgentTurnPayload,
     AgentTurnPayloadParser,
@@ -20,6 +21,7 @@ from mathforge.harness.errors import (
     ModelTransportError,
 )
 from mathforge.harness.provider import OfficialClientProvider
+from mathforge.harness.problem_conditions import build_problem_condition_envelope
 from mathforge.harness.reasoning_state import (
     ProgressDeltaParser,
     RoundDelta,
@@ -38,6 +40,7 @@ from mathforge.parsing.solution_parser import (
 
 _PRIMARY_CONTRACT_ATTEMPTS = 2
 _TRUNCATION_RETRY_MAX_TOKENS = 2048
+_ACTION_REGISTRY = ActionRegistry()
 
 
 @dataclass(frozen=True)
@@ -566,12 +569,10 @@ class SolverExecutor:
             response,
             budget,
             allowed_actions=(
-                "continue_reasoning",
-                "request_lemma",
-                "request_tool_check",
-                "request_replan",
-                "complete",
-                "abstain",
+                _ACTION_REGISTRY.prompt_actions(
+                    solver.role,
+                    phase="progress",
+                )
             ),
             truncated=_response_was_truncated(response),
             truncation_reason=_response_truncation_reason(response),
@@ -672,7 +673,10 @@ class SolverExecutor:
             parsed = self._parse_agent_turn(
                 response,
                 budget,
-                allowed_actions=("publish_candidate", "abstain"),
+                allowed_actions=_ACTION_REGISTRY.prompt_actions(
+                    solver.role,
+                    phase="candidate",
+                ),
                 truncated=_response_was_truncated(response),
                 truncation_reason=_response_truncation_reason(response),
             )
@@ -981,18 +985,18 @@ class SolverExecutor:
 
 
 def _problem_structure_prompt(problem: ProblemIR) -> str:
+    envelope = build_problem_condition_envelope(problem)
     fields = (
         ("Response mode", [problem.response_mode]),
         ("Answer type", [problem.answer_type]),
-        ("Target kind", [problem.target_kind]),
-        ("Definitions", problem.definitions),
-        ("Quantifiers", problem.quantifiers),
-        ("Constraints", problem.constraints),
-        ("Ambiguities", problem.ambiguities),
         ("Structural difficulty", problem.difficulty_features),
         ("Suggested decomposition", problem.subproblem_hints),
     )
-    lines = ["Host-parsed public problem structure:"]
+    lines = [
+        "Host-parsed public problem structure:",
+        envelope.to_prompt(include_target=False),
+        f"- Target kind: {problem.target_kind or 'unspecified'}",
+    ]
     for label, values in fields:
         bounded = [
             str(value).strip()[:240]
