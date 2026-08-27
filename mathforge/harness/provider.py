@@ -34,6 +34,10 @@ from mathforge.harness.transport import (
     classify_transport_failure,
     transport_attempt_observation,
 )
+from mathforge.runtime_flows.scheduler_flow import (
+    SchedulerTaskBinding,
+    current_scheduler_task_binding,
+)
 
 if TYPE_CHECKING:
     from mathforge.harness.budget import CallBudget
@@ -903,7 +907,39 @@ class OfficialClientProvider:
         agent_id: str | None = None,
         agent_action_protocol: bool = False,
         input_artifact_ids: tuple[str, ...] = (),
+        scheduler_task_id: str | None = None,
+        plan_version: int | None = None,
+        turn_id: str | None = None,
     ) -> str:
+        scheduler_binding = current_scheduler_task_binding()
+        if scheduler_task_id is not None:
+            explicit_task = str(scheduler_task_id).strip()
+            if not explicit_task:
+                raise ModelCallRejected("scheduler_task_unbound")
+            if scheduler_binding is None:
+                if (
+                    budget is not None
+                    and getattr(budget, "require_scheduler_binding", False)
+                ):
+                    raise ModelCallRejected("scheduler_task_unbound")
+                scheduler_binding = SchedulerTaskBinding(
+                    scheduler_task_id=explicit_task,
+                    plan_version=max(0, int(plan_version or 0)),
+                    agent_id=str(agent_id or "unassigned"),
+                    turn_id=str(turn_id or ""),
+                    required=False,
+                )
+            elif scheduler_binding.scheduler_task_id != explicit_task:
+                raise ModelCallRejected("scheduler_task_id_mismatch")
+        if (
+            budget is not None
+            and getattr(budget, "require_scheduler_binding", False)
+            and (
+                scheduler_binding is None
+                or not scheduler_binding.required
+            )
+        ):
+            raise ModelCallRejected("scheduler_task_unbound")
         active_turn_kind = turn_kind or stage
         protocol_runtime = budget.agent_runtime if budget is not None else None
         effective_max_tokens = effective_output_tokens(
@@ -955,10 +991,53 @@ class OfficialClientProvider:
                 turn_kind=active_turn_kind,
                 agent_hint=agent_id or "",
                 input_artifact_ids=tuple(input_artifact_ids),
+                allow_replan_ack=(
+                    active_turn_kind
+                    in {
+                        "solver_progress",
+                        "solver_candidate_standard",
+                        "solver_candidate_proof",
+                        "solver_compact_synthesis",
+                        "replacement_compact_candidate",
+                    }
+                    and scheduler_binding is not None
+                ),
             )
             if protocol_runtime is not None
             else None
         )
+        if scheduler_binding is not None and protocol_turn is not None:
+            requested_role = str(agent_id or "").split(":", 1)[0]
+            if (
+                scheduler_binding.required
+                and requested_role
+                and scheduler_binding.agent_id
+                not in {requested_role, str(agent_id)}
+            ):
+                _fail_protocol_turn(
+                    protocol_runtime,
+                    protocol_turn,
+                    "scheduler_agent_id_mismatch",
+                )
+                raise ModelCallRejected("scheduler_agent_id_mismatch")
+            if (
+                scheduler_binding.plan_version
+                and protocol_turn.plan_version
+                and scheduler_binding.plan_version != protocol_turn.plan_version
+            ):
+                _fail_protocol_turn(
+                    protocol_runtime,
+                    protocol_turn,
+                    "scheduler_plan_version_mismatch",
+                )
+                raise ModelCallRejected("scheduler_plan_version_mismatch")
+            if scheduler_binding.turn_id and scheduler_binding.turn_id != protocol_turn.turn_id:
+                _fail_protocol_turn(
+                    protocol_runtime,
+                    protocol_turn,
+                    "scheduler_turn_id_mismatch",
+                )
+                raise ModelCallRejected("scheduler_turn_id_mismatch")
         allocation_payload = {
             **allocation.to_dict(),
             "configured_output_tokens": max_tokens,
@@ -993,8 +1072,50 @@ class OfficialClientProvider:
             "agent_role": protocol_turn.role if protocol_turn else "",
             "agent_mode": protocol_turn.mode if protocol_turn else "",
             "task_id": protocol_turn.task_id if protocol_turn else "",
-            "scheduler_task_id": protocol_turn.task_id if protocol_turn else "",
+            "scheduler_task_id": (
+                scheduler_binding.scheduler_task_id
+                if scheduler_binding is not None
+                else protocol_turn.task_id
+                if protocol_turn
+                else ""
+            ),
+            "scheduler_agent_id": (
+                scheduler_binding.agent_id
+                if scheduler_binding is not None
+                else protocol_turn.agent_id
+                if protocol_turn
+                else agent_id or ""
+            ),
+            "scheduler_graph_id": (
+                scheduler_binding.graph_id if scheduler_binding is not None else ""
+            ),
+            "scheduler_plan_version": (
+                scheduler_binding.plan_version
+                if scheduler_binding is not None
+                else protocol_turn.plan_version
+                if protocol_turn
+                else 0
+            ),
+            "scheduler_wave_generation": (
+                scheduler_binding.wave_generation
+                if scheduler_binding is not None
+                else 0
+            ),
+            "scheduler_binding_status": (
+                "bound"
+                if scheduler_binding is not None and scheduler_binding.required
+                else "legacy_unverified"
+                if scheduler_binding is not None
+                else "unbound"
+            ),
             "turn_id": protocol_turn.turn_id if protocol_turn else "",
+            "scheduler_turn_id": (
+                scheduler_binding.turn_id
+                if scheduler_binding is not None and scheduler_binding.turn_id
+                else protocol_turn.turn_id
+                if protocol_turn
+                else ""
+            ),
             "plan_id": protocol_turn.plan_id if protocol_turn else "",
             "subgoal_ids": (
                 list(protocol_turn.subgoal_ids) if protocol_turn else []

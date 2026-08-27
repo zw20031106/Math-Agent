@@ -98,6 +98,10 @@ class ReplanBarrier:
             raise RuntimeError("replan barrier cannot resume before every ACK")
         self.status = "resumed"
 
+    @property
+    def all_agents_acknowledged(self) -> bool:
+        return set(self.required_agent_ids) == self.acknowledged_agent_ids
+
     def to_dict(self) -> dict:
         return {
             "from_version": self.from_version,

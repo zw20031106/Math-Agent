@@ -47,11 +47,14 @@ class CallBudget:
     speculative_exploration_cutoff: int = 0
     closure_reserve_calls: int = 0
     enforce_stage_start_window: bool = False
+    require_scheduler_binding: bool = False
     cancellation_token: CancellationToken | None = None
 
     def __post_init__(self) -> None:
         if self.max_calls < 1 or self.max_tokens < 0:
             raise ValueError("model call budget must be positive and token quota nonnegative")
+        if type(self.require_scheduler_binding) is not bool:
+            raise ValueError("require_scheduler_binding must be a boolean")
         if self.token_limit_mode not in {"dynamic_context", "configured_cap"}:
             raise ValueError("token limit mode is invalid")
         if (
@@ -757,6 +760,7 @@ class CallBudget:
                 ),
                 "closure_reserve_calls": self.closure_reserve_calls,
                 "enforce_stage_start_window": self.enforce_stage_start_window,
+                "require_scheduler_binding": self.require_scheduler_binding,
                 "calls_remaining": max(0, self.max_calls - self.used_calls),
                 "max_tokens": self.max_tokens,
                 "used_tokens": self.used_tokens,

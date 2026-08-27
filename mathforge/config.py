@@ -59,6 +59,7 @@ class HarnessConfig:
     primary_max_tokens: int = 0
     max_model_calls: int = 48
     model_call_policy: str = "adaptive_bounded"
+    require_scheduler_binding: bool = False
     max_logical_model_calls_per_problem: int = 48
     soft_call_checkpoints: tuple[int, ...] = (16, 28, 40)
     speculative_exploration_cutoff: int = 40
@@ -208,6 +209,7 @@ class HarnessConfig:
 
         bool_fields = {
             "use_mcp",
+            "require_scheduler_binding",
             "enable_router",
             "enable_skills",
             "enable_alternatives",

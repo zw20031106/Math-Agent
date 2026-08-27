@@ -106,6 +106,7 @@ def build_effective_config_snapshot(
         },
         "model_call_budget": {
             "policy": config.model_call_policy,
+            "require_scheduler_binding": config.require_scheduler_binding,
             "hard_limit": config.max_logical_model_calls_per_problem,
             "soft_checkpoints": list(config.soft_call_checkpoints),
             "speculative_exploration_cutoff": (

@@ -206,6 +206,108 @@ class SessionAgentRuntime:
                 plan_version=version,
             )
 
+    def bind_replan_participants(
+        self,
+        agent_ids: tuple[str, ...],
+        *,
+        allow_empty: bool = False,
+    ) -> None:
+        """Bind the Solver participants affected by the newly published plan.
+
+        The Host chooses the affected branches deterministically, but it does
+        not acknowledge them.  This also lets an isolated new branch own a
+        replan barrier without waiting on Solver branches that are no longer
+        part of that operation.
+        """
+
+        with self._lock:
+            barrier = self._replan_barrier
+            if barrier is None or barrier.status != "paused":
+                raise RuntimeError("no paused replan barrier is active")
+            participants = tuple(
+                sorted({str(agent_id) for agent_id in agent_ids if str(agent_id)})
+            )
+            if not participants and not allow_empty:
+                raise ValueError("replan barrier requires at least one participant")
+            barrier.required_agent_ids = participants
+            barrier.acknowledged_agent_ids.intersection_update(participants)
+            self._record_protocol_event(
+                "replan_participants_bound",
+                required_agent_ids=list(participants),
+                plan_version=barrier.to_version,
+                source="host_branch_selection",
+            )
+
+    def replan_ack_required(self, turn_id: str) -> bool:
+        """Return whether this real Agent Turn must apply a new plan."""
+
+        with self._lock:
+            context = self._turn_contexts.get(str(turn_id))
+            return bool(
+                context is not None
+                and context.replan_ack_required
+                and self._replan_barrier is not None
+                and self._replan_barrier.status == "paused"
+            )
+
+    def acknowledge_replan_from_turn(
+        self,
+        turn_id: str,
+        applied_plan_version: int,
+        application_decision: str,
+        *,
+        strict: bool = True,
+    ) -> None:
+        """Record an ACK only when a model-owned Turn applied the plan.
+
+        ``strict=False`` is retained for test/legacy protocol variants whose
+        public envelope predates the explicit ``replan_ack`` field.  Even in
+        that mode the acknowledgement is tied to a real Solver Turn; the Host
+        never calls this method without a Turn context.
+        """
+
+        with self._lock:
+            context = self._turn_contexts.get(str(turn_id))
+            barrier = self._replan_barrier
+            if context is None or not context.replan_ack_required:
+                raise RuntimeError("replan acknowledgement requires a Solver Turn")
+            if barrier is None or barrier.status != "paused":
+                raise RuntimeError("no paused replan barrier is active")
+            if int(applied_plan_version) != barrier.to_version:
+                raise ValueError("replan acknowledgement version is inconsistent")
+            decision = str(application_decision).strip().casefold()
+            accepted_decisions = {"apply", "applied", "accepted"}
+            if not strict:
+                accepted_decisions.add("legacy_turn_applied")
+            if decision not in accepted_decisions:
+                raise ValueError("replan acknowledgement decision is invalid")
+            barrier.acknowledge(context.agent_id, barrier.to_version)
+            self._record_protocol_event(
+                "replan_acknowledged",
+                agent_id=context.agent_id,
+                plan_version=barrier.to_version,
+                turn_id=context.turn_id,
+                application_decision=decision,
+                source="agent_turn",
+            )
+
+    def resume_replan_if_ready(self) -> bool:
+        """Resume a paused barrier after all required Agent Turn ACKs."""
+
+        with self._lock:
+            barrier = self._replan_barrier
+            if barrier is None or barrier.status != "paused":
+                return False
+            if not barrier.all_agents_acknowledged:
+                return False
+            barrier.resume()
+            self._record_protocol_event(
+                "replan_resumed",
+                plan_version=barrier.to_version,
+                source="agent_turn_acknowledgements",
+            )
+            return True
+
     def resume_replan(self) -> None:
         with self._lock:
             if self._replan_barrier is None:
@@ -426,6 +528,7 @@ class SessionAgentRuntime:
         turn_kind: str,
         agent_hint: str = "",
         input_artifact_ids: tuple[str, ...] = (),
+        allow_replan_ack: bool = False,
     ) -> TurnContext:
         with self._lock:
             if self._released:
@@ -461,11 +564,12 @@ class SessionAgentRuntime:
                 raise ValueError(
                     f"invalid task turn kind for {role}: {normalized_turn_kind}"
                 )
-            if (
+            replan_ack_required = bool(
                 self._replan_barrier is not None
                 and self._replan_barrier.status == "paused"
                 and role in {"PrimarySolver", "AlternativeSolver"}
-            ):
+            )
+            if replan_ack_required and not allow_replan_ack:
                 raise RuntimeError("Solver Turn blocked by replan ACK barrier")
             descriptor = (
                 str(agent_hint).split(":", 1)[1]
@@ -499,6 +603,19 @@ class SessionAgentRuntime:
                     mode=requested_mode,
                 )
             )
+            if (
+                replan_ack_required
+                and self._replan_barrier is not None
+                and not self._replan_barrier.required_agent_ids
+                and role in {"PrimarySolver", "AlternativeSolver"}
+            ):
+                self._replan_barrier.required_agent_ids = (instance.agent_id,)
+                self._record_protocol_event(
+                    "replan_participant_registered",
+                    agent_id=instance.agent_id,
+                    plan_version=self._replan_barrier.to_version,
+                    source="solver_agent_turn",
+                )
             if role in {"PrimarySolver", "AlternativeSolver"}:
                 self._ensure_current_plan_delivery(instance)
             input_artifact_ids = tuple(
@@ -644,6 +761,7 @@ class SessionAgentRuntime:
                 plan_version,
                 shared_context_hash,
                 branch_context_hash,
+                replan_ack_required,
             )
             self._turn_contexts[turn_id] = context
             self._turns[turn_id] = TurnLineage(instance.agent_id, task_id, turn_id)

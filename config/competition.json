@@ -12,6 +12,7 @@
   "primary_max_tokens": 0,
   "max_model_calls": 48,
   "model_call_policy": "adaptive_bounded",
+  "require_scheduler_binding": true,
   "max_logical_model_calls_per_problem": 48,
   "soft_call_checkpoints": [16, 28, 40],
   "speculative_exploration_cutoff": 40,

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Completed E5 authoritative TaskGraph/Scheduler work. Added the per-session
+  `GraphExecutor`/`GraphState` state machine, scheduler task bindings, dynamic
+  graph expansion, plan-version cancellation, generation and wave fences, and
+  late-result telemetry. Router, long-horizon Primary/Alternative progress,
+  and Candidate synthesis now execute as graph waves; strict competition
+  configuration rejects unbound Provider calls. Replan acknowledgements are
+  accepted only from real Solver Turns, and critical-path admission accounts
+  for model-start and deterministic-finalization reserves. Added E5 invariant
+  coverage and execution governance evidence; official real-model/full-run
+  evidence remains pending.
 - Completed E4 stateful long-horizon and truncation recovery work. Added
   protocol-aware `TruncationAssessment`, bounded public `CheckpointCursor`
   rollback/resume, stateful Candidate rebuilds from `ReasoningState` and

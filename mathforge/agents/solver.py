@@ -267,6 +267,49 @@ class SolverExecutor:
         self._provider = provider
         self._parser = parser
 
+    def _apply_replan_ack_if_required(
+        self,
+        response: str,
+        parsed: ParsedAgentTurn | None,
+        budget: CallBudget,
+    ) -> None:
+        runtime = budget.agent_runtime
+        protocol_turn_id = str(getattr(response, "protocol_turn_id", ""))
+        if runtime is None or not protocol_turn_id or not runtime.replan_ack_required(
+            protocol_turn_id
+        ):
+            return
+        strict_ack = bool(getattr(budget, "require_scheduler_binding", False))
+        marker = None
+        if parsed is not None:
+            marker = parsed.payload.public_state_delta.get("replan_ack")
+            if not isinstance(marker, dict):
+                marker = parsed.payload.result_payload.get("replan_ack")
+        if isinstance(marker, dict):
+            applied_version = marker.get("plan_version")
+            application_decision = marker.get("decision", "")
+        else:
+            applied_version = None
+            application_decision = ""
+        barrier = runtime.replan_barrier or {}
+        if applied_version is None or not str(application_decision).strip():
+            if strict_ack:
+                self._fail_agent_turn(response, budget, "replan_ack_required")
+                raise ModelResponseError("replan_ack_required")
+            applied_version = barrier.get("to_version")
+            application_decision = "legacy_turn_applied"
+        try:
+            runtime.acknowledge_replan_from_turn(
+                protocol_turn_id,
+                int(applied_version),
+                str(application_decision),
+                strict=strict_ack,
+            )
+            runtime.resume_replan_if_ready()
+        except (KeyError, RuntimeError, TypeError, ValueError) as error:
+            self._fail_agent_turn(response, budget, "replan_ack_invalid")
+            raise ModelResponseError("replan_ack_invalid") from error
+
     def execute(
         self,
         solver: PrimarySolver | AlternativeSolver,
@@ -577,6 +620,16 @@ class SolverExecutor:
             autonomous=True,
             protocol_variant=protocol_variant,
         )
+        runtime = budget.agent_runtime
+        replan_barrier = runtime.replan_barrier if runtime is not None else None
+        if replan_barrier is not None and replan_barrier.get("status") == "paused":
+            compilation.messages[-1]["content"] += (
+                "\n\nA new authoritative plan is paused at a replan barrier. "
+                "Apply that plan in this real Solver Turn and include this exact "
+                "public marker inside public_state_delta while preserving the "
+                "normal progress fields: replan_ack={\"plan_version\": "
+                f"{int(replan_barrier['to_version'])}, \"decision\": \"apply\"}}."
+            )
         stage = "primary" if solver.role == "PrimarySolver" else "alternative"
         budget.consume(
             stage=stage,
@@ -627,11 +680,13 @@ class SolverExecutor:
             self._fail_agent_turn(response, budget, "agent_turn_result_type_invalid")
             raise ModelResponseError("agent_turn_result_type_invalid")
         delta = None
-        if parsed.payload.public_state_delta:
+        public_state_delta = dict(parsed.payload.public_state_delta)
+        public_state_delta.pop("replan_ack", None)
+        if public_state_delta:
             try:
                 delta = ProgressDeltaParser().parse(
                     json.dumps(
-                        parsed.payload.public_state_delta,
+                        public_state_delta,
                         ensure_ascii=False,
                     ),
                     round_index=_reasoning_state_version(
@@ -651,6 +706,7 @@ class SolverExecutor:
         if parsed.payload.action != "abstain" and delta is None:
             self._fail_agent_turn(response, budget, "agent_progress_delta_missing")
             raise ModelResponseError("agent_progress_delta_missing")
+        self._apply_replan_ack_if_required(response, parsed, budget)
         budget.record_model_response_validation(
             getattr(response, "model_call_index", None),
             (
@@ -686,6 +742,16 @@ class SolverExecutor:
             protocol_variant=protocol_variant,
             semantic_payload=(protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION),
         )
+        runtime = budget.agent_runtime
+        replan_barrier = runtime.replan_barrier if runtime is not None else None
+        if replan_barrier is not None and replan_barrier.get("status") == "paused":
+            compilation.messages[-1]["content"] += (
+                "\n\nA new authoritative plan is paused at a replan barrier. "
+                "Apply that plan in this real Solver Turn and include this exact "
+                "public marker inside public_state_delta while preserving the "
+                "candidate payload: replan_ack={\"plan_version\": "
+                f"{int(replan_barrier['to_version'])}, \"decision\": \"apply\"}}."
+            )
         stage = "primary" if solver.role == "PrimarySolver" else "alternative"
         turn_kind = (
             "solver_compact_synthesis"
@@ -734,6 +800,11 @@ class SolverExecutor:
                 progress_summary="candidate turn",
             )
         except ModelResponseError:
+            # A damaged candidate cannot silently bypass a paused replan
+            # barrier.  Legacy profiles may still bind the real turn using
+            # the compatibility acknowledgement path; strict competition
+            # profiles require the explicit public marker.
+            self._apply_replan_ack_if_required(response, None, budget)
             candidate = self._parser.recover_answer_candidate(
                 response,
                 candidate_id=request.candidate_id,
@@ -775,6 +846,7 @@ class SolverExecutor:
                 stage=stage,
                 input_artifact_ids=input_artifact_ids,
             )
+            self._apply_replan_ack_if_required(response, None, budget)
             candidate = self._parser.recover_answer_candidate(
                 response,
                 candidate_id=request.candidate_id,
@@ -802,6 +874,7 @@ class SolverExecutor:
                 budget,
                 recovery_reason="answer_recovered_by_compact_retry",
             )
+        self._apply_replan_ack_if_required(response, parsed, budget)
         if parsed.payload.action == "abstain":
             if parsed.payload.task_result_type != "CheckpointArtifact":
                 self._fail_agent_turn(response, budget, "agent_turn_result_type_invalid")

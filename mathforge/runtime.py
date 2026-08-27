@@ -46,6 +46,7 @@ from mathforge.harness.effective_config import (
     build_effective_config_snapshot,
 )
 from mathforge.harness.model_policy import (
+    stage_output_cap,
     stage_p95_seconds,
     stage_sequence_feasible_parallel,
 )
@@ -164,6 +165,8 @@ from mathforge.runtime_flows import (
     FinalProofStatusService,
     PublicContractGuard,
     SchedulerFlow,
+    GraphExpansion,
+    GraphExecutor,
     TaskGraph,
     TaskNode,
 )
@@ -531,6 +534,7 @@ class MathForgeHarness:
                     if self._config.model_call_policy == "adaptive_bounded"
                     else self._config.max_model_calls
                 ),
+                require_scheduler_binding=self._config.require_scheduler_binding,
                 max_tokens=self._config.max_model_tokens,
                 soft_deadline_seconds=self._config.soft_deadline_seconds,
                 exploration_deadline_seconds=self._config.exploration_deadline_seconds,
@@ -777,52 +781,106 @@ class MathForgeHarness:
                     role="RouterPlanner",
                     action="use_minimal_router_context",
                 )
-            router_outcome = self._context_route_stage.plan_authoritative(
-                session.problem_ir,
-                llm_chat=(
-                    (
-                        lambda **kwargs: self._provider.chat(
-                            budget=session.budget,
-                            stage="router",
-                            turn_kind="router",
-                            agent_id="RouterPlanner",
-                            **kwargs,
+            router_graph = TaskGraph(
+                f"scheduler:{session.session_id}:router",
+                (
+                    TaskNode(
+                        "router",
+                        "RouterPlanner",
+                        "router",
+                        "router",
+                        expected_p50=stage_p95_seconds("router") * 0.5,
+                        expected_p95=stage_p95_seconds("router"),
+                        token_cap=stage_output_cap(
+                            "router",
+                            self._config.stage_execution_policy,
+                        ),
+                    ),
+                ),
+            )
+            router_executor = GraphExecutor(
+                router_graph,
+                scheduler=self._scheduler_flow,
+                session_id=session.session_id,
+                plan_version=0,
+                cancellation_token=session.budget.cancellation_token,
+            )
+
+            def run_router_plan():
+                return self._context_route_stage.plan_authoritative(
+                    session.problem_ir,
+                    llm_chat=(
+                        (
+                            lambda **kwargs: self._provider.chat(
+                                budget=session.budget,
+                                stage="router",
+                                turn_kind="router",
+                                agent_id="RouterPlanner",
+                                **kwargs,
+                            )
                         )
-                    )
-                    if router_enabled
-                    else None
-                ),
-                consume_call=(
-                    (
-                        lambda: session.budget.consume(
-                            stage="router",
-                            optional=False,
-                            action_category="replan",
+                        if router_enabled
+                        else None
+                    ),
+                    consume_call=(
+                        (
+                            lambda: session.budget.consume(
+                                stage="router",
+                                optional=False,
+                                action_category="replan",
+                            )
                         )
-                    )
-                    if router_enabled
-                    else None
-                ),
-                max_tokens=self._config.primary_max_tokens,
-                context_view=router_context,
-                record_prompt_chars=(
-                    session.budget.record_prompt_chars if router_enabled else None
-                ),
-                record_prompt_components=(
-                    (
-                        lambda components: session.budget.record_prompt_chars(
-                            0,
-                            components=components,
+                        if router_enabled
+                        else None
+                    ),
+                    max_tokens=self._config.primary_max_tokens,
+                    context_view=router_context,
+                    record_prompt_chars=(
+                        session.budget.record_prompt_chars
+                        if router_enabled
+                        else None
+                    ),
+                    record_prompt_components=(
+                        (
+                            lambda components: session.budget.record_prompt_chars(
+                                0,
+                                components=components,
+                            )
                         )
-                    )
-                    if router_enabled
-                    else None
-                ),
-                record_protocol_telemetry=(
-                    session.budget.record_model_protocol_telemetry
-                    if router_enabled
-                    else None
-                ),
+                        if router_enabled
+                        else None
+                    ),
+                    record_protocol_telemetry=(
+                        session.budget.record_model_protocol_telemetry
+                        if router_enabled
+                        else None
+                    ),
+                )
+
+            router_outcomes = router_executor.run_wave(
+                ("router",),
+                operations={"router": run_router_plan},
+                timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+            )
+            router_outcome = router_outcomes[0].value if router_outcomes else None
+            if router_outcome is None:
+                router_error = (
+                    router_outcomes[0].error
+                    if router_outcomes
+                    else RuntimeError("router graph produced no outcome")
+                )
+                raise router_error
+            trace.add(
+                "scheduler_node_state",
+                graph_id=router_executor.graph.graph_id,
+                node_id="router",
+                task_id="router",
+                status="completed",
+                generation=router_outcomes[0].generation,
+                plan_version=router_outcomes[0].plan_version,
+                wave_generation=router_outcomes[0].wave_generation,
+                accepted=router_outcomes[0].accepted,
+                elapsed_seconds=round(router_outcomes[0].elapsed_seconds, 6),
             )
             session.route_plan = router_outcome.route_plan
             session.agent_plan = router_outcome.authoritative_plan
@@ -1341,31 +1399,41 @@ class MathForgeHarness:
                     )
                 )
             if not autonomous_agents_enabled:
-                fanout = self._candidate_orchestrator.fanout(
-                    session.problem_ir,
-                    session.route_plan,
-                    role_skill_contexts.get("PrimarySolver", ""),
-                    session.budget,
-                    temperature=self._config.primary_temperature,
-                    max_tokens=self._config.primary_max_tokens,
-                    context_views=solver_contexts,
-                    role_skill_contexts=role_skill_contexts,
-                    event_callback=trace.add,
-                    fanout_decider=(
-                        lambda primary, budget: self._adaptive_fanout.decide(
-                            session.route_plan,
-                             primary,
-                             budget,
-                             required_stage_reserve=allocation.verifier,
-                             shadow_consistency=self._shadow_consistency(
-                                 primary,
-                                 shadow_outcome,
-                                 session.problem_ir.answer_type,
-                             ),
-                         )
-                     ),
-                    primary_candidate=primary_seed,
-                 )
+                fanout = self._run_graph_model_stage(
+                    session,
+                    node_id="legacy-solver-fanout",
+                    role="PrimarySolver",
+                    action=(
+                        "solver_candidate_proof"
+                        if session.problem_ir.response_mode == "proof_full"
+                        else "solver_candidate_standard"
+                    ),
+                    operation=lambda: self._candidate_orchestrator.fanout(
+                        session.problem_ir,
+                        session.route_plan,
+                        role_skill_contexts.get("PrimarySolver", ""),
+                        session.budget,
+                        temperature=self._config.primary_temperature,
+                        max_tokens=self._config.primary_max_tokens,
+                        context_views=solver_contexts,
+                        role_skill_contexts=role_skill_contexts,
+                        event_callback=trace.add,
+                        fanout_decider=(
+                            lambda primary, budget: self._adaptive_fanout.decide(
+                                session.route_plan,
+                                primary,
+                                budget,
+                                required_stage_reserve=allocation.verifier,
+                                shadow_consistency=self._shadow_consistency(
+                                    primary,
+                                    shadow_outcome,
+                                    session.problem_ir.answer_type,
+                                ),
+                            )
+                        ),
+                        primary_candidate=primary_seed,
+                    ),
+                )
             fanout = self._restore_candidate_availability(
                 session,
                 trace,
@@ -3574,16 +3642,22 @@ class MathForgeHarness:
                     finalizer = self._finalizer
                     if finalizer is None:
                         raise RuntimeError("enabled finalizer was not constructed")
-                    finalization = finalizer.finalize(
-                        session.problem_ir,
-                        candidate,
-                        final_response,
-                        session.budget,
-                        max_tokens=self._config.primary_max_tokens,
-                        context_view=finalizer_context,
-                        skill_context=role_skill_contexts.get(
-                            "LLMFinalizer",
-                            "",
+                    finalization = self._run_graph_model_stage(
+                        session,
+                        node_id=f"finalizer:{candidate.candidate_id}",
+                        role="LLMFinalizer",
+                        action="finalizer",
+                        operation=lambda: finalizer.finalize(
+                            session.problem_ir,
+                            candidate,
+                            final_response,
+                            session.budget,
+                            max_tokens=self._config.primary_max_tokens,
+                            context_view=finalizer_context,
+                            skill_context=role_skill_contexts.get(
+                                "LLMFinalizer",
+                                "",
+                            ),
                         ),
                     )
                     final_response = (
@@ -4255,28 +4329,27 @@ class MathForgeHarness:
         *,
         skill_names: Iterable[str] = (),
     ) -> TaskGraph:
+        graph_plan_version = (
+            max((branch.plan_version for branch in branches), default=0)
+        )
         solver_nodes = tuple(
             TaskNode(
                 node_id=f"solve:{branch.candidate_id}",
                 role=branch.role,
-                action=(
-                    "solver_candidate_proof"
-                    if response_mode == "proof_full"
-                    else "solver_candidate_standard"
-                ),
+                action="solver_progress",
                 task_id=f"solve:{branch.candidate_id}",
                 dependencies=("router",),
                 priority=0,
                 expected_p50=stage_p95_seconds("solver_progress") * 0.5,
-                expected_p95=stage_p95_seconds(
-                    "solver_candidate_proof"
-                    if response_mode == "proof_full"
-                    else "solver_candidate_standard"
+                expected_p95=stage_p95_seconds("solver_progress"),
+                token_cap=stage_output_cap(
+                    "solver_progress",
+                    self._config.stage_execution_policy,
                 ),
-                token_cap=int(self._config.primary_max_tokens),
                 closure_value=1,
                 optional=False,
                 parallel_group="solver-wave",
+                plan_version=graph_plan_version,
             )
             for branch in branches
         )
@@ -4297,10 +4370,14 @@ class MathForgeHarness:
                 priority=1,
                 expected_p50=stage_p95_seconds("verifier") * 0.25,
                 expected_p95=stage_p95_seconds("verifier"),
-                token_cap=0,
+                token_cap=stage_output_cap(
+                    "verifier",
+                    self._config.stage_execution_policy,
+                ),
                 closure_value=1,
                 optional=False,
                 parallel_group="skill-check-wave",
+                plan_version=graph_plan_version,
             )
             for task in skill_check_tasks
         )
@@ -4320,10 +4397,14 @@ class MathForgeHarness:
                 priority=1,
                 expected_p50=stage_p95_seconds("peer_review") * 0.5,
                 expected_p95=stage_p95_seconds("peer_review"),
-                token_cap=int(self._config.primary_max_tokens),
+                token_cap=stage_output_cap(
+                    "peer_review",
+                    self._config.stage_execution_policy,
+                ),
                 closure_value=1,
                 optional=True,
                 parallel_group="review-wave",
+                plan_version=graph_plan_version,
             )
             for branch in branches
         )
@@ -4338,9 +4419,13 @@ class MathForgeHarness:
             priority=2,
             expected_p50=stage_p95_seconds("verifier") * 0.5,
             expected_p95=stage_p95_seconds("verifier"),
-            token_cap=int(self._config.primary_max_tokens),
+            token_cap=stage_output_cap(
+                "verifier",
+                self._config.stage_execution_policy,
+            ),
             closure_value=2,
             optional=True,
+            plan_version=graph_plan_version,
         )
         repair = TaskNode(
             "repair",
@@ -4351,9 +4436,13 @@ class MathForgeHarness:
             priority=3,
             expected_p50=stage_p95_seconds("repair") * 0.5,
             expected_p95=stage_p95_seconds("repair"),
-            token_cap=int(self._config.primary_max_tokens),
+            token_cap=stage_output_cap(
+                "repair",
+                self._config.stage_execution_policy,
+            ),
             closure_value=2,
             optional=True,
+            plan_version=graph_plan_version,
         )
         reverify = TaskNode(
             "reverify",
@@ -4364,9 +4453,13 @@ class MathForgeHarness:
             priority=3,
             expected_p50=stage_p95_seconds("verifier") * 0.5,
             expected_p95=stage_p95_seconds("verifier"),
-            token_cap=int(self._config.primary_max_tokens),
+            token_cap=stage_output_cap(
+                "verifier",
+                self._config.stage_execution_policy,
+            ),
             closure_value=2,
             optional=True,
+            plan_version=graph_plan_version,
         )
         audit = TaskNode(
             "final-audit",
@@ -4377,9 +4470,13 @@ class MathForgeHarness:
             priority=4,
             expected_p50=stage_p95_seconds("verifier") * 0.5,
             expected_p95=stage_p95_seconds("verifier"),
-            token_cap=int(self._config.primary_max_tokens),
+            token_cap=stage_output_cap(
+                "verifier",
+                self._config.stage_execution_policy,
+            ),
             closure_value=3,
             optional=True,
+            plan_version=graph_plan_version,
         )
         finalizer = TaskNode(
             "finalization",
@@ -4391,6 +4488,7 @@ class MathForgeHarness:
             expected_p50=0.01,
             expected_p95=0.05,
             closure_value=4,
+            plan_version=graph_plan_version,
         )
         return TaskGraph(
             f"scheduler:{plan_id}",
@@ -4402,8 +4500,12 @@ class MathForgeHarness:
                     "router",
                     expected_p50=stage_p95_seconds("router") * 0.5,
                     expected_p95=stage_p95_seconds("router"),
-                    token_cap=int(self._config.primary_max_tokens),
+                    token_cap=stage_output_cap(
+                        "router",
+                        self._config.stage_execution_policy,
+                    ),
                     closure_value=1,
+                    plan_version=graph_plan_version,
                 ),
                 *solver_nodes,
                 *skill_check_nodes,
@@ -4509,7 +4611,21 @@ class MathForgeHarness:
                 scheduler_graph,
                 remaining_calls=budget_snapshot.remaining_calls,
                 remaining_seconds=budget_snapshot.remaining_seconds,
+                finalize_reserve_seconds=(
+                    self._config.deterministic_finalize_reserve_seconds
+                ),
+                model_start_margin_seconds=(
+                    self._config.model_call_start_margin_seconds
+                ),
             )
+        )
+        graph_executor = GraphExecutor(
+            scheduler_graph,
+            scheduler=self._scheduler_flow,
+            session_id=session.session_id,
+            plan_version=effective.version,
+            cancellation_token=session.budget.cancellation_token,
+            initial_completed=("router",),
         )
         scheduler_graph_payload = scheduler_graph.to_dict()
         scheduler_graph_payload["task_graph_schema_version"] = (
@@ -4526,12 +4642,25 @@ class MathForgeHarness:
                 ),
                 6,
             ),
-            release_threshold_seconds=self._config.hard_deadline_seconds,
-            p95_within_release_threshold=(
-                scheduler_graph.critical_path_p95_for_workers(
-                    self._scheduler_flow.max_workers
-                )
-                <= self._config.hard_deadline_seconds
+            remaining_model_window_seconds=round(
+                budget_snapshot.remaining_seconds,
+                6,
+            ),
+            finalize_reserve_seconds=(
+                self._config.deterministic_finalize_reserve_seconds
+            ),
+            model_start_margin_seconds=(
+                self._config.model_call_start_margin_seconds
+            ),
+            p95_within_release_threshold=self._scheduler_flow.critical_path_admitted(
+                scheduler_graph,
+                remaining_seconds=budget_snapshot.remaining_seconds,
+                finalize_reserve_seconds=(
+                    self._config.deterministic_finalize_reserve_seconds
+                ),
+                model_start_margin_seconds=(
+                    self._config.model_call_start_margin_seconds
+                ),
             ),
         )
         for node_id in pruned_scheduler_nodes:
@@ -4548,6 +4677,92 @@ class MathForgeHarness:
         action_turns = 0
         progress_turns = 0
         stall_stops = 0
+        progress_node_by_candidate = {
+            branch.candidate_id: f"solve:{branch.candidate_id}"
+            for branch in branches
+        }
+
+        def run_dynamic_graph_action(
+            branch: _AutonomousBranch,
+            *,
+            action: str,
+            role: str,
+            operation: Callable[[], object],
+            dependency: str,
+            suffix: str,
+        ) -> tuple[bool, object | None, str]:
+            """Materialize and execute one action-owned graph node."""
+
+            stage = {
+                "request_tool_check": "verifier",
+                "request_lemma": "lemma_curator",
+                "request_replan": "replan",
+                "new_branch": (
+                    "solver_candidate_proof"
+                    if session.problem_ir.response_mode == "proof_full"
+                    else "solver_candidate_standard"
+                ),
+                "repair": "repair",
+            }.get(action, action)
+            node_id = f"{action}:{branch.candidate_id}:{suffix}"
+            node = TaskNode(
+                node_id,
+                role,
+                stage,
+                node_id,
+                dependencies=(dependency,),
+                priority=1,
+                expected_p50=stage_p95_seconds(stage) * 0.5,
+                expected_p95=stage_p95_seconds(stage),
+                token_cap=stage_output_cap(
+                    stage,
+                    self._config.stage_execution_policy,
+                ),
+                closure_value=1,
+                plan_version=branch.plan_version,
+            )
+            try:
+                graph_executor.expand(
+                    GraphExpansion.from_action(
+                        action,
+                        (node,),
+                        parent_node_id=dependency,
+                        plan_version=branch.plan_version,
+                        reason="agent_action_dynamic_expansion",
+                    )
+                )
+                outcomes = graph_executor.run_wave(
+                    (node_id,),
+                    operations={node_id: operation},
+                    timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+                )
+            except (KeyError, RuntimeError, TypeError, ValueError) as error:
+                trace.add(
+                    "scheduler_graph_expansion_rejected",
+                    graph_id=scheduler_graph.graph_id,
+                    candidate_id=branch.candidate_id,
+                    action=action,
+                    failure_code=type(error).__name__,
+                )
+                return False, None, node_id
+            outcome = outcomes[0] if outcomes else None
+            if outcome is None:
+                return False, None, node_id
+            execution = graph_executor.execution(node_id)
+            trace.add(
+                "scheduler_node_state",
+                graph_id=scheduler_graph.graph_id,
+                node_id=node_id,
+                task_id=branch.candidate_id,
+                status=execution.status,
+                generation=execution.generation,
+                plan_version=execution.plan_version,
+                wave_generation=execution.wave_generation,
+                accepted=execution.accepted,
+                elapsed_seconds=round(execution.elapsed_seconds, 6),
+                error_code=execution.error_code,
+            )
+            return execution.status == "completed", outcome.value, node_id
         if direct_candidate_mode:
             for branch in branches:
                 branch.status = "ready_to_synthesize"
@@ -4561,7 +4776,8 @@ class MathForgeHarness:
             )
         while any(branch.status == "exploring" for branch in branches):
             cycle_advanced = False
-            progress_tasks = []
+            progress_tasks: dict[str, Callable[[], object]] = {}
+            branch_by_node_id: dict[str, _AutonomousBranch] = {}
             for branch in branches:
                 if branch.status != "exploring":
                     continue
@@ -4603,6 +4819,58 @@ class MathForgeHarness:
                         plan_version=current_plan.version,
                         method_family=spec.method_family,
                     )
+                active_progress_node = progress_node_by_candidate[
+                    branch.candidate_id
+                ]
+                if graph_executor.node_status(active_progress_node) not in {
+                    "pending",
+                    "ready",
+                }:
+                    # A replan may fence a sibling branch's previous node in
+                    # the same barrier.  Start the next frontier from the
+                    # completed Router boundary with the new plan version.
+                    replacement_node_id = (
+                        f"progress:{branch.candidate_id}:v{branch.plan_version}"
+                        f":r{branch.state.version + 1}"
+                    )
+                    try:
+                        graph_executor.expand(
+                            GraphExpansion.from_action(
+                                "continue_reasoning",
+                                (
+                                    TaskNode(
+                                        replacement_node_id,
+                                        branch.role,
+                                        "solver_progress",
+                                        replacement_node_id,
+                                        dependencies=("router",),
+                                        expected_p50=stage_p95_seconds(
+                                            "solver_progress"
+                                        )
+                                        * 0.5,
+                                        expected_p95=stage_p95_seconds(
+                                            "solver_progress"
+                                        ),
+                                        token_cap=stage_output_cap(
+                                            "solver_progress",
+                                            self._config.stage_execution_policy,
+                                        ),
+                                        closure_value=1,
+                                        parallel_group="solver-wave",
+                                        plan_version=branch.plan_version,
+                                    ),
+                                ),
+                                plan_version=branch.plan_version,
+                                reason="replan_frontier_restart",
+                            )
+                        )
+                        progress_node_by_candidate[branch.candidate_id] = (
+                            replacement_node_id
+                        )
+                    except (KeyError, RuntimeError, TypeError, ValueError):
+                        branch.status = "ready_to_synthesize"
+                        branch.stop_reason = "graph_replan_frontier_rejected"
+                        continue
                 pending_candidates = sum(
                     item.status not in {"abstained", "candidate_published"}
                     for item in branches
@@ -4614,6 +4882,17 @@ class MathForgeHarness:
                 )
                 if (
                     not session.budget.can_start_exploration()
+                    or not graph_executor.can_start_speculative(
+                        remaining_seconds=(
+                            session.budget.snapshot().remaining_seconds
+                        ),
+                        finalize_reserve_seconds=(
+                            self._config.deterministic_finalize_reserve_seconds
+                        ),
+                        model_start_margin_seconds=(
+                            self._config.model_call_start_margin_seconds
+                        ),
+                    )
                     or not stage_sequence_feasible_parallel(
                         [candidate_kind] * max(1, pending_candidates),
                         remaining_seconds=(
@@ -4672,7 +4951,9 @@ class MathForgeHarness:
                         optional=active_branch.mode == "continue",
                     )
 
-                progress_tasks.append((branch.candidate_id, progress))
+                node_id = progress_node_by_candidate[branch.candidate_id]
+                progress_tasks[node_id] = progress
+                branch_by_node_id[node_id] = branch
 
             if not progress_tasks:
                 break
@@ -4680,40 +4961,31 @@ class MathForgeHarness:
                 "scheduler_wave_started",
                 graph_id=scheduler_graph.graph_id,
                 wave_kind="solver_exploration",
-                node_ids=[task_id for task_id, _ in progress_tasks],
+                node_ids=list(progress_tasks),
                 parallel_group="solver-wave",
                 worker_count=self._scheduler_flow.max_workers,
             )
-            progress_outcomes = self._scheduler_flow.run_parallel(
-                progress_tasks,
+            progress_outcomes = graph_executor.run_wave(
+                tuple(progress_tasks),
+                operations=progress_tasks,
                 timeout_seconds=session.budget.deadline.remaining_for_model_call(),
-                generation_scope=f"{scheduler_graph.graph_id}:explore",
                 preserve_start_order=True,
-                cancellation_token=session.budget.cancellation_token,
             )
-            branch_by_id = {branch.candidate_id: branch for branch in branches}
             for outcome in progress_outcomes:
-                branch = branch_by_id[outcome.task_id]
+                branch = branch_by_node_id[outcome.node_id]
+                execution = graph_executor.execution(outcome.node_id)
                 trace.add(
                     "scheduler_node_state",
                     graph_id=scheduler_graph.graph_id,
-                    node_id=f"solve:{branch.candidate_id}",
+                    node_id=outcome.node_id,
                     task_id=branch.candidate_id,
-                    status=(
-                        "completed"
-                        if outcome.error is None and outcome.accepted
-                        else "failed"
-                    ),
-                    generation=outcome.generation,
-                    accepted=outcome.accepted,
-                    elapsed_seconds=round(outcome.elapsed_seconds, 6),
-                    error_code=(
-                        "stale_generation"
-                        if not outcome.accepted
-                        else type(outcome.error).__name__
-                        if outcome.error is not None
-                        else ""
-                    ),
+                    status=execution.status,
+                    generation=execution.generation,
+                    plan_version=execution.plan_version,
+                    wave_generation=execution.wave_generation,
+                    accepted=execution.accepted,
+                    elapsed_seconds=round(execution.elapsed_seconds, 6),
+                    error_code=execution.error_code,
                 )
                 if outcome.error is not None or not outcome.accepted:
                     branch.status = "ready_to_synthesize"
@@ -4926,39 +5198,133 @@ class MathForgeHarness:
                     )
                     continue
                 if turn.action == "request_tool_check":
-                    self._apply_autonomous_tool_request(
-                        session,
-                        trace,
+                    run_dynamic_graph_action(
                         branch,
-                        turn.delta,
-                        summary,
+                        action="request_tool_check",
+                        role="VerifierSkeptic",
+                        dependency=outcome.node_id,
+                        suffix=f"r{branch.state.version}",
+                        operation=lambda: self._apply_autonomous_tool_request(
+                            session,
+                            trace,
+                            branch,
+                            turn.delta,
+                            summary,
+                        ),
                     )
                 elif turn.action == "request_lemma":
-                    branch.skill_context += self._answer_solver_lemma_request(
-                        session,
-                        trace,
+                    ok, value, _ = run_dynamic_graph_action(
                         branch,
-                        turn.parsed.payload.outbound_intents,
+                        action="request_lemma",
+                        role="LemmaCurator",
+                        dependency=outcome.node_id,
+                        suffix=f"r{branch.state.version}",
+                        operation=lambda: self._answer_solver_lemma_request(
+                            session,
+                            trace,
+                            branch,
+                            turn.parsed.payload.outbound_intents,
+                        ),
                     )
+                    if ok and isinstance(value, str):
+                        branch.skill_context += value
                 elif turn.action == "request_replan":
-                    self._answer_solver_replan_request(
-                        session,
-                        trace,
+                    run_dynamic_graph_action(
                         branch,
-                        branches=branches,
+                        action="request_replan",
+                        role="RouterPlanner",
+                        dependency=outcome.node_id,
+                        suffix=f"v{branch.plan_version + 1}",
+                        operation=lambda: self._answer_solver_replan_request(
+                            session,
+                            trace,
+                            branch,
+                            branches=branches,
+                        ),
                     )
+                    new_plan_version = session.agent_runtime.effective_execution_plan.version
+                    if new_plan_version != graph_executor.active_plan_version:
+                        try:
+                            graph_executor.cancel_plan_version(new_plan_version)
+                        except (RuntimeError, ValueError):
+                            branch.status = "ready_to_synthesize"
+                            branch.stop_reason = "graph_replan_barrier_rejected"
+                if (
+                    branch.status == "exploring"
+                    and decision.continue_allowed
+                    and turn.action not in {"abstain", "complete"}
+                ):
+                    previous_node_id = progress_node_by_candidate[
+                        branch.candidate_id
+                    ]
+                    if graph_executor.node_status(previous_node_id) != "completed":
+                        # A global replan fences the previous generation.  The
+                        # next public frontier can restart from the completed
+                        # Router boundary, but may not depend on a cancelled
+                        # node.
+                        previous_node_id = "router"
+                    next_node_id = (
+                        f"progress:{branch.candidate_id}:v{branch.plan_version}"
+                        f":r{branch.state.version + 1}:t{progress_turns}"
+                    )
+                    try:
+                        graph_executor.expand(
+                            GraphExpansion.from_action(
+                                "continue_reasoning",
+                                (
+                                    TaskNode(
+                                        next_node_id,
+                                        branch.role,
+                                        "solver_progress",
+                                        next_node_id,
+                                        dependencies=(previous_node_id,),
+                                        priority=0,
+                                        expected_p50=stage_p95_seconds(
+                                            "solver_progress"
+                                        )
+                                        * 0.5,
+                                        expected_p95=stage_p95_seconds(
+                                            "solver_progress"
+                                        ),
+                                        token_cap=stage_output_cap(
+                                            "solver_progress",
+                                            self._config.stage_execution_policy,
+                                        ),
+                                        closure_value=1,
+                                        parallel_group="solver-wave",
+                                        plan_version=branch.plan_version,
+                                    ),
+                                ),
+                                parent_node_id=previous_node_id,
+                                plan_version=branch.plan_version,
+                                reason="next_public_reasoning_frontier",
+                            )
+                        )
+                        progress_node_by_candidate[branch.candidate_id] = (
+                            next_node_id
+                        )
+                    except (KeyError, RuntimeError, TypeError, ValueError) as error:
+                        branch.status = "ready_to_synthesize"
+                        branch.stop_reason = "graph_expansion_rejected"
+                        trace.add(
+                            "scheduler_graph_expansion_rejected",
+                            graph_id=scheduler_graph.graph_id,
+                            candidate_id=branch.candidate_id,
+                            action="continue_reasoning",
+                            failure_code=type(error).__name__,
+                        )
                 branch.mode = "continue"
             trace.add(
                 "scheduler_wave_completed",
                 graph_id=scheduler_graph.graph_id,
                 wave_kind="solver_exploration",
-                node_ids=[outcome.task_id for outcome in progress_outcomes],
+                node_ids=[outcome.node_id for outcome in progress_outcomes],
                 completed_count=sum(
-                    outcome.error is None and outcome.accepted
+                    graph_executor.execution(outcome.node_id).status == "completed"
                     for outcome in progress_outcomes
                 ),
                 failed_count=sum(
-                    outcome.error is not None or not outcome.accepted
+                    graph_executor.execution(outcome.node_id).status != "completed"
                     for outcome in progress_outcomes
                 ),
                 elapsed_seconds=round(
@@ -4980,7 +5346,9 @@ class MathForgeHarness:
         candidate_synthesis_attempts = 0
         compact_recoveries = 0
         proof_degradations = 0
-        synthesis_tasks = []
+        synthesis_tasks: dict[str, Callable[[], object]] = {}
+        synthesis_node_by_candidate: dict[str, str] = {}
+        branch_by_synthesis_node: dict[str, _AutonomousBranch] = {}
         for branch in branches:
             if branch.status == "abstained":
                 failures.append(
@@ -5117,26 +5485,90 @@ class MathForgeHarness:
                 )
                 return candidate, compact_recovery, proof_degradation
 
-            synthesis_tasks.append((branch.candidate_id, synthesize))
+            synthesis_node_id = f"synthesize:{branch.candidate_id}"
+            synthesis_dependency = progress_node_by_candidate.get(
+                branch.candidate_id,
+                "router",
+            )
+            if graph_executor.node_status(synthesis_dependency) != "completed":
+                synthesis_dependency = "router"
+            try:
+                graph_executor.expand(
+                    GraphExpansion.from_action(
+                        "candidate_completion",
+                        (
+                            TaskNode(
+                                synthesis_node_id,
+                                branch.role,
+                                (
+                                    "solver_candidate_proof"
+                                    if session.problem_ir.response_mode == "proof_full"
+                                    else "solver_candidate_standard"
+                                ),
+                                synthesis_node_id,
+                                dependencies=(synthesis_dependency,),
+                                priority=1,
+                                expected_p50=stage_p95_seconds(
+                                    "solver_candidate_proof"
+                                    if session.problem_ir.response_mode == "proof_full"
+                                    else "solver_candidate_standard"
+                                )
+                                * 0.5,
+                                expected_p95=stage_p95_seconds(
+                                    "solver_candidate_proof"
+                                    if session.problem_ir.response_mode == "proof_full"
+                                    else "solver_candidate_standard"
+                                ),
+                                token_cap=stage_output_cap(
+                                    "solver_candidate_proof"
+                                    if session.problem_ir.response_mode == "proof_full"
+                                    else "solver_candidate_standard",
+                                    self._config.stage_execution_policy,
+                                ),
+                                closure_value=1,
+                                parallel_group="solver-wave",
+                                plan_version=branch.plan_version,
+                            ),
+                        ),
+                        parent_node_id=synthesis_dependency,
+                        plan_version=branch.plan_version,
+                        reason="candidate_synthesis_after_public_frontier",
+                    )
+                )
+            except (KeyError, RuntimeError, TypeError, ValueError) as error:
+                failures.append(
+                    BranchFailure(branch.candidate_id, "graph_expansion_rejected")
+                )
+                trace.add(
+                    "candidate_generation_failed",
+                    **candidate_failure_trace_payload(
+                        branch.candidate_id,
+                        "graph_expansion_rejected",
+                    ),
+                    role=branch.role,
+                    failure_detail=type(error).__name__,
+                )
+                continue
+            synthesis_tasks[synthesis_node_id] = synthesize
+            synthesis_node_by_candidate[branch.candidate_id] = synthesis_node_id
+            branch_by_synthesis_node[synthesis_node_id] = branch
 
         trace.add(
             "scheduler_wave_started",
             graph_id=scheduler_graph.graph_id,
             wave_kind="candidate_synthesis",
-            node_ids=[task_id for task_id, _ in synthesis_tasks],
+            node_ids=list(synthesis_tasks),
             parallel_group="solver-wave",
             worker_count=self._scheduler_flow.max_workers,
         )
-        synthesis_outcomes = self._scheduler_flow.run_parallel(
-            synthesis_tasks,
+        synthesis_outcomes = graph_executor.run_wave(
+            tuple(synthesis_tasks),
+            operations=synthesis_tasks,
             timeout_seconds=session.budget.deadline.remaining_for_model_call(),
-            generation_scope=f"{scheduler_graph.graph_id}:synthesis",
-            cancellation_token=session.budget.cancellation_token,
         )
-        branch_by_id = {branch.candidate_id: branch for branch in branches}
         trace.add(
             "parallel_solver_wave_completed",
-            task_ids=[outcome.task_id for outcome in synthesis_outcomes],
+            task_ids=[outcome.node_id for outcome in synthesis_outcomes],
             parallelism=min(
                 len(synthesis_outcomes),
                 self._scheduler_flow.max_workers,
@@ -5150,38 +5582,31 @@ class MathForgeHarness:
             ),
         )
         for outcome in synthesis_outcomes:
+            execution = graph_executor.execution(outcome.node_id)
             trace.add(
                 "scheduler_node_state",
                 graph_id=scheduler_graph.graph_id,
-                node_id=f"solve:{outcome.task_id}",
-                task_id=outcome.task_id,
-                status=(
-                    "completed"
-                    if outcome.error is None and outcome.accepted
-                    else "failed"
-                ),
-                generation=outcome.generation,
-                accepted=outcome.accepted,
-                elapsed_seconds=round(outcome.elapsed_seconds, 6),
-                error_code=(
-                    "stale_generation"
-                    if not outcome.accepted
-                    else type(outcome.error).__name__
-                    if outcome.error is not None
-                    else ""
-                ),
+                node_id=outcome.node_id,
+                task_id=branch_by_synthesis_node[outcome.node_id].candidate_id,
+                status=execution.status,
+                generation=execution.generation,
+                plan_version=execution.plan_version,
+                wave_generation=execution.wave_generation,
+                accepted=execution.accepted,
+                elapsed_seconds=round(execution.elapsed_seconds, 6),
+                error_code=execution.error_code,
             )
         trace.add(
             "scheduler_wave_completed",
             graph_id=scheduler_graph.graph_id,
             wave_kind="candidate_synthesis",
-            node_ids=[outcome.task_id for outcome in synthesis_outcomes],
+            node_ids=[outcome.node_id for outcome in synthesis_outcomes],
             completed_count=sum(
-                outcome.error is None and outcome.accepted
+                graph_executor.execution(outcome.node_id).status == "completed"
                 for outcome in synthesis_outcomes
             ),
             failed_count=sum(
-                outcome.error is not None or not outcome.accepted
+                graph_executor.execution(outcome.node_id).status != "completed"
                 for outcome in synthesis_outcomes
             ),
             elapsed_seconds=round(
@@ -5193,7 +5618,7 @@ class MathForgeHarness:
             ),
         )
         for outcome in synthesis_outcomes:
-            branch = branch_by_id[outcome.task_id]
+            branch = branch_by_synthesis_node[outcome.node_id]
             if outcome.error is not None or not outcome.accepted:
                 reason = self._reasoning_failure_code(outcome.error)
                 if not outcome.accepted:
@@ -5243,6 +5668,21 @@ class MathForgeHarness:
                 autonomous=True,
                 proof_token_degraded=bool(proof_degradation),
             )
+
+        graph_executor.finalize_pending()
+        graph_result = graph_executor.result()
+        trace.add(
+            "scheduler_graph_completed",
+            graph_id=graph_executor.graph.graph_id,
+            plan_version=graph_executor.active_plan_version,
+            node_states=[item.to_dict() for item in graph_result.nodes],
+            completed=list(graph_result.completed),
+            skipped=list(graph_result.skipped),
+            failed=list(graph_result.failed),
+            late_results=list(graph_result.late_results),
+            dependency_violations=list(graph_result.dependency_violations),
+            authority="GraphExecutor",
+        )
 
         if len(candidates) >= 2:
             self._run_initial_llm_lemma_curator(
@@ -5376,14 +5816,24 @@ class MathForgeHarness:
                 replacement=True,
             )
             try:
-                candidate = self._solver_executor.execute(
-                    solver,
-                    request,
-                    session.budget,
-                    temperature=0.0,
-                    max_tokens=self._config.primary_max_tokens,
-                    optional=False,
-                    compact=True,
+                candidate = self._run_graph_model_stage(
+                    session,
+                    node_id=f"restore:{candidate_id}",
+                    role=solver.role,
+                    action=(
+                        "solver_candidate_proof"
+                        if session.problem_ir.response_mode == "proof_full"
+                        else "solver_candidate_standard"
+                    ),
+                    operation=lambda: self._solver_executor.execute(
+                        solver,
+                        request,
+                        session.budget,
+                        temperature=0.0,
+                        max_tokens=self._config.primary_max_tokens,
+                        optional=False,
+                        compact=True,
+                    ),
                 )
             except Exception as error:
                 reason = self._reasoning_failure_code(error)
@@ -5465,17 +5915,23 @@ class MathForgeHarness:
             emergency=True,
         )
         try:
-            candidate = self._solver_executor.execute_emergency_answer(
-                PrimarySolver(self._contracts),
-                SolverRequest(
-                    emergency_id,
-                    session.problem_ir,
-                    session.route_plan,
-                    "",
-                    method,
+            candidate = self._run_graph_model_stage(
+                session,
+                node_id=f"restore:{emergency_id}",
+                role="PrimarySolver",
+                action="solver_compact_synthesis",
+                operation=lambda: self._solver_executor.execute_emergency_answer(
+                    PrimarySolver(self._contracts),
+                    SolverRequest(
+                        emergency_id,
+                        session.problem_ir,
+                        session.route_plan,
+                        "",
+                        method,
+                    ),
+                    session.budget,
+                    max_tokens=self._config.primary_max_tokens,
                 ),
-                session.budget,
-                max_tokens=self._config.primary_max_tokens,
             )
         except Exception as error:
             reason = self._reasoning_failure_code(error)
@@ -5666,7 +6122,7 @@ class MathForgeHarness:
             and edge.target_candidate_id in review_entry_by_id
         )
         review_outcomes = []
-        review_tasks = []
+        review_tasks: dict[str, Callable[[], object]] = {}
         review_context = {}
         for reviewer_entry, target_entry in pairs:
             reviewer = candidate_by_id[reviewer_entry.candidate_id]
@@ -5682,13 +6138,6 @@ class MathForgeHarness:
                 candidate_artifact_id=target_entry.candidate_artifact_id,
                 independent_model_call=True,
             )
-            review_context[target.candidate_id] = (
-                reviewer_entry,
-                target_entry,
-                reviewer,
-                target,
-            )
-
             def run_review(
                 active_reviewer_entry=reviewer_entry,
                 active_target_entry=target_entry,
@@ -5710,16 +6159,55 @@ class MathForgeHarness:
                     max_tokens=self._config.primary_max_tokens,
                 )
 
-            review_tasks.append((target.candidate_id, run_review))
+            review_node_id = target.candidate_id
+            if review_node_id in review_tasks:
+                review_node_id = f"{target.candidate_id}:review-{len(review_tasks) + 1}"
+            review_tasks[review_node_id] = run_review
+            review_context[review_node_id] = (
+                reviewer_entry,
+                target_entry,
+                reviewer,
+                target,
+            )
 
-        wave_outcomes = self._scheduler_flow.run_parallel(
-            review_tasks,
-            timeout_seconds=session.budget.deadline.remaining_for_model_call(),
-            generation_scope=(
-                f"peer-review:{session.agent_runtime.effective_execution_plan.plan_id}"
-            ),
-            cancellation_token=session.budget.cancellation_token,
-        )
+        if review_tasks:
+            review_plan_version = (
+                session.agent_runtime.effective_execution_plan.version
+            )
+            review_graph = TaskGraph(
+                f"scheduler:{session.session_id}:peer-review",
+                tuple(
+                    TaskNode(
+                        node_id,
+                        review_context[node_id][2].role,
+                        "peer_review",
+                        node_id,
+                        expected_p50=stage_p95_seconds("peer_review") * 0.5,
+                        expected_p95=stage_p95_seconds("peer_review"),
+                        token_cap=stage_output_cap(
+                            "peer_review",
+                            self._config.stage_execution_policy,
+                        ),
+                        plan_version=review_plan_version,
+                        parallel_group="review-wave",
+                    )
+                    for node_id in review_tasks
+                ),
+            )
+            review_executor = GraphExecutor(
+                review_graph,
+                scheduler=self._scheduler_flow,
+                session_id=session.session_id,
+                plan_version=review_plan_version,
+                cancellation_token=session.budget.cancellation_token,
+            )
+            wave_outcomes = review_executor.run_wave(
+                tuple(review_tasks),
+                operations=review_tasks,
+                timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+            )
+        else:
+            wave_outcomes = ()
         trace.add(
             "parallel_review_wave_completed",
             task_ids=[outcome.task_id for outcome in wave_outcomes],
@@ -5801,15 +6289,21 @@ class MathForgeHarness:
                 answer_mutation_allowed=False,
             )
             try:
-                outcome = self._peer_review_agent.rebut(
-                    candidate=target,
-                    review=review,
-                    author_agent_id=target_entry.author_agent_id,
-                    reviewer_agent_id=review.reviewer_agent_id,
-                    author_role=target.role,
-                    author_candidate_id=target.candidate_id,
-                    budget=session.budget,
-                    max_tokens=self._config.primary_max_tokens,
+                outcome = self._run_graph_model_stage(
+                    session,
+                    node_id=f"rebuttal:{target.candidate_id}:{review.review_id}",
+                    role=target.role,
+                    action="peer_review",
+                    operation=lambda: self._peer_review_agent.rebut(
+                        candidate=target,
+                        review=review,
+                        author_agent_id=target_entry.author_agent_id,
+                        reviewer_agent_id=review.reviewer_agent_id,
+                        author_role=target.role,
+                        author_candidate_id=target.candidate_id,
+                        budget=session.budget,
+                        max_tokens=self._config.primary_max_tokens,
+                    ),
                 )
             except Exception as error:
                 trace.add(
@@ -5917,29 +6411,35 @@ class MathForgeHarness:
             )
         )
         try:
-            outcome = self._llm_lemma_curator.execute(
-                LLMLemmaRequest(
-                    problem=session.problem_ir.normalized_problem,
-                    plan_id=plan.plan_id,
-                    plan_summary="; ".join(
-                        subgoal.objective for subgoal in plan.subgoals
+            outcome = self._run_graph_model_stage(
+                session,
+                node_id="lemma-curator:initial",
+                role="LemmaCurator",
+                action="lemma_curator",
+                operation=lambda: self._llm_lemma_curator.execute(
+                    LLMLemmaRequest(
+                        problem=session.problem_ir.normalized_problem,
+                        plan_id=plan.plan_id,
+                        plan_summary="; ".join(
+                            subgoal.objective for subgoal in plan.subgoals
+                        ),
+                        conditions=conditions,
+                        condition_envelope=build_problem_condition_envelope(
+                            session.problem_ir
+                        ),
+                        target_obligation_ids=tuple(
+                            subgoal.subgoal_id for subgoal in plan.subgoals
+                        ),
+                        request_text=(
+                            "Identify problem-local lemmas and theorem conditions "
+                            "that both independent Solvers should address."
+                        ),
+                        recipient_role="PrimarySolver",
                     ),
-                    conditions=conditions,
-                    condition_envelope=build_problem_condition_envelope(
-                        session.problem_ir
-                    ),
-                    target_obligation_ids=tuple(
-                        subgoal.subgoal_id for subgoal in plan.subgoals
-                    ),
-                    request_text=(
-                        "Identify problem-local lemmas and theorem conditions "
-                        "that both independent Solvers should address."
-                    ),
-                    recipient_role="PrimarySolver",
+                    session.budget,
+                    max_tokens=self._config.primary_max_tokens,
+                    optional=False,
                 ),
-                session.budget,
-                max_tokens=self._config.primary_max_tokens,
-                optional=False,
             )
         except Exception as error:
             trace.add(
@@ -6317,33 +6817,50 @@ class MathForgeHarness:
                     for spec in effective.branches
                 },
             )
+            if barrier := session.agent_runtime.replan_barrier:
+                role_ordinals: dict[str, int] = {}
+                agent_ids_by_branch: dict[str, str] = {}
+                for spec in effective.solver_branches:
+                    ordinal = role_ordinals.get(spec.agent_role, 0) + 1
+                    role_ordinals[spec.agent_role] = ordinal
+                    descriptor = (
+                        f"primary-{ordinal}"
+                        if spec.agent_role == "PrimarySolver"
+                        else f"alternative-{ordinal}"
+                    )
+                    try:
+                        agent_ids_by_branch[spec.branch_id] = (
+                            session.agent_runtime.agent_id_for(
+                                spec.agent_role,
+                                descriptor,
+                            )
+                        )
+                    except KeyError:
+                        continue
+                selected_agent_ids = tuple(
+                    agent_ids_by_branch[active_branch.branch_id]
+                    for active_branch in active_branches
+                    if active_branch.branch_id in agent_ids_by_branch
+                )
+                if selected_agent_ids:
+                    session.agent_runtime.bind_replan_participants(
+                        selected_agent_ids
+                    )
+                elif branches is None:
+                    # A new branch's Agent identity is created lazily by its
+                    # first real Solver Turn.  Leave an empty participant set
+                    # for that turn to register, rather than acknowledging it
+                    # from the Host.
+                    session.agent_runtime.bind_replan_participants(
+                        (),
+                        allow_empty=True,
+                    )
+                barrier = session.agent_runtime.replan_barrier
+            # The Router may publish a new plan and fence incompatible graph
+            # work, but it cannot acknowledge or resume the Solver barrier.
+            # Each affected Solver must report the applied version and
+            # application decision from its own subsequent Agent Turn.
             barrier = session.agent_runtime.replan_barrier
-            required_agent_ids = set(
-                barrier["required_agent_ids"] if barrier is not None else ()
-            )
-            acknowledged_agent_ids: set[str] = set()
-            for active_branch in active_branches:
-                try:
-                    agent_id = session.agent_runtime.agent_id_for(
-                        active_branch.role,
-                        active_branch.candidate_id,
-                    )
-                except KeyError:
-                    continue
-                if agent_id in required_agent_ids:
-                    session.agent_runtime.acknowledge_replan(
-                        agent_id,
-                        session.agent_plan.version,
-                    )
-                    acknowledged_agent_ids.add(agent_id)
-            if branches is None:
-                for agent_id in sorted(required_agent_ids - acknowledged_agent_ids):
-                    session.agent_runtime.acknowledge_replan(
-                        agent_id,
-                        session.agent_plan.version,
-                    )
-            if barrier is not None:
-                session.agent_runtime.resume_replan()
         except Exception as error:
             trace.add(
                 "agent_replan_completed",
@@ -6360,6 +6877,25 @@ class MathForgeHarness:
             plan_id=session.agent_plan.plan_id,
             plan_version=session.agent_plan.version,
             solver_woken=True,
+            replan_ack_status=(
+                {
+                    "required_agent_ids": list(
+                        barrier.get("required_agent_ids", ())
+                    ),
+                    "acknowledged_agent_ids": list(
+                        barrier.get("acknowledged_agent_ids", ())
+                    ),
+                    "status": barrier.get("status", "paused"),
+                    "source": "solver_agent_turn",
+                }
+                if barrier is not None
+                else {
+                    "required_agent_ids": [],
+                    "acknowledged_agent_ids": [],
+                    "status": "not_required",
+                    "source": "solver_agent_turn",
+                }
+            ),
             **refs,
         )
 
@@ -6601,6 +7137,66 @@ class MathForgeHarness:
         """Keep a degraded shared provider focused on answer formation."""
         return self._provider_health_state(case_id) == "healthy"
 
+    def _run_graph_model_stage(
+        self,
+        session,
+        *,
+        node_id: str,
+        role: str,
+        action: str,
+        operation: Callable[[], Any],
+        plan_version: int | None = None,
+    ) -> Any:
+        """Run a legacy single-stage model operation through GraphExecutor.
+
+        The long-horizon fanout owns one persistent graph.  Older verification
+        and recovery paths are intentionally kept as separate stages for this
+        phase, but they still need the same task identity and publish fence
+        before entering Provider.  A one-node graph gives those paths the
+        authoritative boundary without changing their domain result types.
+        """
+
+        active_plan = session.agent_runtime.effective_execution_plan
+        version = (
+            active_plan.version if plan_version is None else int(plan_version)
+        )
+        node = TaskNode(
+            node_id,
+            role,
+            action,
+            node_id,
+            expected_p50=stage_p95_seconds(action) * 0.5,
+            expected_p95=stage_p95_seconds(action),
+            token_cap=stage_output_cap(
+                action,
+                self._config.stage_execution_policy,
+            ),
+            plan_version=version,
+        )
+        executor = GraphExecutor(
+            TaskGraph(
+                f"scheduler:{session.session_id}:stage:{node_id}",
+                (node,),
+            ),
+            scheduler=self._scheduler_flow,
+            session_id=session.session_id,
+            plan_version=version,
+            cancellation_token=session.budget.cancellation_token,
+        )
+        outcomes = executor.run_wave(
+            (node_id,),
+            operations={node_id: operation},
+            timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+        )
+        outcome = outcomes[0] if outcomes else None
+        if outcome is None:
+            raise ModelCallRejected("scheduler_stage_not_dispatched")
+        if outcome.error is not None:
+            raise outcome.error
+        if not outcome.accepted:
+            raise ModelCallRejected("stale_scheduler_result")
+        return outcome.value
+
     def _run_shadow_probe(self, problem_ir) -> ShadowOutcome:
         from mathforge.tools.shadow_solver import ShadowOutcome
 
@@ -6838,18 +7434,24 @@ class MathForgeHarness:
             ),
             None,
         )
-        return self._repair_agent.repair(
-            session.problem_ir,
-            candidate,
-            affected_claim_ids,
-            local_evidence,
-            session.budget,
-            max_tokens=self._config.primary_max_tokens,
-            context_view=context_view,
-            skill_context=skill_context,
-            critique=critique.to_dict() if critique is not None else None,
-            critique_artifact_id=(
-                critique.artifact_id if critique is not None else ""
+        return self._run_graph_model_stage(
+            session,
+            node_id=f"repair:{candidate.candidate_id}",
+            role="RepairAgent",
+            action="repair",
+            operation=lambda: self._repair_agent.repair(
+                session.problem_ir,
+                candidate,
+                affected_claim_ids,
+                local_evidence,
+                session.budget,
+                max_tokens=self._config.primary_max_tokens,
+                context_view=context_view,
+                skill_context=skill_context,
+                critique=critique.to_dict() if critique is not None else None,
+                critique_artifact_id=(
+                    critique.artifact_id if critique is not None else ""
+                ),
             ),
         )
 
@@ -7037,7 +7639,18 @@ class MathForgeHarness:
             ),
         )
         prior_plan_id = session.agent_plan.plan_id
-        self._answer_solver_replan_request(session, trace, branch)
+        self._run_graph_model_stage(
+            session,
+            node_id=f"replan:{candidate_id}",
+            role="RouterPlanner",
+            action="replan",
+            operation=lambda: self._answer_solver_replan_request(
+                session,
+                trace,
+                branch,
+            ),
+            plan_version=session.agent_runtime.effective_execution_plan.version,
+        )
         if session.agent_plan.plan_id == prior_plan_id:
             trace.add(
                 "new_branch_completed",
@@ -7081,17 +7694,28 @@ class MathForgeHarness:
                 context_view,
                 compressed.prompt_json,
             )
-            turn = self._solver_executor.execute_autonomous_candidate(
-                branch.solver,
-                request,
-                session.budget,
-                temperature=max(self._config.primary_temperature, 0.35),
-                max_tokens=self._config.primary_max_tokens,
-                input_artifact_ids=(
-                    (critique.artifact_id,)
-                    if critique.artifact_id
-                    else ()
+            turn = self._run_graph_model_stage(
+                session,
+                node_id=f"new-branch:{candidate_id}",
+                role=branch.role,
+                action=(
+                    "solver_candidate_proof"
+                    if session.problem_ir.response_mode == "proof_full"
+                    else "solver_candidate_standard"
                 ),
+                operation=lambda: self._solver_executor.execute_autonomous_candidate(
+                    branch.solver,
+                    request,
+                    session.budget,
+                    temperature=max(self._config.primary_temperature, 0.35),
+                    max_tokens=self._config.primary_max_tokens,
+                    input_artifact_ids=(
+                        (critique.artifact_id,)
+                        if critique.artifact_id
+                        else ()
+                    ),
+                ),
+                plan_version=session.agent_runtime.effective_execution_plan.version,
             )
             candidate = turn.candidate
             if turn.partial or candidate is None or turn.action == "abstain":
@@ -7390,25 +8014,31 @@ class MathForgeHarness:
     ):
         try:
             if self._config.enable_verification_closure:
-                outcome = self._verification_closure_agent.cross_exam(
-                    problem=session.problem_ir,
-                    candidates=list(candidates),
-                    candidate_pool=(
-                        session.candidate_pool.snapshot()
-                        if session.candidate_pool is not None
-                        else []
+                outcome = self._run_graph_model_stage(
+                    session,
+                    node_id=f"verifier:{round_name}:{len(session.critiques) + 1}",
+                    role="VerifierSkeptic",
+                    action="verifier",
+                    operation=lambda: self._verification_closure_agent.cross_exam(
+                        problem=session.problem_ir,
+                        candidates=list(candidates),
+                        candidate_pool=(
+                            session.candidate_pool.snapshot()
+                            if session.candidate_pool is not None
+                            else []
+                        ),
+                        obligations=session.proof_obligations,
+                        evidence=session.evidence,
+                        peer_reviews=session.peer_reviews,
+                        rebuttals=session.rebuttals,
+                        input_artifact_ids=self._verification_input_artifact_ids(
+                            session,
+                            {item.candidate_id for item in candidates},
+                        ),
+                        budget=session.budget,
+                        max_tokens=self._config.primary_max_tokens,
+                        ordinal=len(session.critiques) + 1,
                     ),
-                    obligations=session.proof_obligations,
-                    evidence=session.evidence,
-                    peer_reviews=session.peer_reviews,
-                    rebuttals=session.rebuttals,
-                    input_artifact_ids=self._verification_input_artifact_ids(
-                        session,
-                        {item.candidate_id for item in candidates},
-                    ),
-                    budget=session.budget,
-                    max_tokens=self._config.primary_max_tokens,
-                    ordinal=len(session.critiques) + 1,
                 )
                 verifier_result = outcome.record
                 session.critiques.append(outcome.record)
@@ -7421,17 +8051,23 @@ class MathForgeHarness:
                     candidates=candidates,
                     evidence=session.evidence,
                 )
-                verifier_result = self._verifier_agent.review(
-                    session.problem_ir,
-                    candidates,
-                    session.proof_obligations,
-                    session.budget,
-                    max_tokens=self._config.primary_max_tokens,
-                    context_view=verifier_context,
-                    evidence=session.evidence,
-                    skill_context=skill_context,
-                    peer_reviews=session.peer_reviews,
-                    rebuttals=session.rebuttals,
+                verifier_result = self._run_graph_model_stage(
+                    session,
+                    node_id=f"verifier:{round_name}:{len(session.critiques) + 1}",
+                    role="VerifierSkeptic",
+                    action="verifier",
+                    operation=lambda: self._verifier_agent.review(
+                        session.problem_ir,
+                        candidates,
+                        session.proof_obligations,
+                        session.budget,
+                        max_tokens=self._config.primary_max_tokens,
+                        context_view=verifier_context,
+                        evidence=session.evidence,
+                        skill_context=skill_context,
+                        peer_reviews=session.peer_reviews,
+                        rebuttals=session.rebuttals,
+                    ),
                 )
         except (
             BudgetExceeded,
@@ -7662,13 +8298,23 @@ class MathForgeHarness:
             source="verified_lemma_expansion",
         )
         try:
-            candidate = self._solver_executor.execute(
-                PrimarySolver(self._contracts),
-                request,
-                session.budget,
-                temperature=self._config.primary_temperature,
-                max_tokens=self._config.primary_max_tokens,
-                optional=True,
+            candidate = self._run_graph_model_stage(
+                session,
+                node_id=f"lemma-expansion:{round_id}",
+                role="PrimarySolver",
+                action=(
+                    "solver_candidate_proof"
+                    if session.problem_ir.response_mode == "proof_full"
+                    else "solver_candidate_standard"
+                ),
+                operation=lambda: self._solver_executor.execute(
+                    PrimarySolver(self._contracts),
+                    request,
+                    session.budget,
+                    temperature=self._config.primary_temperature,
+                    max_tokens=self._config.primary_max_tokens,
+                    optional=True,
+                ),
             )
         except (BudgetExceeded, ContextBudgetExceeded, ModelCallRejected, RuntimeError, ValueError):
             trace.add(
