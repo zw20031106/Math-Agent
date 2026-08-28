@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Completed E7 Public JSON / Trace / Renderer work. The official result now has an
+  explicit four-field validator and control-character guard, while runtime
+  diagnostics are emitted to a separate Evaluation Artifact sink. The current
+  scorer contract is recorded as `worked_solution -> exact answer`; proof-full
+  responses use a dependency-ordered `VerifiedProofRenderer` with coverage-aware
+  semantic compaction and emergency fallback only when required units cannot fit.
+  Trace eviction now follows accuracy-first priorities so plan, reasoning,
+  verification, arbitration, and finalization survive before repair, Skill, and
+  model-activity details. Added E7 public-contract, artifact-isolation, proof
+  renderer, and trace-priority regression coverage; official real-model evidence
+  remains pending.
 - Completed E6 Verification / Repair / Arbitration work. Added an explicit
   VerificationState that separates not-disproved from hard-verified evidence,
   risk-aware CompletionPolicy, end-to-end AnswerConsistency, Host cognitive

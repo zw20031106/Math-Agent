@@ -23,6 +23,8 @@ from mathforge.parsing.answer_salvage import salvage_any_answer
 
 
 PUBLIC_STATUSES = frozenset({"success", "failed", "timeout"})
+PUBLIC_RESULT_FIELDS = frozenset({"id", "status", "final_response", "trace"})
+_ALLOWED_CONTROL_CHARS = frozenset({"\t", "\n", "\r"})
 _OUTCOME_TO_STATUS = {
     "primary": "success",
     "success": "success",
@@ -31,6 +33,10 @@ _OUTCOME_TO_STATUS = {
     "failed": "failed",
     "timeout": "timeout",
 }
+
+
+class PublicContractError(ValueError):
+    """Raised when the immutable four-field participant contract is invalid."""
 
 
 def build_public_result(identifier: int | str | None, result: dict) -> dict:
@@ -42,10 +48,14 @@ def build_public_result(identifier: int | str | None, result: dict) -> dict:
         if isinstance(supplied_response, str) and supplied_response.strip()
         else MINIMAL_FALLBACK_RESPONSE
     )
-    final_response = exact_final_answer(final_response, "expression")
+    final_response = exact_final_answer(
+        _sanitize_public_text(final_response),
+        "expression",
+    )
     trace = result.get("trace", [])
     if not isinstance(trace, list):
         trace = []
+    trace = _sanitize_public_value(trace)
     limits = JudgeTraceLimits.from_mapping(
         result.get("_public_output_limits")
         if isinstance(result, dict)
@@ -123,7 +133,54 @@ def build_public_result(identifier: int | str | None, result: dict) -> dict:
                 payload["final_response"],
                 max(1, limits.public_result_max_bytes - 256),
             )
+    try:
+        validate_public_result(payload)
+    except PublicContractError:
+        # A trace serialization failure is a publication failure under the
+        # official contract.  The internal run outcome and evaluation artifact
+        # remain untouched; only this public projection is fail-closed.
+        payload = {
+            "id": identifier,
+            "status": "failed",
+            "final_response": _sanitize_public_text(
+                exact_final_answer(final_response, "expression")
+                or MINIMAL_FALLBACK_RESPONSE
+            ),
+            "trace": minimal_official_trace(
+                outcome="fallback",
+                error_code="public_contract_invalid",
+            ),
+        }
+        validate_public_result(payload)
     return payload
+
+
+def validate_public_result(payload: dict[str, Any]) -> None:
+    """Validate the exact public schema and reject unsafe control characters."""
+
+    if not isinstance(payload, dict):
+        raise PublicContractError("public result must be an object")
+    if set(payload) != PUBLIC_RESULT_FIELDS:
+        raise PublicContractError("public result must contain exactly four fields")
+    identifier = payload.get("id")
+    if identifier is not None and not isinstance(identifier, (int, str)):
+        raise PublicContractError("public result id has invalid type")
+    if isinstance(identifier, str):
+        _validate_public_text(identifier)
+    if payload.get("status") not in PUBLIC_STATUSES:
+        raise PublicContractError("public result status is invalid")
+    response = payload.get("final_response")
+    if not isinstance(response, str) or not response.strip():
+        raise PublicContractError("public final_response must be non-empty")
+    trace = payload.get("trace")
+    if not isinstance(trace, list):
+        raise PublicContractError("public trace must be a list")
+    _validate_public_text(response)
+    _validate_public_value(trace)
+    try:
+        json.dumps(payload, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise PublicContractError("public result is not JSON serializable") from error
 
 
 def serialized_public_result_bytes(payload: dict[str, Any]) -> int:
@@ -135,6 +192,52 @@ def serialized_public_result_bytes(payload: dict[str, Any]) -> int:
             indent=2,
         ).encode("utf-8")
     ) + 1
+
+
+def _sanitize_public_text(value: str) -> str:
+    return "".join(
+        character
+        if character in _ALLOWED_CONTROL_CHARS or ord(character) >= 32
+        else " "
+        for character in str(value or "")
+    )
+
+
+def _sanitize_public_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _sanitize_public_text(value)
+    if isinstance(value, list):
+        return [_sanitize_public_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_public_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): _sanitize_public_value(item)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _validate_public_text(value: str) -> None:
+    if any(
+        ord(character) < 32 and character not in _ALLOWED_CONTROL_CHARS
+        for character in value
+    ):
+        raise PublicContractError("public output contains a control character")
+
+
+def _validate_public_value(value: Any) -> None:
+    if isinstance(value, str):
+        _validate_public_text(value)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_public_value(item)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _validate_public_text(str(key))
+            _validate_public_value(item)
 
 
 def _public_status(result: dict, trace: list) -> str:

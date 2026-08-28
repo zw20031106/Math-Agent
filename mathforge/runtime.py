@@ -27,6 +27,11 @@ from mathforge.agent_runtime.protocol import LITE_PROTOCOL_SCHEMA_VERSION
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.cancellation import CancellationToken
 from mathforge.harness.debug import DebugSink, sanitized_failure_record
+from mathforge.evaluation.debug_artifact import (
+    EvaluationArtifact,
+    EvaluationArtifactSink,
+    build_evaluation_artifact,
+)
 from mathforge.harness.errors import (
     BudgetExceeded,
     ModelCallRejected,
@@ -112,6 +117,7 @@ from mathforge.output.deterministic_formatter import (
     bound_final_response,
     canonical_final_response,
 )
+from mathforge.output.verified_proof import VerifiedProofRenderer
 from mathforge.output.loop_health import (
     build_closed_loop_health,
     minimal_closed_loop_health,
@@ -285,6 +291,7 @@ class MathForgeHarness:
         config: HarnessConfig | None = None,
         *,
         debug_sink: DebugSink | None = None,
+        evaluation_sink: EvaluationArtifactSink | None = None,
         model_identity: ModelIdentity | None = None,
         trace_sink_factory: (
             Callable[
@@ -297,6 +304,7 @@ class MathForgeHarness:
         self._config = config or load_competition_config()
         self._agent_definitions = AgentRegistry.default()
         self._debug_sink = debug_sink
+        self._evaluation_sink = evaluation_sink
         self._trace_sink_factory = trace_sink_factory
         self._context_budget = ModelContextBudget(
             context_window_tokens=self._config.model_context_window_tokens,
@@ -3679,9 +3687,20 @@ class MathForgeHarness:
                         session.problem_ir.answer_type_confidence
                     ),
                 )
+            selected_decision = decision_by_id.get(candidate.candidate_id)
+            selected_closure = (
+                selected_decision.verification_closure
+                if selected_decision is not None
+                else session.verification_closures.get(candidate.candidate_id)
+            )
+            selected_backbone = ProofBackbone.from_candidate(candidate)
             deterministic_response = self._formatter.format(
                 candidate,
                 session.problem_ir,
+                proof_backbone=selected_backbone,
+                verification_closure=selected_closure,
+                evidence=session.evidence,
+                max_chars=self._config.final_response_max_chars,
             )
             if not deterministic_response.strip():
                 raise ValueError("empty formatted response")
@@ -3775,6 +3794,10 @@ class MathForgeHarness:
                 exact_answer=candidate.final_answer,
                 answer_type=candidate.answer_type,
                 response_mode=session.problem_ir.response_mode,
+                candidate=candidate,
+                proof_backbone=selected_backbone,
+                verification_closure=selected_closure,
+                evidence=session.evidence,
             )
             trace.add(
                 "final_answer_selected",
@@ -3891,16 +3914,30 @@ class MathForgeHarness:
                 selected_candidate_id = last_safe_candidate.candidate_id
                 error_code = "degraded_candidate_salvage"
                 outcome = "primary"
+                salvage_closure = session.verification_closures.get(
+                    selected_candidate_id
+                )
+                salvage_backbone = ProofBackbone.from_candidate(
+                    last_safe_candidate
+                )
                 final_response = terminalizer.safe(
                     "salvaged_candidate_response",
                     lambda: self._validated_final_response(
                         self._formatter.format(
                             last_safe_candidate,
                             session.problem_ir,
+                            proof_backbone=salvage_backbone,
+                            verification_closure=salvage_closure,
+                            evidence=session.evidence,
+                            max_chars=self._config.final_response_max_chars,
                         ),
                         exact_answer=last_safe_candidate.final_answer,
                         answer_type=last_safe_candidate.answer_type,
                         response_mode=session.problem_ir.response_mode,
+                        candidate=last_safe_candidate,
+                        proof_backbone=salvage_backbone,
+                        verification_closure=salvage_closure,
+                        evidence=session.evidence,
                     )[0],
                     last_safe_candidate.final_answer,
                 )
@@ -4350,6 +4387,56 @@ class MathForgeHarness:
                 ),
                 None,
             )
+        evaluation_artifact = terminalizer.safe(
+            "evaluation_artifact",
+            lambda: build_evaluation_artifact(
+                case_id=str(
+                    ""
+                    if public_case_id is _MISSING_METADATA_ID
+                    else public_case_id
+                ),
+                session_id=session.session_id,
+                outcome=outcome,
+                run_metrics=metrics,
+                provenance=self._run_provenance.to_dict(),
+                internal_events=trace.internal_events,
+                provider_telemetry=build_transport_summary(
+                    session.budget.model_call_records,
+                ),
+                task_graph={
+                    "selected_candidate_id": selected_candidate_id,
+                    "candidate_count": len(session.candidates),
+                },
+                candidate_provenance=session.candidates,
+                evidence=session.evidence,
+                completion={
+                    "selected_candidate_id": selected_candidate_id,
+                    "candidate_states": candidate_states,
+                },
+                failure_attribution={
+                    "error_code": error_code,
+                    "error_class": error_class,
+                    "failed_phase": failed_phase.value,
+                },
+            ),
+            EvaluationArtifact(
+                case_id=str(
+                    ""
+                    if public_case_id is _MISSING_METADATA_ID
+                    else public_case_id
+                ),
+                session_id=session.session_id,
+                outcome=str(outcome),
+                run_metrics=metrics if isinstance(metrics, dict) else {},
+            ),
+        )
+        if self._evaluation_sink is not None:
+            evaluation_sink = self._evaluation_sink
+            terminalizer.safe(
+                "evaluation_sink",
+                lambda: evaluation_sink.record(evaluation_artifact.to_dict()),
+                None,
+            )
         result = terminalizer.build_result(
             final_response=final_response,
             trace_factory=lambda: trace.build(final_response=final_response),
@@ -4367,6 +4454,9 @@ class MathForgeHarness:
             result,
             MINIMAL_FALLBACK_RESPONSE,
         )
+        # This key is intentionally internal.  ``user_agent.build_public_result``
+        # projects the result to exactly four official fields.
+        result["evaluation_artifact"] = evaluation_artifact.to_dict()
         result["_public_output_limits"] = {
             "final_response_max_chars": self._config.final_response_max_chars,
             "public_result_max_bytes": self._config.public_result_max_bytes,
@@ -7390,7 +7480,23 @@ class MathForgeHarness:
         exact_answer: str,
         answer_type: str,
         response_mode: str,
+        candidate=None,
+        proof_backbone=None,
+        verification_closure=None,
+        evidence=(),
     ):
+        if candidate is not None and response_mode == "proof_full":
+            rendered = VerifiedProofRenderer(
+                max_chars=self._config.final_response_max_chars,
+            ).render(
+                candidate,
+                proof_backbone=proof_backbone,
+                verification_closure=verification_closure,
+                evidence=evidence,
+                max_chars=self._config.final_response_max_chars,
+            )
+            if rendered.text.strip():
+                text = rendered.text
         text = canonical_final_response(
             text,
             exact_answer=exact_answer,

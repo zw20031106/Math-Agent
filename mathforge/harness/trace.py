@@ -62,6 +62,58 @@ _REQUIRED_PRIMARY_EVENTS = frozenset(
     }
 )
 
+# Lower numbers are retained first when bounded trace streams need to evict
+# optional events.  The public trace is an accuracy/debugging aid: semantic
+# plan, reasoning, verification, arbitration, and finalization information is
+# more valuable than transport activity.
+TRACE_ACCURACY_PRIORITY = {
+    # Tier 0: correctness-critical public semantics.
+    "workflow_overview": 0,
+    "solution_process": 0,
+    "problem_parsed": 0,
+    "route_planned": 0,
+    "hard_evidence_gate": 0,
+    "proof_completion_gate": 0,
+    "proof_status_finalized": 0,
+    "verification_closure_recomputed": 0,
+    "candidate_arbitrated": 0,
+    "decision_committed": 0,
+    "final_answer_selected": 0,
+    "finalization_completed": 0,
+    "run_completed": 0,
+    # Tier 1: useful supporting semantics.
+    "repair_history": 1,
+    "repair_completed": 1,
+    "repair_committed": 1,
+    "candidate_conflict_matrix": 1,
+    "peer_review_completed": 1,
+    "solver_peer_review_phase_completed": 1,
+    "skills_selected": 1,
+    "tool_feedback_completed": 1,
+    "evidence_summary": 1,
+    # Tier 2: activity/transport details are expendable first.
+    "model_activity": 2,
+    "model_transport_completed": 2,
+    "context_view_built": 2,
+    "compression_validated": 2,
+    "retrieval_completed": 2,
+}
+
+
+def trace_accuracy_priority(event: Any) -> int:
+    """Return the eviction priority for an event (lower is more important)."""
+
+    return int(TRACE_ACCURACY_PRIORITY.get(str(event), 1))
+
+
+# Short alias used by governance/tests that refer to the policy as a table.
+TRACE_PRIORITY = TRACE_ACCURACY_PRIORITY
+TRACE_PRIORITY_TIERS = {
+    "correctness": 0,
+    "supporting": 1,
+    "activity": 2,
+}
+
 
 class TraceIntegrityError(ValueError):
     pass
@@ -229,10 +281,17 @@ class TraceBuilder:
         self._renumber()
 
     def _evict_unprotected(self) -> bool:
-        for index in range(len(self._events)):
-            if self._events[index].get("event") not in PROTECTED_TRACE_EVENTS:
-                self._events.pop(index)
-                return True
+        candidates = [
+            (trace_accuracy_priority(event.get("event")), index)
+            for index, event in enumerate(self._events)
+            if event.get("event") not in PROTECTED_TRACE_EVENTS
+        ]
+        if candidates:
+            # Evict the least important tier first; ties remove the oldest
+            # optional event while preserving newer context.
+            _, index = max(candidates, key=lambda item: (item[0], -item[1]))
+            self._events.pop(index)
+            return True
         return False
 
     def _renumber(self) -> None:

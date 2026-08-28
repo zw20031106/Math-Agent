@@ -50,6 +50,9 @@ from mathforge.harness.model_policy import (  # noqa: E402
 from mathforge.harness.trace import TraceBuilder  # noqa: E402
 from mathforge.harness.cancellation import CancellationToken  # noqa: E402
 from mathforge.harness.trace_journal import TraceJournalFactory  # noqa: E402
+from mathforge.evaluation.debug_artifact import (  # noqa: E402
+    JsonlEvaluationArtifactSink,
+)
 from mathforge.harness.transport import (  # noqa: E402
     ObservedModelResponse,
     RETRYABLE_TRANSPORT_FAILURE_CODES,
@@ -970,6 +973,11 @@ def main(argv: list[str] | None = None) -> int:
             client,
             config,
             model_identity=model_identity,
+            evaluation_sink=JsonlEvaluationArtifactSink(
+                args.output_dir
+                / ".evaluation-artifacts"
+                / f"{manifest.attempt_id}.evaluation.jsonl"
+            ),
             trace_sink_factory=TraceJournalFactory(
                 args.output_dir / ".trace-journal",
                 attempt_id=manifest.attempt_id,

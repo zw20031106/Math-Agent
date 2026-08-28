@@ -27,10 +27,48 @@ _LATEX_ANSWER_TYPES = frozenset(
 )
 _SIMPLE_MATH_TEXT = re.compile(r"^[\s0-9A-Za-z.+\-*/=<>(),\[\]{}^_]+$")
 
+# The current official scorer consumes the canonical answer from
+# ``final_response``.  Keep this decision explicit so a future contract change
+# cannot silently alter worked-solution output semantics.
+WORKED_SOLUTION_OUTPUT_STRATEGY = "exact_answer"
+
+
+def worked_solution_output_strategy(*, scorer_contract: str = "answer_only") -> str:
+    """Return the selected public policy for ``worked_solution``.
+
+    ``answer_only`` is the verified competition contract used by this
+    project.  The alternate value is exposed as a decision point, but is not
+    enabled without an explicit scorer contract.
+    """
+
+    normalized = str(scorer_contract or "answer_only").strip().casefold()
+    if normalized in {"public_process", "process_required", "worked_solution"}:
+        return "verified_derivation_and_exact_answer"
+    return WORKED_SOLUTION_OUTPUT_STRATEGY
+
 
 class DeterministicFormatter:
-    def format(self, candidate: CandidateSolution, problem: ProblemIR) -> str:
+    def format(
+        self,
+        candidate: CandidateSolution,
+        problem: ProblemIR,
+        *,
+        proof_backbone=None,
+        verification_closure=None,
+        closure=None,
+        verified_claim_ids=(),
+        evidence=(),
+        max_chars: int | None = None,
+    ) -> str:
         answer = candidate.final_answer.strip()
+        if problem.response_mode == ResponseMode.WORKED_SOLUTION.value:
+            if worked_solution_output_strategy() == WORKED_SOLUTION_OUTPUT_STRATEGY:
+                return canonical_final_response(
+                    "",
+                    exact_answer=answer,
+                    answer_type=problem.answer_type,
+                    response_mode=problem.response_mode,
+                )
         solution = candidate.solution_text.strip() or "\n".join(
             candidate.public_solution_steps
         ).strip()
@@ -41,6 +79,19 @@ class DeterministicFormatter:
                 answer_type=problem.answer_type,
                 response_mode=problem.response_mode,
             )
+        # Import lazily to keep the formatter usable by the renderer itself.
+        from mathforge.output.verified_proof import VerifiedProofRenderer
+
+        rendered = VerifiedProofRenderer(max_chars=max_chars).render(
+            candidate,
+            proof_backbone=proof_backbone,
+            verification_closure=verification_closure or closure,
+            verified_claim_ids=verified_claim_ids,
+            evidence=evidence,
+            max_chars=max_chars,
+        )
+        if rendered.text.strip():
+            return rendered.text
         return canonical_final_response(
             solution,
             exact_answer=answer,

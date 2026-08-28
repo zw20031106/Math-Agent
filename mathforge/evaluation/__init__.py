@@ -40,6 +40,15 @@ from mathforge.evaluation.evidence_registry import (
     baseline_registration_errors,
     can_register_baseline as can_register_registry_baseline,
 )
+from mathforge.evaluation.debug_artifact import (
+    EVALUATION_ARTIFACT_SCHEMA_VERSION,
+    EVALUATION_ARTIFACT_SECTIONS,
+    EvaluationArtifact,
+    EvaluationArtifactSink,
+    InMemoryEvaluationArtifactSink,
+    JsonlEvaluationArtifactSink,
+    build_evaluation_artifact,
+)
 
 __all__ = [
     "PROMPT_CONTRACT_PROBE_CASES",
@@ -73,6 +82,13 @@ __all__ = [
     "validate_failure_attributions",
     "baseline_registration_errors",
     "can_register_registry_baseline",
+    "EVALUATION_ARTIFACT_SCHEMA_VERSION",
+    "EVALUATION_ARTIFACT_SECTIONS",
+    "EvaluationArtifact",
+    "EvaluationArtifactSink",
+    "InMemoryEvaluationArtifactSink",
+    "JsonlEvaluationArtifactSink",
+    "build_evaluation_artifact",
 ]
 from mathforge.evaluation.production_preflight import run_production_preflight
 

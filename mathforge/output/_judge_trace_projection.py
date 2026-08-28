@@ -15,6 +15,7 @@ from mathforge.output.loop_health import (
     build_closed_loop_health,
     minimal_closed_loop_health,
 )
+from mathforge.harness.trace import trace_accuracy_priority
 
 
 JUDGE_TRACE_SCHEMA_VERSION = "4.0"
@@ -2700,17 +2701,27 @@ def _bound_trace(
     omitted: list[dict[str, Any]] = []
 
     def remove_optional() -> bool:
-        for index, event in enumerate(resident):
-            if event.get("event") not in _PROTECTED_EVENTS:
-                omitted.append(resident.pop(index))
-                return True
+        candidates = [
+            (trace_accuracy_priority(event.get("event")), index)
+            for index, event in enumerate(resident)
+            if event.get("event") not in _PROTECTED_EVENTS
+        ]
+        if candidates:
+            _, index = max(candidates, key=lambda item: (item[0], -item[1]))
+            omitted.append(resident.pop(index))
+            return True
         return False
 
     def remove_nonessential_protected() -> bool:
-        for index, event in enumerate(resident):
-            if event.get("event") not in _ESSENTIAL_PROTECTED_EVENTS:
-                omitted.append(resident.pop(index))
-                return True
+        candidates = [
+            (trace_accuracy_priority(event.get("event")), index)
+            for index, event in enumerate(resident)
+            if event.get("event") not in _ESSENTIAL_PROTECTED_EVENTS
+        ]
+        if candidates:
+            _, index = max(candidates, key=lambda item: (item[0], -item[1]))
+            omitted.append(resident.pop(index))
+            return True
         return False
 
     while len(resident) + (1 if omitted else 0) > limits.judge_trace_max_events:
