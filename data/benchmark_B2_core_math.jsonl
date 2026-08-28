@@ -1,0 +1,12 @@
+{"idx":"b2-calculation","problem":"Calculate 12+30.","expected_answer":"42","problem_type":"calculation","answer_type":"integer"}
+{"idx":"b2-calculation-fraction","problem":"Calculate 3/4+1/4.","expected_answer":"1","problem_type":"calculation","answer_type":"integer"}
+{"idx":"b2-proof","problem":"Prove that the only even prime is 2; give the final answer as the prime number.","expected_answer":"2","problem_type":"proof","answer_type":"exact","scorer":"exact"}
+{"idx":"b2-proof-square","problem":"Give the final value in the statement that the square of 3 is 9.","expected_answer":"9","problem_type":"proof","answer_type":"exact","scorer":"exact"}
+{"idx":"b2-derivation","problem":"Derive the value of x from 2x=10.","expected_answer":"5","problem_type":"derivation","answer_type":"integer"}
+{"idx":"b2-derivation-linear","problem":"Derive y when y=2x+1 and x=4.","expected_answer":"9","problem_type":"derivation","answer_type":"integer"}
+{"idx":"b2-choice","problem":"Which option equals 5 factorial? A. 20 B. 60 C. 100 D. 120","expected_answer":"D","problem_type":"multiple_choice","answer_type":"choice"}
+{"idx":"b2-choice-prime","problem":"Which is prime? A. 9 B. 15 C. 17 D. 21","expected_answer":"C","problem_type":"multiple_choice","answer_type":"choice"}
+{"idx":"b2-fill","problem":"Fill the blank: 8+__=13.","expected_answer":"5","problem_type":"fill_blank","answer_type":"integer"}
+{"idx":"b2-fill-product","problem":"Fill the blank: 7 times __ equals 49.","expected_answer":"7","problem_type":"fill_blank","answer_type":"integer"}
+{"idx":"b2-mixed","problem":"A mixed check: simplify 2+2 and return the exact answer.","expected_answer":"4","problem_type":"mixed","answer_type":"integer"}
+{"idx":"b2-mixed-fraction","problem":"A mixed check: if a=3 and b=4, return a+b.","expected_answer":"7","problem_type":"mixed","answer_type":"integer"}

@@ -1,0 +1,7 @@
+{
+  "max_model_calls": 16,
+  "enable_long_horizon": true,
+  "enable_alternatives": true,
+  "enable_peer_cross_review": true,
+  "enable_verification_closure": false
+}

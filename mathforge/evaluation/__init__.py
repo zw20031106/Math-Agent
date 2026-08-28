@@ -49,6 +49,24 @@ from mathforge.evaluation.debug_artifact import (
     JsonlEvaluationArtifactSink,
     build_evaluation_artifact,
 )
+from mathforge.evaluation.e8 import (
+    ABLATION_ARMS,
+    AblationArmSpec,
+    AblationValidation,
+    BENCHMARK_SUITES,
+    BenchmarkSuiteSpec,
+    BenchmarkSuiteValidation,
+    E8_METRIC_NAMES,
+    E8_SCHEMA_VERSION,
+    FreezeGateResult,
+    ablation_arm_specs,
+    evaluate_freeze_gate,
+    load_benchmark_suite,
+    summarize_ablation_arms,
+    summarize_e8,
+    validate_benchmark_suite,
+    validate_paired_ablation,
+)
 
 __all__ = [
     "PROMPT_CONTRACT_PROBE_CASES",
@@ -89,6 +107,22 @@ __all__ = [
     "InMemoryEvaluationArtifactSink",
     "JsonlEvaluationArtifactSink",
     "build_evaluation_artifact",
+    "ABLATION_ARMS",
+    "AblationArmSpec",
+    "AblationValidation",
+    "BENCHMARK_SUITES",
+    "BenchmarkSuiteSpec",
+    "BenchmarkSuiteValidation",
+    "E8_METRIC_NAMES",
+    "E8_SCHEMA_VERSION",
+    "FreezeGateResult",
+    "ablation_arm_specs",
+    "evaluate_freeze_gate",
+    "load_benchmark_suite",
+    "summarize_ablation_arms",
+    "summarize_e8",
+    "validate_benchmark_suite",
+    "validate_paired_ablation",
 ]
 from mathforge.evaluation.production_preflight import run_production_preflight
 

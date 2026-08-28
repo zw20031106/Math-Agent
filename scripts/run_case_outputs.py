@@ -894,6 +894,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="validate existing files, skip success, and rerun failed/timeout",
     )
+    parser.add_argument(
+        "--allow-invalid-expected",
+        action="store_true",
+        help=(
+            "run cases whose expected answers cannot be parsed by the automatic "
+            "scorer; those cases remain explicitly unscored"
+        ),
+    )
     return parser
 
 
@@ -906,7 +914,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--max-cases must be positive")
 
     cases = load_jsonl(args.input)
-    preflight_benchmark_cases(cases)
+    preflight_benchmark_cases(
+        cases,
+        allow_invalid_expected=args.allow_invalid_expected,
+        minimum_auto_score_coverage=(
+            0.0 if args.allow_invalid_expected else 0.95
+        ),
+    )
     if args.stop_after_case is not None:
         _validate_identifier(args.stop_after_case)
         if args.stop_after_case not in {case.idx for case in cases}:

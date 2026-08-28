@@ -1,0 +1,7 @@
+{
+  "enable_skills": true,
+  "enable_tools": true,
+  "enable_evidence": true,
+  "enable_proof_obligations": true,
+  "enable_verifier": true
+}

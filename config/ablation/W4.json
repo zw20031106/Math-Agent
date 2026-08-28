@@ -1,0 +1,4 @@
+{
+  "require_scheduler_binding": true,
+  "enable_long_horizon": true
+}

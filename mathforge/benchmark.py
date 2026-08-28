@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
 import math
+from pathlib import Path
 import random
 from threading import Event, Lock
 from time import perf_counter
@@ -41,6 +42,7 @@ class BenchmarkPreflight:
     invalid_expected_count: int
     auto_score_coverage: float
     invalid_reasons: dict[str, str]
+    relaxed_invalid_expected: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +53,7 @@ class BenchmarkPreflight:
             "invalid_expected_count": self.invalid_expected_count,
             "auto_score_coverage": self.auto_score_coverage,
             "invalid_reasons": dict(self.invalid_reasons),
+            "relaxed_invalid_expected": self.relaxed_invalid_expected,
         }
 
 
@@ -124,44 +127,75 @@ PollutionProbe = Callable[[str, tuple[str, ...]], Mapping[str, Any]]
 
 
 def load_jsonl(path) -> list[BenchmarkCase]:
-    cases: list[BenchmarkCase] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle):
+    """Load JSONL and the equivalent JSON-array benchmark representation.
+
+    The official boundary export is a UTF-8 JSON array while older benchmark
+    fixtures are JSONL.  Keeping the normalisation here gives both runners the
+    same case identity, answer and scoring semantics without rewriting the
+    supplied dataset.
+    """
+    path = path if isinstance(path, Path) else Path(path)
+    text = path.read_text(encoding="utf-8")
+    items: list[tuple[int, Any]] = []
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        for line_number, line in enumerate(text.splitlines()):
             if not line.strip():
                 continue
-            item = json.loads(line)
-            has_expected = "expected_answer" in item
-            has_answer = "answer" in item
-            if (
-                has_expected
-                and has_answer
-                and str(item["expected_answer"]).strip()
-                != str(item["answer"]).strip()
-            ):
-                raise ValueError(
-                    "conflicting expected_answer and answer "
-                    f"at JSONL line {line_number + 1}"
-                )
-            expected = (
-                item["expected_answer"]
-                if has_expected
-                else item["answer"]
-                if has_answer
-                else None
+            items.append((line_number, json.loads(line)))
+    else:
+        if isinstance(decoded, list):
+            items = list(enumerate(decoded))
+        elif isinstance(decoded, dict) and isinstance(decoded.get("cases"), list):
+            items = list(enumerate(decoded["cases"]))
+        elif isinstance(decoded, dict):
+            items = [(0, decoded)]
+        else:
+            raise ValueError("benchmark input must be JSONL or a JSON array/object")
+
+    cases: list[BenchmarkCase] = []
+    for line_number, item in items:
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"benchmark case at line {line_number + 1} must be an object"
             )
-            cases.append(
-                BenchmarkCase(
-                    idx=str(item.get("idx", line_number)),
-                    problem=str(item["problem"]),
-                    expected_answer=(
-                        str(expected) if expected is not None else None
-                    ),
-                    subject=str(item.get("subject", "unknown")),
-                    problem_type=str(item.get("problem_type", "unknown")),
-                    answer_type=(str(item["answer_type"]) if item.get("answer_type") else None),
-                    scorer=(str(item["scorer"]) if item.get("scorer") else None),
-                )
+        has_expected = "expected_answer" in item
+        has_answer = "answer" in item
+        if (
+            has_expected
+            and has_answer
+            and str(item["expected_answer"]).strip()
+            != str(item["answer"]).strip()
+        ):
+            raise ValueError(
+                "conflicting expected_answer and answer "
+                f"at JSONL line {line_number + 1}"
             )
+        expected = (
+            item["expected_answer"]
+            if has_expected
+            else item["answer"]
+            if has_answer
+            else None
+        )
+        cases.append(
+            BenchmarkCase(
+                idx=str(item.get("idx", item.get("id", line_number))),
+                problem=str(item["problem"]),
+                expected_answer=(
+                    str(expected) if expected is not None else None
+                ),
+                subject=str(item.get("subject", "unknown")),
+                problem_type=str(item.get("problem_type", "unknown")),
+                answer_type=(
+                    str(item["answer_type"])
+                    if item.get("answer_type")
+                    else None
+                ),
+                scorer=(str(item["scorer"]) if item.get("scorer") else None),
+            )
+        )
     return cases
 
 
@@ -170,6 +204,7 @@ def preflight_benchmark_cases(
     *,
     require_expected: bool = True,
     minimum_auto_score_coverage: float = 0.95,
+    allow_invalid_expected: bool = False,
 ) -> BenchmarkPreflight:
     if not 0.0 <= minimum_auto_score_coverage <= 1.0:
         raise ValueError("minimum auto-score coverage must be in [0, 1]")
@@ -208,8 +243,9 @@ def preflight_benchmark_cases(
         invalid_expected_count=len(invalid),
         auto_score_coverage=coverage,
         invalid_reasons=invalid,
+        relaxed_invalid_expected=allow_invalid_expected,
     )
-    if invalid:
+    if invalid and not allow_invalid_expected:
         details = ", ".join(
             f"{case_id}:{reason}"
             for case_id, reason in sorted(invalid.items())

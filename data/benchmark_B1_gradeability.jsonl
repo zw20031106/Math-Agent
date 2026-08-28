@@ -1,0 +1,8 @@
+{"idx":"b1-01","problem":"What is 1+1?","expected_answer":"2","problem_type":"protocol_canary","answer_type":"integer"}
+{"idx":"b1-02","problem":"What is 2*3?","expected_answer":"6","problem_type":"protocol_canary","answer_type":"integer"}
+{"idx":"b1-03","problem":"Solve x+4=9 for x.","expected_answer":"5","problem_type":"protocol_canary","answer_type":"integer"}
+{"idx":"b1-04","problem":"Choose the value of 3^2: A. 6 B. 9 C. 12 D. 18","expected_answer":"B","problem_type":"protocol_canary","answer_type":"choice"}
+{"idx":"b1-05","problem":"What is 7-10?","expected_answer":"-3","problem_type":"protocol_canary","answer_type":"integer"}
+{"idx":"b1-06","problem":"What is 1/2+1/2?","expected_answer":"1","problem_type":"protocol_canary","answer_type":"integer"}
+{"idx":"b1-07","problem":"Evaluate the expression 4^2.","expected_answer":"16","problem_type":"protocol_canary","answer_type":"integer"}
+{"idx":"b1-08","problem":"If y=3x and x=2, find y.","expected_answer":"6","problem_type":"protocol_canary","answer_type":"integer"}

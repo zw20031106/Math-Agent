@@ -46,6 +46,7 @@ def build_benchmark_metadata(
     config_path: Path,
     *,
     requested_model: str = EXACT_INTERN_MODEL,
+    prompt_variant: str | None = None,
 ) -> dict:
     model_identity = exact_model_identity(
         requested_model,
@@ -76,7 +77,7 @@ def build_benchmark_metadata(
         ),
         platform=platform_module.platform(),
     )
-    return {
+    metadata = {
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
         "dataset_sha256": dataset_sha,
         "config_sha256": config.fingerprint,
@@ -95,6 +96,11 @@ def build_benchmark_metadata(
         **model_identity.to_dict(),
         "run_provenance": provenance.to_dict(),
     }
+    if prompt_variant is not None:
+        if prompt_variant not in {"P0", "P1"}:
+            raise ValueError("prompt_variant must be P0, P1, or None")
+        metadata["prompt_variant"] = prompt_variant
+    return metadata
 
 
 def main() -> int:
@@ -106,6 +112,11 @@ def main() -> int:
     parser.add_argument("--model", default=EXACT_INTERN_MODEL)
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--prompt-variant",
+        choices=("P0", "P1"),
+        help="E8 Prompt A/B variant; omitted uses production protocol selection",
+    )
     args = parser.parse_args()
 
     model_identity = exact_model_identity(
@@ -120,6 +131,7 @@ def main() -> int:
         client,
         config,
         model_identity=model_identity,
+        prompt_variant=args.prompt_variant,
     )
     cases = load_jsonl(args.input)
     preflight = preflight_benchmark_cases(cases)
@@ -135,6 +147,7 @@ def main() -> int:
             args.input,
             args.config,
             requested_model=args.model,
+            prompt_variant=args.prompt_variant,
         ),
         "config": args.config.as_posix(),
         "preflight": preflight.to_dict(),

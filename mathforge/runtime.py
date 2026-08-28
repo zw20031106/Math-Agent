@@ -23,7 +23,10 @@ from mathforge.agent_runtime.session_call_budget import SessionCallBudget
 from mathforge.agent_runtime.definitions import AgentRegistry
 from mathforge.agent_runtime.runtime import SessionAgentRuntime
 from mathforge.agent_runtime.autonomy import AgentProgressTracker
-from mathforge.agent_runtime.protocol import LITE_PROTOCOL_SCHEMA_VERSION
+from mathforge.agent_runtime.protocol import (
+    LITE_PROTOCOL_SCHEMA_VERSION,
+    PROTOCOL_SCHEMA_VERSION,
+)
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.cancellation import CancellationToken
 from mathforge.harness.debug import DebugSink, sanitized_failure_record
@@ -293,6 +296,7 @@ class MathForgeHarness:
         debug_sink: DebugSink | None = None,
         evaluation_sink: EvaluationArtifactSink | None = None,
         model_identity: ModelIdentity | None = None,
+        prompt_variant: str | None = None,
         trace_sink_factory: (
             Callable[
                 [str, dict[str, Any]],
@@ -302,6 +306,9 @@ class MathForgeHarness:
         ) = None,
     ) -> None:
         self._config = config or load_competition_config()
+        if prompt_variant not in {None, "P0", "P1"}:
+            raise ValueError("prompt_variant must be P0, P1, or None")
+        self._prompt_variant = prompt_variant
         self._agent_definitions = AgentRegistry.default()
         self._debug_sink = debug_sink
         self._evaluation_sink = evaluation_sink
@@ -450,6 +457,7 @@ class MathForgeHarness:
                 self._frozen_lemma_disabled_reason
             ),
         )
+
         self._verifier_agent = VerifierSkepticAgent(self._provider, self._contracts)
         self._verification_closure_agent = VerificationClosureAgent(
             self._provider,
@@ -491,6 +499,24 @@ class MathForgeHarness:
             **identity.to_dict(),
             "provenance_hash": self._run_provenance.fingerprint,
         }
+
+    def _solver_protocol_variant(self, *, direct_candidate_mode: bool) -> str:
+        """Select the protocol used by benchmark-only prompt A/B runs.
+
+        Production keeps the historical behaviour: the simple direct path is
+        lite and the normal solver path is AgentTurn 1.0.  E8 can explicitly
+        request P0 or P1 without adding an environment override or changing
+        the public result contract.
+        """
+        if self._prompt_variant == "P1":
+            return LITE_PROTOCOL_SCHEMA_VERSION
+        if self._prompt_variant == "P0":
+            return PROTOCOL_SCHEMA_VERSION
+        return (
+            LITE_PROTOCOL_SCHEMA_VERSION
+            if direct_candidate_mode
+            else PROTOCOL_SCHEMA_VERSION
+        )
 
     def _record_raw_response(self, case_id: str, response: str) -> None:
         normalized_id = str(case_id).strip()
@@ -4938,7 +4964,9 @@ class MathForgeHarness:
                 candidate_count=len(branches),
                 progress_turns=0,
                 progress_artifact_created=False,
-                protocol_variant=LITE_PROTOCOL_SCHEMA_VERSION,
+                protocol_variant=self._solver_protocol_variant(
+                    direct_candidate_mode=True
+                ),
             )
         while any(branch.status == "exploring" for branch in branches):
             cycle_advanced = False
@@ -5592,10 +5620,8 @@ class MathForgeHarness:
                             else max(self._config.primary_temperature, 0.35)
                         ),
                         max_tokens=self._config.primary_max_tokens,
-                        protocol_variant=(
-                            LITE_PROTOCOL_SCHEMA_VERSION
-                            if direct_candidate_mode
-                            else "1.0"
+                        protocol_variant=self._solver_protocol_variant(
+                            direct_candidate_mode=direct_candidate_mode
                         ),
                     )
                 except ModelTransportError as error:
@@ -5616,10 +5642,8 @@ class MathForgeHarness:
                         temperature=0.0,
                         max_tokens=8192,
                         compact=True,
-                        protocol_variant=(
-                            LITE_PROTOCOL_SCHEMA_VERSION
-                            if direct_candidate_mode
-                            else "1.0"
+                        protocol_variant=self._solver_protocol_variant(
+                            direct_candidate_mode=direct_candidate_mode
                         ),
                     )
                 if turn.partial and turn.candidate is None:
@@ -5638,10 +5662,8 @@ class MathForgeHarness:
                         temperature=0.0,
                         max_tokens=self._config.primary_max_tokens,
                         compact=True,
-                        protocol_variant=(
-                            LITE_PROTOCOL_SCHEMA_VERSION
-                            if direct_candidate_mode
-                            else "1.0"
+                        protocol_variant=self._solver_protocol_variant(
+                            direct_candidate_mode=direct_candidate_mode
                         ),
                     )
                 candidate = (
@@ -5924,10 +5946,8 @@ class MathForgeHarness:
                     for branch in branches
                 },
                 "simple_direct_candidate": direct_candidate_mode,
-                "protocol_variant": (
-                    LITE_PROTOCOL_SCHEMA_VERSION
-                    if direct_candidate_mode
-                    else "1.0"
+                "protocol_variant": self._solver_protocol_variant(
+                    direct_candidate_mode=direct_candidate_mode
                 ),
             },
         )

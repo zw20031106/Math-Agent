@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Implemented E8 Benchmark / Ablation / Release Freeze foundations. Benchmark
+  loading now accepts the official JSON-array export as well as JSONL, and the
+  repository includes validated B1 gradeability, B2 core-math, and B3 failure
+  challenge suites. Added explicit W0–W8, S0–S3, V0–V3 and P0/P1 arm
+  registries/config overlays, interleaved paired-run validation with provider
+  health and repetition gates, a complete E8 metric vocabulary, and a
+  fail-closed freeze-gate CLI. Prompt A/B runs can explicitly select the
+  AgentTurn 1.0 or 1.1-lite protocol through the benchmark harness; no public
+  JSON fields or release status are changed automatically. Added the explicit
+  invalid-expected diagnostic mode required by the supplied 112-case boundary
+  export and a read-only full-run analyzer that joins manifest metrics with
+  revalidated public outputs; invalid scoring coverage and missing paired or
+  human evidence remain visible blockers rather than being treated as passes.
 - Completed E7 Public JSON / Trace / Renderer work. The official result now has an
   explicit four-field validator and control-character guard, while runtime
   diagnostics are emitted to a separate Evaluation Artifact sink. The current

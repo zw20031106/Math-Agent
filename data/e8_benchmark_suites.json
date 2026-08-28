@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "purpose": "E8 benchmark suite registry",
+  "suites": {
+    "B1": {
+      "name": "Gradeability / Protocol Canary",
+      "path": "benchmark_B1_gradeability.jsonl",
+      "case_count": 8
+    },
+    "B2": {
+      "name": "Core Math Set",
+      "path": "benchmark_B2_core_math.jsonl",
+      "case_count": 12
+    },
+    "B3": {
+      "name": "Failure Challenge Set",
+      "path": "benchmark_B3_failure_challenge.jsonl",
+      "case_count": 9
+    }
+  },
+  "requirements": {
+    "B1": ["schema", "truncation", "public_output"],
+    "B2": ["calculation", "proof", "derivation", "multiple_choice", "fill_blank", "mixed"],
+    "B3": ["truncation", "ambiguity", "wrong_lemma", "counterexample", "repair", "rollback", "final_audit", "long_horizon"]
+  }
+}

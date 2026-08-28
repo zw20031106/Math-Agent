@@ -1,0 +1,9 @@
+{"idx":"b3-truncation","problem":"A long proof response may be truncated; return the exact safe answer 1.","expected_answer":"1","problem_type":"failure truncation","answer_type":"integer"}
+{"idx":"b3-ambiguity","problem":"An ambiguous statement has two interpretations; resolve it conservatively and return 2.","expected_answer":"2","problem_type":"failure ambiguity","answer_type":"integer"}
+{"idx":"b3-wrong-lemma","problem":"A proposed wrong lemma must be rejected; the exact answer is 3.","expected_answer":"3","problem_type":"failure wrong_lemma","answer_type":"integer"}
+{"idx":"b3-counterexample","problem":"A counterexample challenge: return the exact answer 4.","expected_answer":"4","problem_type":"failure counterexample","answer_type":"integer"}
+{"idx":"b3-repair","problem":"A local repair challenge: return the exact answer 5.","expected_answer":"5","problem_type":"failure repair","answer_type":"integer"}
+{"idx":"b3-rollback","problem":"A repair rollback challenge: return the exact answer 6.","expected_answer":"6","problem_type":"failure rollback","answer_type":"integer"}
+{"idx":"b3-audit","problem":"A final audit challenge: return the exact answer 7.","expected_answer":"7","problem_type":"failure final_audit","answer_type":"integer"}
+{"idx":"b3-long","problem":"A long horizon challenge: return the exact answer 8.","expected_answer":"8","problem_type":"failure long_horizon","answer_type":"integer"}
+{"idx":"b3-domain-tool","problem":"A domain and tool boundary challenge: return the exact answer 9.","expected_answer":"9","problem_type":"failure domain_tool_boundary","answer_type":"integer"}

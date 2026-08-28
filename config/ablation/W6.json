@@ -1,0 +1,13 @@
+{
+  "max_model_calls": 16,
+  "enable_alternatives": true,
+  "enable_peer_cross_review": true,
+  "enable_verifier": true,
+  "enable_repair": true,
+  "enable_verification_closure": true,
+  "enable_final_audit": true,
+  "enable_memory": true,
+  "enable_evidence": true,
+  "enable_proof_obligations": true,
+  "enable_tools": true
+}
