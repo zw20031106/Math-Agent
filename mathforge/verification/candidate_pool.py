@@ -54,7 +54,11 @@ class MethodSignature:
 
     @classmethod
     def from_candidate(cls, candidate: CandidateSolution) -> "MethodSignature":
-        method_family = candidate.planned_method_family or candidate.method
+        method_family = (
+            candidate.method_family
+            or candidate.planned_method_family
+            or candidate.method
+        )
         step_kinds = [step.kind for step in candidate.method_steps]
         claim_kinds = [claim.claim_kind for claim in candidate.claims]
         representation = _normalized(
@@ -159,6 +163,11 @@ class CandidatePoolEntry:
     model_independence: bool = True
     lemma_independence: bool = True
     correlated_corroboration: bool = False
+    private_context_hash: str = ""
+    proof_backbone_hash: str = ""
+    method_family: str = ""
+    strict_cognitive_independence: bool = True
+    verified_lemma_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.status not in _CANDIDATE_STATES:
@@ -178,6 +187,7 @@ class CandidatePoolEntry:
             "conceded_finding_ids",
             "lemma_ids",
             "tool_evidence_refs",
+            "verified_lemma_ids",
         ):
             payload[name] = list(payload[name])
         return payload
@@ -202,6 +212,25 @@ class CandidatePool:
         if candidate.candidate_id in self._entries:
             raise ValueError("candidate version is already registered")
         provenance = dict(provenance or {})
+        # Keep the public candidate artifact and the pool entry in sync.  A
+        # repair or later arbitration pass must not lose the provenance that
+        # was used to establish independence.
+        for name in (
+            "method_family",
+            "shared_context_hash",
+            "private_context_hash",
+            "skill_set_hash",
+            "proof_backbone_hash",
+            "model_identity",
+            "prompt_hash",
+            "branch_id",
+            "branch_context_hash",
+        ):
+            value = str(provenance.get(name, getattr(candidate, name, "")) or "")
+            if value and not getattr(candidate, name, ""):
+                setattr(candidate, name, value)
+        if not candidate.lemma_ids and provenance.get("lemma_ids"):
+            candidate.lemma_ids = [str(item) for item in provenance["lemma_ids"]]
         signature = MethodSignature.from_candidate(candidate)
         assessment = self._assess(
             candidate,
@@ -251,6 +280,20 @@ class CandidatePool:
             model_independence=assessment.model_independence,
             lemma_independence=assessment.lemma_independence,
             correlated_corroboration=assessment.correlated_corroboration,
+            private_context_hash=str(provenance.get("private_context_hash", "")),
+            proof_backbone_hash=str(provenance.get("proof_backbone_hash", "")),
+            method_family=str(
+                provenance.get(
+                    "method_family",
+                    candidate.method_family or candidate.planned_method_family or candidate.method,
+                )
+            ),
+            strict_cognitive_independence=bool(
+                provenance.get("strict_cognitive_independence", True)
+            ),
+            verified_lemma_ids=tuple(
+                str(item) for item in provenance.get("verified_lemma_ids", ())
+            ),
         )
         self._entries[candidate.candidate_id] = entry
         self._candidates[candidate.candidate_id] = deepcopy(candidate)
@@ -309,13 +352,21 @@ class CandidatePool:
                 author_agent_id != other.author_agent_id
                 and source_turn_id != other.source_turn_id
             )
+            # E6 treats the Host-declared method family as the key method
+            # boundary.  Similar claim topology alone must not erase a real
+            # method change; proof-backbone/lemma/context checks below remain
+            # independent correlation gates.
             method_independence = (
                 signature.method_family != other.method_signature.method_family
-                and structural_same < 3
             )
             shared_context_hash = str(provenance.get("shared_context_hash", ""))
             branch_context_hash = str(provenance.get("branch_context_hash", ""))
-            if branch_context_hash and other.branch_context_hash:
+            private_context_hash = str(provenance.get("private_context_hash", ""))
+            if private_context_hash and other.private_context_hash:
+                context_independence = (
+                    private_context_hash != other.private_context_hash
+                )
+            elif branch_context_hash and other.branch_context_hash:
                 context_independence = (
                     branch_context_hash != other.branch_context_hash
                 )
@@ -352,14 +403,21 @@ class CandidatePool:
             if not skill_independence:
                 reasons.append("same_skill_set_and_method")
             model_identity = str(provenance.get("model_identity", ""))
-            model_independence = bool(
-                model_identity
-                and other.model_identity
-                and (
-                    model_identity != other.model_identity
-                    or prompt_independence
-                    or context_independence
+            # Different prompts, skills or branches do not create independent
+            # model evidence when the underlying model identity is the same
+            # (or cannot be observed).  They establish method diversity only.
+            strict_cognitive = bool(
+                provenance.get("strict_cognitive_independence", True)
+                and getattr(other, "strict_cognitive_independence", True)
+            )
+            model_independence = (
+                bool(
+                    model_identity
+                    and other.model_identity
+                    and model_identity != other.model_identity
                 )
+                if strict_cognitive
+                else True
             )
             if not model_independence:
                 reasons.append(
@@ -367,14 +425,25 @@ class CandidatePool:
                     if not model_identity or not other.model_identity
                     else "same_model_same_execution_context"
                 )
-            lemma_ids = {
-                str(item) for item in provenance.get("lemma_ids", ())
+            lemma_ids = {str(item) for item in provenance.get("lemma_ids", ())}
+            shared_lemmas = lemma_ids.intersection(other.lemma_ids)
+            verified_lemmas = {
+                str(item) for item in provenance.get("verified_lemma_ids", ())
             }
-            lemma_independence = not (
-                lemma_ids
-                and set(other.lemma_ids)
-                and lemma_ids == set(other.lemma_ids)
+            other_verified_lemmas = {str(item) for item in other.verified_lemma_ids}
+            lemma_independence = not bool(
+                shared_lemmas
+                and not (shared_lemmas <= (verified_lemmas & other_verified_lemmas))
             )
+            proof_backbone_hash = str(provenance.get("proof_backbone_hash", ""))
+            if strict_cognitive and (
+                proof_backbone_hash
+                and proof_backbone_hash == other.proof_backbone_hash
+            ):
+                lemma_independence = False
+                reasons.append("same_unverified_proof_backbone")
+            if not lemma_independence and "same_lemma_disclosure" not in reasons:
+                reasons.append("shared_unverified_core_lemma")
             if not lemma_independence:
                 reasons.append("same_lemma_disclosure")
             correlated_corroboration = bool(

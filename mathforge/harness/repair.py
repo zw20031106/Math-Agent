@@ -563,6 +563,18 @@ class ClaimRepairService:
             method_steps=list(original.method_steps),
             source=CandidateSource.LLM_REPAIR.value,
             parse_tier=original.parse_tier,
+            degraded=original.degraded,
+            assurance=original.assurance,
+            method_family=original.method_family,
+            shared_context_hash=original.shared_context_hash,
+            private_context_hash=original.private_context_hash,
+            skill_set_hash=original.skill_set_hash,
+            lemma_ids=list(original.lemma_ids),
+            proof_backbone_hash=original.proof_backbone_hash,
+            model_identity=original.model_identity,
+            prompt_hash=original.prompt_hash,
+            branch_id=original.branch_id,
+            branch_context_hash=original.branch_context_hash,
         )
         proposed.validate()
         return proposed, changed

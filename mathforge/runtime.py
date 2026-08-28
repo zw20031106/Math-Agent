@@ -160,6 +160,12 @@ from mathforge.verification.review_repair_audit_v2 import (
     build_audit_requirements,
     decide_bidirectional_review,
 )
+from mathforge.verification.e6 import (
+    AtomicRepairClosure,
+    CompletionPolicy,
+    assess_answer_consistency,
+    final_audit_coverage,
+)
 from mathforge.runtime_flows import (
     AgentEventProjector,
     FinalProofStatusService,
@@ -2657,14 +2663,40 @@ class MathForgeHarness:
                 ),
                 maximum_queue_seconds=session.budget.model_queue_budget_seconds,
             )
+            atomic_repair_closure = AtomicRepairClosure.admit(
+                repair_p95_seconds=stage_p95_seconds("repair"),
+                reverify_p95_seconds=stage_p95_seconds("verifier"),
+                final_audit_p95_seconds=stage_p95_seconds("final_audit"),
+                finalize_reserve_seconds=(
+                    session.budget.deadline.finalize_reserve_seconds
+                ),
+                remaining_seconds=session.budget.deadline.remaining_seconds(),
+                remaining_calls=atomic_repair_budget.remaining_calls,
+                required_calls=3,
+                model_start_margin_seconds=(
+                    session.budget.deadline.model_call_start_margin_seconds
+                ),
+            )
+            strict_atomic_closure = self._config.profile == "competition"
             repair_pair_time_reserve = closure_admission.required_seconds
             repair_pair_time_available = (
                 closure_admission.reason != "insufficient_time_capacity"
+                and (
+                    atomic_repair_closure.admitted
+                    if strict_atomic_closure
+                    else True
+                )
             )
             repair_pair_available = (
                 closure_admission.admitted
+                and (
+                    atomic_repair_closure.admitted
+                    if strict_atomic_closure
+                    else True
+                )
                 and atomic_repair_budget.stage_remaining.get("repair", 0) >= 1
-                and atomic_repair_budget.stage_remaining.get("verifier", 0) >= 1
+                and atomic_repair_budget.stage_remaining.get("verifier", 0)
+                >= (2 if strict_atomic_closure else 1)
                 and atomic_repair_budget.exploration_open
             )
             trace.add(
@@ -2673,6 +2705,14 @@ class MathForgeHarness:
                 atomic_budget_pair_available=repair_pair_available,
                 atomic_time_pair_available=repair_pair_time_available,
                 required_pair_seconds=round(repair_pair_time_reserve, 6),
+                atomic_repair_closure=atomic_repair_closure.to_dict(),
+                atomic_closure_admitted=atomic_repair_closure.admitted,
+                atomic_closure_required_seconds=atomic_repair_closure.required_seconds,
+                required_atomic_seconds=atomic_repair_closure.required_seconds,
+                best_available_retained=(
+                    strict_atomic_closure and not atomic_repair_closure.admitted
+                ),
+                strict_atomic_closure=strict_atomic_closure,
                 remaining_model_seconds=round(
                     session.budget.deadline.remaining_for_model_call(),
                     6,
@@ -2719,6 +2759,7 @@ class MathForgeHarness:
                             [],
                         ),
                         response_mode=session.problem_ir.response_mode,
+                        risk_level=session.route_plan.risk_level,
                     )
                     before_score = self._repair_completion_score(
                         item,
@@ -2780,6 +2821,7 @@ class MathForgeHarness:
                                 [],
                             ),
                             response_mode=session.problem_ir.response_mode,
+                            risk_level=session.route_plan.risk_level,
                         )
                         after_score = self._repair_completion_score(
                             proposed,
@@ -3007,6 +3049,7 @@ class MathForgeHarness:
                     session.evidence,
                     session.proof_obligations.get(item.candidate_id, []),
                     response_mode=session.problem_ir.response_mode,
+                    risk_level=session.route_plan.risk_level,
                     audits=session.audits,
                     repaired=any(
                         lineage.get("proposed_candidate_id") == item.candidate_id
@@ -3123,6 +3166,7 @@ class MathForgeHarness:
                     session.evidence,
                     session.proof_obligations.get(item.candidate_id, []),
                     response_mode=session.problem_ir.response_mode,
+                    risk_level=session.route_plan.risk_level,
                     audits=session.audits,
                     repaired=any(
                         lineage.get("proposed_candidate_id") == item.candidate_id
@@ -3162,6 +3206,7 @@ class MathForgeHarness:
                         session.evidence,
                         session.proof_obligations.get(item.candidate_id, []),
                         response_mode=session.problem_ir.response_mode,
+                        risk_level=session.route_plan.risk_level,
                     )
                 repaired = any(
                     lineage.get("proposed_candidate_id") == item.candidate_id
@@ -3279,6 +3324,19 @@ class MathForgeHarness:
                     single_closure is not None
                     and single_closure.terminal_closure
                 )
+                single_consistency = assess_answer_consistency(candidate)
+                single_policy = None
+                if single_closure is not None:
+                    single_policy = CompletionPolicy.for_context(
+                        session.problem_ir.response_mode,
+                        session.route_plan.risk_level,
+                    ).evaluate(
+                        single_closure.state,
+                        tool_or_verifier_support=bool(
+                            single_closure.semantically_supported
+                        ),
+                        terminal_consistent=single_consistency.consistent,
+                    )
                 ranking = [candidate.candidate_id]
                 single_coverage = (
                     single_closure.required_coverage
@@ -3342,9 +3400,18 @@ class MathForgeHarness:
                 rank_details = [
                     {
                         "candidate_id": candidate.candidate_id,
-                        "hard_fail_count": 0,
+                        "hard_fail_count": int(not single_consistency.consistent)
+                        + int(single_policy is not None and not single_policy.allowed),
                         "required_coverage": single_coverage,
-                        "answer_consistency": 1,
+                        "answer_consistency": int(single_consistency.consistent),
+                        "answer_consistency_reasons": list(
+                            dict.fromkeys(
+                                (
+                                    *single_consistency.mismatches,
+                                    *single_consistency.unknown_edges,
+                                )
+                            )
+                        ),
                         "independent_agreement": 0,
                         "evidence_tier": single_tier,
                         "assurance_level": (
@@ -3374,23 +3441,31 @@ class MathForgeHarness:
                         ),
                         "review_support": single_review_support,
                         "soft_score": 0,
+                        "policy_allowed": (
+                            single_policy.allowed if single_policy is not None else True
+                        ),
+                        "policy_status": (
+                            single_policy.status if single_policy is not None else "legacy"
+                        ),
                         "deterministic_tie_break": single_digest,
                         "substantive_key": [
-                            0,
+                            int(not single_consistency.consistent)
+                            + int(single_policy is not None and not single_policy.allowed),
                             single_tier_rank,
                             single_closure_rank,
                             single_derivation_rank,
                             single_parse_rank,
                             int(candidate.degraded),
                             -single_coverage,
-                            0,
+                            -int(single_consistency.consistent),
                             -1,
                             0,
                             -single_review_support,
                             0,
                         ],
                         "lexicographic_key": [
-                            0,
+                            int(not single_consistency.consistent)
+                            + int(single_policy is not None and not single_policy.allowed),
                             single_tier_rank,
                             single_closure_rank,
                             single_derivation_rank,
@@ -3423,6 +3498,7 @@ class MathForgeHarness:
                     audits=session.audits,
                     response_mode=session.problem_ir.response_mode,
                     repair_lineage=session.repair_lineage,
+                    risk_level=session.route_plan.risk_level,
                 )
                 candidate = arbitration.selected
                 ranking = [
@@ -5647,6 +5723,33 @@ class MathForgeHarness:
                     role=branch.role,
                 )
                 continue
+            candidate.method_family = (
+                candidate.method_family
+                or candidate.planned_method_family
+                or branch.method_family
+            )
+            candidate.shared_context_hash = (
+                candidate.shared_context_hash or branch.shared_context_hash
+            )
+            candidate.branch_context_hash = (
+                candidate.branch_context_hash or branch.branch_context_hash
+            )
+            candidate.private_context_hash = candidate.private_context_hash or semantic_fingerprint(
+                {
+                    "branch_id": branch.branch_id,
+                    "strategy_version": branch.state.version,
+                    "method_family": branch.method_family,
+                }
+            )
+            candidate.skill_set_hash = candidate.skill_set_hash or self._skills.fingerprint
+            candidate.lemma_ids = list(
+                dict.fromkeys((*candidate.lemma_ids, *branch.lemma_ids))
+            )
+            candidate.proof_backbone_hash = (
+                candidate.proof_backbone_hash
+                or semantic_fingerprint(branch.proof_backbone.to_prompt_dict())
+            )
+            candidate.branch_id = candidate.branch_id or branch.branch_id
             branch.candidate = candidate
             branch.status = "candidate_published"
             candidates.append(candidate)
@@ -5985,6 +6088,30 @@ class MathForgeHarness:
                 lineage = session.agent_runtime.candidate_publication(
                     candidate.candidate_id
                 )
+                candidate.method_family = (
+                    candidate.method_family
+                    or candidate.planned_method_family
+                    or candidate.method
+                )
+                candidate.shared_context_hash = (
+                    candidate.shared_context_hash
+                    or lineage.get("shared_context_hash", "")
+                )
+                candidate.branch_context_hash = (
+                    candidate.branch_context_hash
+                    or lineage.get("branch_context_hash", "")
+                )
+                candidate.private_context_hash = (
+                    candidate.private_context_hash
+                    or semantic_fingerprint(
+                        {
+                            "candidate_id": candidate.candidate_id,
+                            "branch_context_hash": candidate.branch_context_hash,
+                        }
+                    )
+                )
+                candidate.skill_set_hash = candidate.skill_set_hash or self._skills.fingerprint
+                candidate.branch_id = candidate.branch_id or candidate.candidate_id
                 pool.submit(candidate, **{
                     key: lineage[key]
                     for key in (
@@ -6013,11 +6140,21 @@ class MathForgeHarness:
                     ),
                     "shared_context_hash": lineage["shared_context_hash"],
                     "branch_context_hash": lineage["branch_context_hash"],
+                    "private_context_hash": candidate.private_context_hash,
+                    "proof_backbone_hash": candidate.proof_backbone_hash,
+                    "method_family": (
+                        candidate.method_family
+                        or candidate.planned_method_family
+                        or candidate.method
+                    ),
                     "lemma_ids": session.candidate_lemma_ids.get(
                         candidate.candidate_id,
                         (),
                     ),
                     "tool_evidence_refs": (),
+                    "strict_cognitive_independence": (
+                        self._config.profile == "competition"
+                    ),
                 })
             except (KeyError, ValueError) as error:
                 trace.add(
@@ -7819,6 +7956,7 @@ class MathForgeHarness:
                     remaining,
                     session.evidence,
                     session.proof_obligations,
+                    risk_level=session.route_plan.risk_level,
                 ).selected
             )
             input_artifacts = list(
@@ -7928,6 +8066,10 @@ class MathForgeHarness:
                 break
             audit = outcome.record
             session.audits.append(audit)
+            audit_coverage = final_audit_coverage(
+                audit,
+                active_candidate_version=candidate.version,
+            )
             signature = (
                 audit.candidate_id,
                 audit.candidate_version,
@@ -7942,8 +8084,9 @@ class MathForgeHarness:
                 independent_model_call=True,
                 verifier_instance_distinct_from_cross_exam=True,
                 candidate_scope_count=1,
+                final_audit_coverage=audit_coverage.to_dict(),
             )
-            if audit.complete:
+            if audit.complete and audit_coverage.complete:
                 return remaining
             if audit.status == "failed" or audit.requested_action == "reject":
                 remaining = [

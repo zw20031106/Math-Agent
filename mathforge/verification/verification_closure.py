@@ -409,6 +409,16 @@ class AuditRecord:
             <= set(self.reviewed_obligation_ids)
         )
 
+    def final_coverage_complete(self, *, active_candidate_version: int) -> bool:
+        """Apply the complete E6 final-audit gate for an active version."""
+
+        return (
+            self.candidate_version == int(active_candidate_version)
+            and self.coverage_complete
+            and not self.open_finding_ids
+            and not self.open_obligation_ids
+        )
+
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         for name in (

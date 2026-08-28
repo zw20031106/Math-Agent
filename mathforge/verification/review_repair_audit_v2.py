@@ -5,11 +5,16 @@ from typing import Any, Iterable
 
 from mathforge.harness.schemas import CandidateSolution, ProofObligation
 from mathforge.verification.answer_normalization import canonical_answer
+from mathforge.verification.e6 import (
+    REPAIR_ACTIONS,
+    RepairErrorCategory,
+    classify_repair_error,
+)
 
 
 REPAIR_ACTION_BY_CATEGORY = {
     "local_arithmetic": "local_patch",
-    "local_theorem_condition": "condition_patch",
+    "local_theorem_condition": "condition_repair",
     "representation_format": "re_encode",
     "global_method": "new_branch",
     "problem_interpretation": "replan",
@@ -114,6 +119,10 @@ def decide_bidirectional_review(
 class ConcessionDisposition:
     candidate_status: str
     reason_code: str
+    requires_independent_confirmation: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def classify_concession(
@@ -121,11 +130,24 @@ def classify_concession(
     *,
     scope: str = "local",
     confirmed: bool = False,
+    independent_confirmation: bool | None = None,
 ) -> ConcessionDisposition:
-    severity = str(severity).casefold()
+    if independent_confirmation is not None:
+        confirmed = bool(independent_confirmation)
+    severity = str(severity).casefold().replace("_", "-")
     scope = str(scope).casefold()
     if severity == "critical" and scope == "global" and confirmed:
-        return ConcessionDisposition("rejected", "confirmed_global_critical")
+        return ConcessionDisposition(
+            "rejected",
+            "confirmed_global_critical",
+            requires_independent_confirmation=False,
+        )
+    if severity == "critical":
+        return ConcessionDisposition(
+            "repair_requested",
+            "critical_requires_independent_confirmation",
+            requires_independent_confirmation=True,
+        )
     if severity in {"error", "critical"}:
         return ConcessionDisposition("repair_requested", "local_error_conceded")
     return ConcessionDisposition("challenged", "nonfatal_finding_conceded")
@@ -138,9 +160,16 @@ class RepairDirective:
     category: str
     action: str
     claim_id: str = ""
+    error_class: str = "LOCAL_ARITHMETIC"
+    requires_independent_confirmation: bool = False
 
     def to_dict(self) -> dict[str, str]:
-        return asdict(self)
+        payload = asdict(self)
+        return payload
+
+    @property
+    def canonical_category(self) -> str:
+        return self.error_class
 
 
 def classify_repair_finding(finding: Any) -> RepairDirective:
@@ -153,22 +182,31 @@ def classify_repair_finding(finding: Any) -> RepairDirective:
             getattr(finding, "missing_condition", ""),
         )
     )
-    if actionability == "replan":
-        category = "problem_interpretation"
-    elif actionability == "new_branch" or scope == "global":
-        category = "global_method"
-    elif any(token in rationale for token in ("format", "representation", "encode")):
-        category = "representation_format"
-    elif str(getattr(finding, "missing_condition", "")).strip():
-        category = "local_theorem_condition"
-    else:
-        category = "local_arithmetic"
+    error_class, canonical_action = classify_repair_error(
+        finding,
+        actionability=actionability,
+        scope=scope,
+        rationale=rationale,
+        missing_condition=str(getattr(finding, "missing_condition", "")),
+    )
+    category_alias = {
+        RepairErrorCategory.LOCAL_ARITHMETIC: "local_arithmetic",
+        RepairErrorCategory.LOCAL_CONDITION: "local_theorem_condition",
+        RepairErrorCategory.REPRESENTATION: "representation_format",
+        RepairErrorCategory.GLOBAL_METHOD: "global_method",
+        RepairErrorCategory.PROBLEM_INTERPRETATION: "problem_interpretation",
+    }
+    category = category_alias[error_class]
     return RepairDirective(
         finding_id=str(getattr(finding, "finding_id", "")),
         candidate_id=str(getattr(finding, "candidate_id", "")),
         category=category,
         action=REPAIR_ACTION_BY_CATEGORY[category],
         claim_id=str(getattr(finding, "claim_id", "")),
+        error_class=error_class.value,
+        requires_independent_confirmation=(
+            str(getattr(finding, "severity", "")).casefold() == "critical"
+        ),
     )
 
 
@@ -239,10 +277,13 @@ __all__ = [
     "AuditRequirements",
     "ConcessionDisposition",
     "REPAIR_ACTION_BY_CATEGORY",
+    "REPAIR_ACTIONS",
+    "RepairErrorCategory",
     "RepairDirective",
     "ReviewTriggerDecision",
     "build_audit_requirements",
     "classify_concession",
     "classify_repair_finding",
+    "classify_repair_error",
     "decide_bidirectional_review",
 ]

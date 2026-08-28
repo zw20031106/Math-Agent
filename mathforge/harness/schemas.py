@@ -857,6 +857,19 @@ class CandidateSolution:
     # degraded answer for an ordinary Candidate.
     assurance: str = "standard"
     schema_version: str = CANDIDATE_SCHEMA_VERSION
+    # E6 Host-owned cognitive provenance.  These fields are optional for
+    # legacy payloads but are carried across repair versions and candidate
+    # pool registration whenever available.
+    method_family: str = ""
+    shared_context_hash: str = ""
+    private_context_hash: str = ""
+    skill_set_hash: str = ""
+    lemma_ids: list[str] = field(default_factory=list)
+    proof_backbone_hash: str = ""
+    model_identity: str = ""
+    prompt_hash: str = ""
+    branch_id: str = ""
+    branch_context_hash: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -882,7 +895,40 @@ class CandidateSolution:
             "parse_tier": self.parse_tier,
             "degraded": self.degraded,
             "assurance": self.assurance,
+            "method_family": self.method_family,
+            "shared_context_hash": self.shared_context_hash,
+            "private_context_hash": self.private_context_hash,
+            "skill_set_hash": self.skill_set_hash,
+            "lemma_ids": list(self.lemma_ids),
+            "proof_backbone_hash": self.proof_backbone_hash,
+            "model_identity": self.model_identity,
+            "prompt_hash": self.prompt_hash,
+            "branch_id": self.branch_id,
+            "branch_context_hash": self.branch_context_hash,
         }
+
+    @property
+    def cognitive_provenance(self) -> dict[str, Any]:
+        """Return the public provenance used by the independence gate."""
+
+        return {
+            "method_family": self.method_family or self.planned_method_family or self.method,
+            "shared_context_hash": self.shared_context_hash,
+            "private_context_hash": self.private_context_hash,
+            "skill_set_hash": self.skill_set_hash,
+            "lemma_ids": list(self.lemma_ids),
+            "proof_backbone_hash": self.proof_backbone_hash,
+            "model_identity": self.model_identity,
+            "prompt_hash": self.prompt_hash,
+            "branch_id": self.branch_id,
+            "branch_context_hash": self.branch_context_hash,
+        }
+
+    @property
+    def provenance(self) -> dict[str, Any]:
+        """Compatibility alias for callers that use the shorter name."""
+
+        return self.cognitive_provenance
 
     def validate(self) -> None:
         if self.schema_version != self.SCHEMA_VERSION:
@@ -899,6 +945,15 @@ class CandidateSolution:
             self.source,
             self.parse_tier,
             self.assurance,
+            self.method_family,
+            self.shared_context_hash,
+            self.private_context_hash,
+            self.skill_set_hash,
+            self.proof_backbone_hash,
+            self.model_identity,
+            self.prompt_hash,
+            self.branch_id,
+            self.branch_context_hash,
         )
         if any(not isinstance(value, str) for value in string_fields):
             raise SchemaValidationError(
@@ -938,6 +993,7 @@ class CandidateSolution:
             ("public_solution_steps", self.public_solution_steps),
             ("unresolved_obligations", self.unresolved_obligations),
             ("contract_deviations", self.contract_deviations),
+            ("lemma_ids", self.lemma_ids),
         ):
             _require_string_list(value, f"CandidateSolution.{name}")
         if not isinstance(self.is_method_duplicate, bool):
@@ -1042,6 +1098,16 @@ class CandidateSolution:
             "parse_tier",
             "degraded",
             "assurance",
+            "method_family",
+            "shared_context_hash",
+            "private_context_hash",
+            "skill_set_hash",
+            "lemma_ids",
+            "proof_backbone_hash",
+            "model_identity",
+            "prompt_hash",
+            "branch_id",
+            "branch_context_hash",
         }
         _reject_unknown_fields(payload, allowed, "CandidateSolution")
         strings = _require_string_fields(
@@ -1135,6 +1201,19 @@ class CandidateSolution:
             degraded=degraded,
             assurance=assurance,
             schema_version=cls.SCHEMA_VERSION,
+            method_family=str(payload.get("method_family", "")),
+            shared_context_hash=str(payload.get("shared_context_hash", "")),
+            private_context_hash=str(payload.get("private_context_hash", "")),
+            skill_set_hash=str(payload.get("skill_set_hash", "")),
+            lemma_ids=_require_string_list(
+                payload.get("lemma_ids", []),
+                "CandidateSolution.lemma_ids",
+            ),
+            proof_backbone_hash=str(payload.get("proof_backbone_hash", "")),
+            model_identity=str(payload.get("model_identity", "")),
+            prompt_hash=str(payload.get("prompt_hash", "")),
+            branch_id=str(payload.get("branch_id", "")),
+            branch_context_hash=str(payload.get("branch_context_hash", "")),
         )
         candidate.validate()
         return candidate
@@ -1357,6 +1436,14 @@ class EvidenceRecord:
     capability: str = "none"
     transaction_status: str = "active"
     schema_version: str = CORE_SCHEMA_VERSION
+
+    @property
+    def failure_taxonomy(self) -> str:
+        """Canonical E6 status without changing the legacy wire status."""
+
+        from mathforge.verification.e6 import evidence_status
+
+        return evidence_status(self.status, reason=self.description)
 
     def to_dict(self) -> dict:
         return {

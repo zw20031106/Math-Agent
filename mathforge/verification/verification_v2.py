@@ -19,6 +19,8 @@ from mathforge.verification.evidence import (
     is_fatal_hard_failure,
     is_semantic_hard_pass,
 )
+from mathforge.verification.e6 import VerificationState, final_audit_coverage
+from mathforge.verification.answer_normalization import answer_shape_valid
 
 
 ASSURANCE_LEVELS = (
@@ -62,6 +64,14 @@ class VerificationClosure:
     mapped_semantic_step_count: int = 0
     derivation_quality: str = "unknown"
     required_coverage: float = 0.0
+    # E6 explicit state vector.  ``None`` keeps manually constructed legacy
+    # closures wire-compatible; host-assessed closures always populate these.
+    schema_valid: bool | None = None
+    answer_shape_valid: bool | None = None
+    not_disproved: bool | None = None
+    semantically_supported: bool | None = None
+    audited: bool | None = None
+    answer_consistent: bool | None = None
 
     @property
     def hard_verified(self) -> bool:
@@ -70,6 +80,18 @@ class VerificationClosure:
         It deliberately excludes ``complete_hard`` and model-only review.
         """
 
+        if self.not_disproved is not None or self.semantically_supported is not None:
+            return bool(
+                self.terminal_closure
+                and self.not_disproved
+                and self.semantically_supported
+                and self.answer_consistent is not False
+                and self.assurance_level in {
+                    "tool_supported",
+                    "audited",
+                    "formally_verified",
+                }
+            )
         return self.terminal_closure and self.assurance_level in {
             "tool_supported",
             "audited",
@@ -90,7 +112,36 @@ class VerificationClosure:
         ):
             payload[name] = list(payload[name])
         payload["hard_verified"] = self.hard_verified
+        payload["verification_state"] = self.state.to_dict()
         return payload
+
+    @property
+    def state(self) -> VerificationState:
+        """Return the normalized E6 state, including legacy projections."""
+
+        return VerificationState(
+            schema_valid=(True if self.schema_valid is None else self.schema_valid),
+            answer_shape_valid=(
+                True if self.answer_shape_valid is None else self.answer_shape_valid
+            ),
+            not_disproved=(
+                self.hard_verified
+                if self.not_disproved is None
+                else self.not_disproved
+            ),
+            semantically_supported=(
+                self.hard_verified
+                if self.semantically_supported is None
+                else self.semantically_supported
+            ),
+            hard_verified=self.hard_verified,
+            audited=(False if self.audited is None else self.audited),
+            answer_consistent=(
+                True if self.answer_consistent is None else self.answer_consistent
+            ),
+            assurance_level=self.assurance_level,
+            reasons=self.reasons,
+        )
 
 
 def resolve_conclusion_claim_id(candidate: CandidateSolution) -> str:
@@ -210,6 +261,10 @@ def _formal_support(
 
 def _matching_audit(candidate: CandidateSolution, audits: Iterable[Any]) -> Any | None:
     for audit in reversed(tuple(audits)):
+        coverage = final_audit_coverage(
+            audit,
+            active_candidate_version=int(candidate.version),
+        )
         if (
             str(getattr(audit, "candidate_id", "")) == candidate.candidate_id
             and int(getattr(audit, "candidate_version", -1)) == int(candidate.version)
@@ -217,6 +272,7 @@ def _matching_audit(candidate: CandidateSolution, audits: Iterable[Any]) -> Any 
             and not getattr(audit, "open_finding_ids", ())
             and not getattr(audit, "open_obligation_ids", ())
             and bool(getattr(audit, "coverage_complete", True))
+            and coverage.complete
         ):
             return audit
     return None
@@ -298,6 +354,7 @@ def assess_verification(
     response_mode: str = "answer_only",
     repaired: bool = False,
     repair_lineage: Iterable[dict[str, Any]] = (),
+    answer_consistency: Any | None = None,
 ) -> VerificationClosure:
     """Assess the candidate using only terminal-closure evidence."""
 
@@ -344,9 +401,25 @@ def assess_verification(
         for record in own_evidence
         if record.claim_id in closure_set and is_fatal_hard_failure(record)
     }
+    try:
+        candidate.validate()
+        schema_valid = True
+    except Exception:
+        schema_valid = False
     candidate_valid = bool(candidate.candidate_id.strip())
-    answer_contract_valid = candidate_valid and bool(
-        candidate.final_answer.strip() and candidate.answer_type.strip()
+    answer_shape = bool(
+        answer_shape_valid(candidate.final_answer, candidate.answer_type)
+    )
+    answer_contract_valid = bool(
+        schema_valid
+        and candidate_valid
+        and answer_shape
+        and candidate.answer_type.strip()
+    )
+    answer_consistent = (
+        True
+        if answer_consistency is None
+        else bool(getattr(answer_consistency, "consistent", answer_consistency))
     )
     repair_status = ""
     for lineage in reversed(tuple(repair_lineage)):
@@ -364,6 +437,12 @@ def assess_verification(
         reasons.append("unmapped_required_obligation")
     if fatal_closure:
         reasons.append("critical_closure_hard_failure")
+    if not schema_valid:
+        reasons.append("candidate_schema_invalid")
+    if not answer_shape:
+        reasons.append("answer_shape_invalid")
+    if not answer_consistent:
+        reasons.append("answer_consistency_failed")
     if repair_status in {"rolled_back", "rejected"}:
         reasons.append("repair_transaction_inactive")
     if response_mode == "proof_full" and derivation_quality != "complete":
@@ -395,6 +474,7 @@ def assess_verification(
         and closure
         and not fatal_closure
         and not unmapped
+        and answer_consistent
         and (
             required_supported
             if required
@@ -409,6 +489,7 @@ def assess_verification(
         answer_contract_valid
         and closure
         and not unmapped
+        and answer_consistent
         and matching_audit is not None
     )
     if audited:
@@ -418,6 +499,27 @@ def assess_verification(
 
     proof_shape_terminal = not (
         response_mode == "proof_full" and derivation_quality != "complete"
+    )
+    not_disproved = bool(
+        answer_contract_valid
+        and answer_shape
+        and closure
+        and not fatal_closure
+        and not unmapped
+        and answer_consistent
+        and repair_status not in {"rolled_back", "rejected"}
+        and proof_shape_terminal
+    )
+    semantically_supported = bool(
+        conclusion_tool_supported
+        or required_supported
+        or audited
+        or assurance == "formally_verified"
+    )
+    hard_verified = bool(
+        not_disproved
+        and semantically_supported
+        and (tool_supported or audited or assurance == "formally_verified")
     )
     terminal = bool(
         conclusion_id
@@ -483,6 +585,12 @@ def assess_verification(
             if required_ids
             else 1.0
         ),
+        schema_valid=schema_valid,
+        answer_shape_valid=answer_shape,
+        not_disproved=not_disproved,
+        semantically_supported=semantically_supported,
+        audited=audited,
+        answer_consistent=answer_consistent,
     )
 
 

@@ -151,6 +151,12 @@ class ProofStage:
         audits=(),
         repaired: bool = False,
         repair_lineage=(),
+        risk_level: str | None = None,
+        completion_policy=None,
+        independent_agreement: bool = False,
+        tool_or_verifier_support: bool | None = None,
+        terminal_consistent: bool | None = None,
+        critical_claim_coverage: bool | None = None,
     ) -> CompletionDecision:
         return self._completion_gate.evaluate(
             candidate,
@@ -160,6 +166,12 @@ class ProofStage:
             audits=audits,
             repaired=repaired,
             repair_lineage=repair_lineage,
+            risk_level=risk_level,
+            completion_policy=completion_policy,
+            independent_agreement=independent_agreement,
+            tool_or_verifier_support=tool_or_verifier_support,
+            terminal_consistent=terminal_consistent,
+            critical_claim_coverage=critical_claim_coverage,
         )
 
 

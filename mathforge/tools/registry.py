@@ -46,6 +46,14 @@ class ToolResult:
     capability: str = VerificationCapability.NONE.value
     claim_state: str = ClaimVerificationState.UNKNOWN.value
 
+    @property
+    def failure_taxonomy(self) -> str:
+        """Canonical E6 evidence status while retaining legacy ``status``."""
+
+        from mathforge.verification.e6 import evidence_status
+
+        return evidence_status(self.status, reason=self.summary)
+
     def to_dict(self) -> dict:
         return {
             "tool_name": self.tool_name,

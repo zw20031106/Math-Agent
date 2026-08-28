@@ -26,6 +26,7 @@ from mathforge.verification.verification_v2 import (
     VerificationClosure,
     assess_verification,
 )
+from mathforge.verification.e6 import CompletionPolicy, assess_answer_consistency
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,9 @@ class CandidateRank:
     parse_tier: str = "rejected"
     degraded: bool = False
     semantic_coverage: float = 0.0
+    answer_consistency_reasons: tuple[str, ...] = ()
+    policy_allowed: bool = True
+    policy_status: str = "legacy"
 
     @property
     def substantive_key(self) -> tuple:
@@ -111,6 +115,9 @@ class CandidateRank:
             "parse_tier": self.parse_tier,
             "degraded": self.degraded,
             "semantic_coverage": self.semantic_coverage,
+            "answer_consistency_reasons": list(self.answer_consistency_reasons),
+            "policy_allowed": self.policy_allowed,
+            "policy_status": self.policy_status,
             "substantive_key": list(self.substantive_key),
             "lexicographic_key": list(self.lexicographic_key),
         }
@@ -145,6 +152,8 @@ class ArbitrationPolicy:
         audits=(),
         response_mode: str | None = None,
         repair_lineage=(),
+        risk_level: str | None = None,
+        completion_policy: CompletionPolicy | None = None,
     ) -> ArbitrationResult:
         if not candidates:
             raise ValueError("at least one candidate is required")
@@ -175,6 +184,8 @@ class ArbitrationPolicy:
                 audits=audits,
                 response_mode=effective_response_mode,
                 repair_lineage=repair_lineage,
+                risk_level=risk_level,
+                completion_policy=completion_policy,
             )
             for candidate in candidates
         ]
@@ -238,6 +249,8 @@ class ArbitrationPolicy:
         audits=(),
         response_mode: str = "answer_only",
         repair_lineage=(),
+        risk_level: str | None = None,
+        completion_policy: CompletionPolicy | None = None,
     ) -> CandidateRank:
         own_evidence = [
             record
@@ -254,7 +267,13 @@ class ArbitrationPolicy:
             if required
             else 1.0
         )
-        answer_consistency = int(bool(candidate.final_answer.strip()))
+        consistency = assess_answer_consistency(candidate)
+        # An answer mismatch is a hard arbitration gate.  A missing optional
+        # edge remains unknown, but a concrete disagreement cannot be rescued
+        # by model votes or a weighted score.
+        if not consistency.consistent:
+            hard_fails += 1
+        answer_consistency = int(consistency.consistent)
         cluster = clusters.get(candidate.candidate_id, [candidate])
         own_signature = candidate_method_signature(candidate)
         independent_agreement = (
@@ -268,6 +287,7 @@ class ArbitrationPolicy:
                     and not other.is_method_duplicate
                     and method_contract_valid(other)
                     and candidate_method_signature(other) != own_signature
+                    and _cognitively_independent(candidate, other)
                 }
             )
         )
@@ -301,7 +321,34 @@ class ArbitrationPolicy:
             independently_corroborated=bool(independent_agreement),
             response_mode=response_mode,
             repair_lineage=repair_lineage,
+            answer_consistency=consistency,
         )
+        policy_assessment = None
+        if completion_policy is not None or risk_level is not None:
+            policy = completion_policy or CompletionPolicy.for_context(
+                response_mode,
+                str(risk_level or "medium"),
+            )
+            policy_assessment = policy.evaluate(
+                closure.state,
+                independent_agreement=bool(independent_agreement),
+                tool_or_verifier_support=closure.semantically_supported,
+                terminal_consistent=consistency.consistent,
+                critical_claim_coverage=coverage >= 1.0,
+                unresolved_critical_obligations=sum(
+                    1
+                    for item in required
+                    if item.status != "satisfied"
+                    and any(
+                        claim.claim_id in set(closure.critical_claim_ids)
+                        for claim in candidate.claims
+                        if claim.claim_id in set(item.source_claim_ids)
+                    )
+                ),
+                fatal_hard_fail=bool(hard_fails),
+            )
+            if not policy_assessment.allowed:
+                hard_fails += 1
         # Completion status after Final Audit is authoritative even when the
         # obligation objects still carry the pre-audit ``unresolved`` state.
         coverage = closure.required_coverage
@@ -361,7 +408,62 @@ class ArbitrationPolicy:
             parse_tier=candidate.parse_tier,
             degraded=bool(candidate.degraded),
             semantic_coverage=semantic_coverage,
+            answer_consistency_reasons=(
+                tuple(dict.fromkeys((*consistency.mismatches, *consistency.unknown_edges)))
+            ),
+            policy_allowed=(
+                policy_assessment.allowed if policy_assessment is not None else True
+            ),
+            policy_status=(
+                policy_assessment.status if policy_assessment is not None else "legacy"
+            ),
         )
+
+
+def _cognitively_independent(
+    candidate: CandidateSolution,
+    other: CandidateSolution,
+) -> bool:
+    """Require distinguishable model and low-correlated cognitive context."""
+
+    # Pre-E6 direct unit fixtures contain no provenance at all.  Preserve
+    # their method-diversity projection; once either candidate carries Host
+    # provenance, missing/identical model identity is conservatively related.
+    has_provenance = any(
+        str(getattr(item, name, ""))
+        for item in (candidate, other)
+        for name in (
+            "model_identity",
+            "prompt_hash",
+            "shared_context_hash",
+            "private_context_hash",
+            "proof_backbone_hash",
+        )
+    ) or bool(candidate.lemma_ids or other.lemma_ids)
+    if not has_provenance:
+        return True
+    first_model = str(candidate.model_identity or "")
+    other_model = str(other.model_identity or "")
+    if not first_model or not other_model or first_model == other_model:
+        return False
+    first_shared = str(candidate.shared_context_hash or "")
+    other_shared = str(other.shared_context_hash or "")
+    if first_shared and other_shared and first_shared == other_shared:
+        return False
+    first_private = str(candidate.private_context_hash or "")
+    other_private = str(other.private_context_hash or "")
+    if first_private and other_private and first_private == other_private:
+        return False
+    shared_lemmas = set(candidate.lemma_ids).intersection(other.lemma_ids)
+    if shared_lemmas:
+        # Candidate-level metadata does not carry a proof-verification claim;
+        # shared lemma IDs are therefore conservatively correlated.
+        return False
+    first_backbone = str(candidate.proof_backbone_hash or "")
+    other_backbone = str(other.proof_backbone_hash or "")
+    if first_backbone and other_backbone and first_backbone == other_backbone:
+        return False
+    return True
 
 
 def _candidate_digest(candidate: CandidateSolution) -> str:

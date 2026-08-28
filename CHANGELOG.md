@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Completed E6 Verification / Repair / Arbitration work. Added an explicit
+  VerificationState that separates not-disproved from hard-verified evidence,
+  risk-aware CompletionPolicy, end-to-end AnswerConsistency, Host cognitive
+  provenance, conservative same-model corroboration, concession semantics, a
+  five-class repair classifier, atomic repair/reverify/audit admission, final
+  audit coverage, and PASS/FAIL/UNKNOWN/UNSUPPORTED/MALFORMED/TIMEOUT/
+  INTERNAL_ERROR evidence taxonomy. Runtime trace now records the complete
+  repair closure reservation and best-available retention decision. Added E6
+  invariant coverage; official real-model/full-run evidence remains pending.
 - Completed E5 authoritative TaskGraph/Scheduler work. Added the per-session
   `GraphExecutor`/`GraphState` state machine, scheduler task bindings, dynamic
   graph expansion, plan-version cancellation, generation and wave fences, and

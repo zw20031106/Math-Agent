@@ -8,6 +8,7 @@ from mathforge.verification.capabilities import (
     capability_satisfies_obligation,
 )
 from mathforge.verification.evidence import is_fatal_hard_failure
+from mathforge.verification.e6 import CompletionAssessment, CompletionPolicy
 from mathforge.verification.verification_v2 import assess_verification
 
 
@@ -29,6 +30,10 @@ class CompletionDecision:
     terminal_closure: bool = False
     assurance_reasons: list[str] = field(default_factory=list)
     verification_closure: object | None = None
+    policy_status: str = "legacy"
+    policy_allowed: bool = True
+    best_available: bool = False
+    policy_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -57,6 +62,12 @@ class ProofCompletionGate:
         audits=(),
         repaired: bool = False,
         repair_lineage=(),
+        risk_level: str | None = None,
+        completion_policy: CompletionPolicy | None = None,
+        independent_agreement: bool = False,
+        tool_or_verifier_support: bool | None = None,
+        terminal_consistent: bool | None = None,
+        critical_claim_coverage: bool | None = None,
     ) -> CompletionDecision:
         own_evidence = [
             record
@@ -94,6 +105,18 @@ class ProofCompletionGate:
                 repaired=repaired,
                 repair_lineage=repair_lineage,
             )
+            policy_assessment = self._policy_assessment(
+                closure,
+                response_mode=response_mode,
+                risk_level=risk_level,
+                completion_policy=completion_policy,
+                independent_agreement=independent_agreement,
+                tool_or_verifier_support=tool_or_verifier_support,
+                terminal_consistent=terminal_consistent,
+                critical_claim_coverage=critical_claim_coverage,
+                unresolved_critical=len(failed_obligations),
+                fatal_hard_fail=True,
+            )
             return _decision(
                 candidate,
                 "failed",
@@ -104,6 +127,7 @@ class ProofCompletionGate:
                 [],
                 "incomplete",
                 closure,
+                policy_assessment,
             )
 
         unresolved: list[str] = []
@@ -215,6 +239,32 @@ class ProofCompletionGate:
             repaired=repaired,
             repair_lineage=repair_lineage,
         )
+        unresolved_critical = sum(
+            1
+            for item in obligations
+            if item.required
+            and item.status != "satisfied"
+            and (
+                str(item.kind).casefold() in {"critical", "terminal", "conclusion"}
+                or any(
+                    claim.claim_id in set(closure.critical_claim_ids)
+                    for claim in candidate.claims
+                    if claim.claim_id in set(item.source_claim_ids)
+                )
+            )
+        )
+        policy_assessment = self._policy_assessment(
+            closure,
+            response_mode=response_mode,
+            risk_level=risk_level,
+            completion_policy=completion_policy,
+            independent_agreement=independent_agreement,
+            tool_or_verifier_support=tool_or_verifier_support,
+            terminal_consistent=terminal_consistent,
+            critical_claim_coverage=critical_claim_coverage,
+            unresolved_critical=unresolved_critical,
+            fatal_hard_fail=False,
+        )
         return _decision(
             candidate,
             status,
@@ -225,6 +275,41 @@ class ProofCompletionGate:
             sorted(model_reviewed),
             evidence_tier,
             closure,
+            policy_assessment,
+        )
+
+    @staticmethod
+    def _policy_assessment(
+        closure,
+        *,
+        response_mode: str,
+        risk_level: str | None,
+        completion_policy: CompletionPolicy | None,
+        independent_agreement: bool,
+        tool_or_verifier_support: bool | None,
+        terminal_consistent: bool | None,
+        critical_claim_coverage: bool | None,
+        unresolved_critical: int,
+        fatal_hard_fail: bool,
+    ) -> CompletionAssessment | None:
+        if completion_policy is None and risk_level is None:
+            return None
+        policy = completion_policy or CompletionPolicy.for_context(
+            response_mode,
+            str(risk_level or "medium"),
+        )
+        return policy.evaluate(
+            closure.state,
+            independent_agreement=independent_agreement,
+            tool_or_verifier_support=(
+                closure.semantically_supported
+                if tool_or_verifier_support is None
+                else bool(tool_or_verifier_support)
+            ),
+            critical_claim_coverage=critical_claim_coverage,
+            terminal_consistent=terminal_consistent,
+            unresolved_critical_obligations=unresolved_critical,
+            fatal_hard_fail=fatal_hard_fail,
         )
 
 
@@ -238,6 +323,7 @@ def _decision(
     model_reviewed: list[str],
     evidence_tier: str,
     closure,
+    policy_assessment: CompletionAssessment | None = None,
 ) -> CompletionDecision:
     # ``VerificationClosure`` is the sole terminal authority.  The legacy
     # arguments remain in the function signature for trace compatibility, but
@@ -262,4 +348,16 @@ def _decision(
         terminal_closure=closure.terminal_closure,
         assurance_reasons=list(closure.reasons),
         verification_closure=closure,
+        policy_status=(
+            policy_assessment.status if policy_assessment is not None else "legacy"
+        ),
+        policy_allowed=(
+            policy_assessment.allowed if policy_assessment is not None else True
+        ),
+        best_available=(
+            policy_assessment.best_available if policy_assessment is not None else False
+        ),
+        policy_reasons=(
+            list(policy_assessment.reasons) if policy_assessment is not None else []
+        ),
     )

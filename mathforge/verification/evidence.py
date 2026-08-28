@@ -19,6 +19,11 @@ from mathforge.verification.capabilities import (
     fatal_capability_applies,
 )
 from mathforge.verification.tool_requests import ClaimToolRequestBuilder
+from mathforge.verification.e6 import (
+    evidence_status,
+    is_real_hard_pass,
+    normalize_evidence_status,
+)
 
 
 class EvidenceLedger:
@@ -96,6 +101,10 @@ class EvidenceLedger:
             context_complete=context_complete,
             request_status=request_status,
             schema_valid=schema_valid,
+        )
+        invocation["failure_taxonomy"] = evidence_status(
+            result.status,
+            reason=result.summary,
         )
         record = EvidenceRecord(
             evidence_id=f"ev-{uuid4().hex[:12]}",
@@ -187,6 +196,7 @@ class EvidenceLedger:
                 "request_status": str(request_status),
                 "schema_valid": False,
                 "fatal_eligible": False,
+                "failure_taxonomy": "UNSUPPORTED",
             },
             capability=VerificationCapability.NONE.value,
         )
@@ -403,7 +413,7 @@ def is_fatal_hard_failure(record: EvidenceRecord) -> bool:
     return (
         record.transaction_status == "active"
         and record.strength == "hard"
-        and record.status == "fail"
+        and normalize_evidence_status(record.status) .value == "FAIL"
         and record.invocation.get("fatal_eligible") is True
         and capability_applies_to_claim(
             record.capability,
@@ -414,9 +424,7 @@ def is_fatal_hard_failure(record: EvidenceRecord) -> bool:
 
 def is_semantic_hard_pass(record: EvidenceRecord) -> bool:
     return (
-        record.transaction_status == "active"
-        and record.strength == "hard"
-        and record.status == "pass"
+        is_real_hard_pass(record)
         and record.invocation.get("schema_valid") is True
         and capability_applies_to_claim(
             record.capability,
