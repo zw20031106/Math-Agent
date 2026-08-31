@@ -1,6 +1,18 @@
-# Phase R0 执行报告：证据冻结与当前 HEAD 基线
+# Task Report: R0 — Evidence Freeze and Current HEAD Baseline
 
 日期：2026-08-31
+
+## Status
+
+BLOCKED（T01/T02 已完成；T03 等待三次真实重复运行）
+
+## Baseline Commit
+
+`873ce51f6d7415a64fc729309598be6d5f6bad8f`（v3 审查基线）
+
+## Result Commit
+
+`378af8ad1d06cbf37ba50587743c538745d15951`（R0 实现）
 
 本阶段只建立可复现的证据边界，不把历史官方聚合结果或未完成的模型运行登记为当前基线。求解行为、Prompt、Provider 和调度策略留到后续阶段修改。
 
@@ -27,7 +39,7 @@ python scripts/capture_current_identity.py
 
 ## R0-T02：历史官方结果登记
 
-`data/evidence/historical_official_references.json` 登记了计划文档中两次 112 题官方聚合结果：2026-08-25 的 20/112（17.8571%）和 2026-08-29 的 14/112（12.5%）。两条记录均明确标记为 `historical_official_reference`，且 `eligible_for_baseline=false`。登记包含计划文档 SHA-256 和数据集 SHA-256，不包含 API key、绝对路径或私有推理文本。
+`data/evidence/historical_official_references.json` 登记了 v3 文档中两次 112 题官方聚合结果：2026-08-25 的 20/112（17.8571%）和 2026-08-29 的 14/112（12.5%）。两条记录均明确标记为 `historical_official_reference`，且 `eligible_for_baseline=false`。登记包含 v3 文档 SHA-256 和数据集 SHA-256，不包含 API key、绝对路径或私有推理文本。
 
 这两次结果只能用于回归参考，不能证明当前 HEAD 的准确率，也不能改变 `active_baseline_id`。
 
@@ -64,3 +76,23 @@ python scripts/build_r0_baseline.py \
 | API key 写入仓库或工件 | 未读取、未写入 |
 
 因此本阶段的结论是：基线登记链路已经可复现，但在获得同一当前 HEAD、同一配置/数据集、同一模型身份的至少三次完整真实运行前，不对当前准确率作数值结论，也不宣称准确率提升。
+
+## Accuracy Impact
+
+无模型调用、无行为变量变化；无法给出当前 HEAD Accuracy。
+
+## Context / Truncation / Provider Impact
+
+无运行时行为变化；T03 工件 schema 会保留 prompt/completion、truncation、timeout、tail、calls、latency、zero-candidate 和 invalid 缺口。
+
+## Regression Check
+
+R0 定向测试 11/11 通过；最近一次全量测试为 1007/1008，唯一失败是既有 Windows 并发慢客户端 P95 的 0.3 秒严格断言（本机约 0.30–0.32 秒，隔离重复仍可复现），不涉及 R0 逻辑；不放宽该性能断言。compile、immutable baseline、content review、build provenance、secret scan 和 submission validation 均通过（submission 仅保留 candidate-unvalidated/human-review warnings）。
+
+## Rollback Decision
+
+KEEP。实现不改变 solve 行为；T03 未完成时保持 fail-closed，不执行后续 AR Task。
+
+## Next Allowed Task
+
+完成三次同一当前 HEAD 的真实 112 题工件并通过 R0-T03 后，才允许执行 `AR-01`。

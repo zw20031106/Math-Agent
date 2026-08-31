@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Aligned the R0 evidence registration and task report with the authoritative
+  v3 Accuracy/Context/Truncation/Provider plan; historical aggregate evidence
+  remains ineligible and the missing three-run current-HEAD baseline remains
+  explicitly blocked.
 - Added Phase R0 evidence contracts and fail-closed tooling. Current candidate
   identity now records source/config/prompt/skill/model/tokenizer fingerprints;
   historical official 112-case aggregates are registered separately as

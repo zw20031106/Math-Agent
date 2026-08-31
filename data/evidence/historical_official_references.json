@@ -5,8 +5,8 @@
   "dataset_sha256": "7f2499c53f52cbcb17dcab7cc4b99c9e79f53e23c1392587289a02695284201f",
   "source": {
     "kind": "plan-aggregate",
-    "document": "Math-Agent_Codex详细实施计划_v2_上下文压缩_截断与Provider治理_2026-08-31.md",
-    "sha256": "1ec5729ba428e1be4535b612284c1b10235bcc407ae6a6b07c5380eac4591455"
+    "document": "Math-Agent_CODEX直接执行整改总文档_v3_Accuracy_Context_Truncation_Provider_2026-08-31.md",
+    "sha256": "54e065995cd867286ed401ca1a78ec59d36ea93559230c5703eae7b5e32cd8a0"
   },
   "references": [
     {
