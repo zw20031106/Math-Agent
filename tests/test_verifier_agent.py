@@ -114,3 +114,47 @@ def test_verifier_discards_unmapped_pass_and_invalid_ids():
     )
     assert result.findings == []
     assert result.reason == "invalid_or_empty_findings"
+
+
+def test_verifier_accepts_unwrapped_findings_array_from_official_endpoint():
+    response = json.dumps(
+        [
+            {
+                "candidate_id": "c1",
+                "claim_id": "claim-1",
+                "obligation_ids": ["c1:sufficiency"],
+                "status": "pass",
+                "description": "mapped",
+            }
+        ]
+    )
+    client = CaptureVerifierClient(response)
+    candidate = CandidateSolution(
+        "c1",
+        "PrimarySolver",
+        "direct",
+        "QED",
+        "text",
+        claims=[Claim("claim-1", "sufficiency", check_type="sufficiency")],
+    )
+    obligation = ProofObligation(
+        "c1:sufficiency",
+        "sufficiency",
+        "prove it",
+        source_claim_ids=["claim-1"],
+    )
+
+    result = VerifierSkepticAgent(
+        OfficialClientProvider(client, ModelCallGate(1))
+    ).review(
+        ProblemParser().parse("Prove the result"),
+        [candidate],
+        {"c1": [obligation]},
+        CallBudget(1),
+        max_tokens=500,
+    )
+
+    assert result.used_llm is True
+    assert result.reason == "accepted"
+    assert len(result.findings) == 1
+    assert result.findings[0].candidate_id == "c1"

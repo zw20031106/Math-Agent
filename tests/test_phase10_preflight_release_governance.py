@@ -80,7 +80,7 @@ def _verifier(*, findings: bool = True) -> str:
                 [
                     {
                         "candidate_id": "preflight-l4",
-                        "claim_id": "c1",
+                        "claim_id": "host-c1",
                         "obligation_ids": ["preflight-l4:sufficiency"],
                         "review_target_ids": [],
                         "review_level": "obligation",
@@ -166,6 +166,26 @@ def test_optional_l5_is_explicitly_skipped_without_hiding_l0_to_l4():
         "skipped",
     ]
     assert report["levels"][-1]["error_code"] == "optional_verification_disabled"
+
+
+def test_preflight_retries_transient_router_and_verifier_protocol_failures():
+    client = _ScriptedClient(
+        [
+            '{"status":"ok"}',
+            _agent_turn(),
+            "{}",
+            _router(),
+            _candidate(),
+            _verifier(findings=False),
+            _verifier(),
+        ]
+    )
+
+    report = run_production_preflight(client)
+
+    assert report["status"] == "passed"
+    assert report["levels"][3]["transport_attempts"] == 2
+    assert report["levels"][5]["transport_attempts"] == 2
 
 
 def _ready() -> ReleaseReadiness:

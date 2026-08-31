@@ -17,3 +17,4 @@ data/*.sqlite-shm
 data/*.sqlite-wal
 benchmark-results/
 case-outputs/
+artifacts/

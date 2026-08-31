@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0",
+  "phase": "R0-T02",
+  "status": "historical-only",
+  "dataset_sha256": "7f2499c53f52cbcb17dcab7cc4b99c9e79f53e23c1392587289a02695284201f",
+  "source": {
+    "kind": "plan-aggregate",
+    "document": "Math-Agent_Codex详细实施计划_v2_上下文压缩_截断与Provider治理_2026-08-31.md",
+    "sha256": "1ec5729ba428e1be4535b612284c1b10235bcc407ae6a6b07c5380eac4591455"
+  },
+  "references": [
+    {
+      "id": "historical-official-2026-08-25",
+      "status": "historical_official_reference",
+      "date": "2026-08-25",
+      "metrics": {
+        "case_count": 112,
+        "correct": 20,
+        "accuracy": 0.17857142857142858,
+        "invalid": 0,
+        "request_count": 863,
+        "truncated_count": 438,
+        "prompt_tokens": 1763200,
+        "completion_tokens": 4034047,
+        "total_tokens": 5797247
+      },
+      "eligible_for_baseline": false,
+      "reasons": [
+        "historical aggregate has no current HEAD identity",
+        "prompt, skill, tokenizer, and source fingerprints are not bound to this registry entry",
+        "aggregate is retained only as a recovery reference",
+        "active baseline registration is deferred to a current repeated run"
+      ]
+    },
+    {
+      "id": "historical-official-2026-08-29",
+      "status": "historical_official_reference",
+      "date": "2026-08-29",
+      "metrics": {
+        "case_count": 112,
+        "correct": 14,
+        "accuracy": 0.125,
+        "invalid": 0,
+        "request_count": 850,
+        "truncated_count": 501,
+        "prompt_tokens": 2240124,
+        "completion_tokens": 4104079,
+        "total_tokens": 6344203
+      },
+      "eligible_for_baseline": false,
+      "reasons": [
+        "historical aggregate has no current HEAD identity",
+        "prompt, skill, tokenizer, and source fingerprints are not bound to this registry entry",
+        "aggregate is retained only as a regression reference",
+        "active baseline registration is deferred to a current repeated run"
+      ]
+    }
+  ],
+  "active_baseline_id": null,
+  "privacy": {
+    "contains_credentials": false,
+    "contains_absolute_paths": false,
+    "contains_private_reasoning_transcripts": false
+  }
+}

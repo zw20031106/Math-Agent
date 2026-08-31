@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Added Phase R0 evidence contracts and fail-closed tooling. Current candidate
+  identity now records source/config/prompt/skill/model/tokenizer fingerprints;
+  historical official 112-case aggregates are registered separately as
+  ineligible references; and repeated current-HEAD Benchmark artifacts require
+  three comparable runs before a diagnostic baseline can be complete. Added
+  `capture_current_identity.py`, `build_r0_baseline.py`, R0 fixtures, and the
+  execution report; no active baseline is enabled by this phase.
+- Added a fail-closed compatibility normalization for Verifier responses that
+  arrive as an unwrapped findings array from the official Intern endpoint;
+  Claim/Obligation ownership checks remain unchanged and the case-runner
+  preflight can now distinguish that artifact from an empty review. Production
+  preflight also retries transient Router and Verifier protocol failures up to
+  three bounded attempts before failing closed.
 - Implemented E8 Benchmark / Ablation / Release Freeze foundations. Benchmark
   loading now accepts the official JSON-array export as well as JSONL, and the
   repository includes validated B1 gradeability, B2 core-math, and B3 failure

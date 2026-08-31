@@ -124,6 +124,39 @@ __all__ = [
     "validate_benchmark_suite",
     "validate_paired_ablation",
 ]
+from mathforge.evaluation.r0 import (
+    CURRENT_BASELINE_SCHEMA_VERSION,
+    CURRENT_IDENTITY_SCHEMA_VERSION,
+    HISTORICAL_REFERENCE_SCHEMA_VERSION,
+    R0_METRIC_NAMES,
+    R0_MIN_REPETITIONS,
+    R0_SCHEMA_VERSION,
+    SOURCE_TREE_FINGERPRINT_ALGORITHM,
+    build_current_head_baseline,
+    build_historical_reference_registry,
+    capture_current_candidate_identity,
+    source_tree_fingerprint,
+    validate_current_candidate_identity,
+    validate_current_head_baseline,
+    validate_historical_reference_registry,
+)
+__all__.extend(
+    [
+        "CURRENT_BASELINE_SCHEMA_VERSION",
+        "CURRENT_IDENTITY_SCHEMA_VERSION",
+        "HISTORICAL_REFERENCE_SCHEMA_VERSION",
+        "R0_METRIC_NAMES",
+        "R0_MIN_REPETITIONS",
+        "R0_SCHEMA_VERSION",
+        "SOURCE_TREE_FINGERPRINT_ALGORITHM",
+        "build_current_head_baseline",
+        "build_historical_reference_registry",
+        "capture_current_candidate_identity",
+        "source_tree_fingerprint",
+        "validate_current_candidate_identity",
+        "validate_current_head_baseline",
+        "validate_historical_reference_registry",
+    ]
+)
 from mathforge.evaluation.production_preflight import run_production_preflight
-
-__all__ = ["run_production_preflight"]
+__all__.append("run_production_preflight")

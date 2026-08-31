@@ -22,6 +22,8 @@ from mathforge.parsing.solution_parser import SolutionParser
 PRODUCTION_PREFLIGHT_SCHEMA_VERSION = "2.0"
 PREFLIGHT_L1_MAX_TOKENS = 4096
 PREFLIGHT_STAGE_MAX_TOKENS = 2048
+PREFLIGHT_ROUTER_MAX_ATTEMPTS = 3
+PREFLIGHT_VERIFIER_MAX_ATTEMPTS = 3
 _ACTION_REGISTRY = ActionRegistry()
 
 _AGENT_TURN_REQUEST = (
@@ -138,15 +140,28 @@ def run_production_preflight(
 
     problem = ProblemParser().parse("Compute 1+1.")
     l3_started = perf_counter()
+    router_attempts = 0
+    router_outcome = None
+    router_failure_reasons: list[str] = []
     try:
-        router_outcome = RouterPlanner().plan_authoritative(
-            problem,
-            llm_chat=lambda **kwargs: client.chat(**kwargs),
-            consume_call=lambda: None,
-            max_tokens=PREFLIGHT_STAGE_MAX_TOKENS,
-        )
-        if router_outcome.source != "llm_router":
-            raise ModelResponseError("router_preflight_fallback")
+        for _ in range(PREFLIGHT_ROUTER_MAX_ATTEMPTS):
+            router_attempts += 1
+            router_outcome = RouterPlanner().plan_authoritative(
+                problem,
+                llm_chat=lambda **kwargs: client.chat(**kwargs),
+                consume_call=lambda: None,
+                max_tokens=PREFLIGHT_STAGE_MAX_TOKENS,
+            )
+            if router_outcome.source == "llm_router":
+                break
+            router_failure_reasons.append(
+                router_outcome.fallback_reason or "router_rule_fallback"
+            )
+        if router_outcome is None or router_outcome.source != "llm_router":
+            raise ModelResponseError(
+                "router_preflight_fallback",
+                details=tuple(router_failure_reasons),
+            )
         router_outcome.authoritative_plan.validate()
     except Exception as error:
         return _record_failure(
@@ -162,7 +177,7 @@ def run_production_preflight(
         "L3",
         l3_started,
         PREFLIGHT_STAGE_MAX_TOKENS,
-        1,
+        router_attempts,
         router_source=router_outcome.source,
     )
 
@@ -221,7 +236,7 @@ def run_production_preflight(
         return report
 
     l5_started = perf_counter()
-    l5_budget = CallBudget(1)
+    l5_budget = CallBudget(PREFLIGHT_VERIFIER_MAX_ATTEMPTS)
     claim_id = candidate.claims[0].claim_id
     obligation = ProofObligation(
         "preflight-l4:sufficiency",
@@ -229,18 +244,27 @@ def run_production_preflight(
         "Check that the final claim supports the requested answer.",
         source_claim_ids=[claim_id],
     )
+    verification = None
+    verification_reasons: list[str] = []
     try:
-        verification = VerifierSkepticAgent(
-            OfficialClientProvider(client, ModelCallGate(1))
-        ).review(
-            problem,
-            [candidate],
-            {candidate.candidate_id: [obligation]},
-            l5_budget,
-            max_tokens=PREFLIGHT_STAGE_MAX_TOKENS,
-        )
-        if not verification.used_llm or not verification.findings:
-            raise ModelResponseError("verification_preflight_invalid")
+        for _ in range(PREFLIGHT_VERIFIER_MAX_ATTEMPTS):
+            verification = VerifierSkepticAgent(
+                OfficialClientProvider(client, ModelCallGate(1))
+            ).review(
+                problem,
+                [candidate],
+                {candidate.candidate_id: [obligation]},
+                l5_budget,
+                max_tokens=PREFLIGHT_STAGE_MAX_TOKENS,
+            )
+            if verification.used_llm and verification.findings:
+                break
+            verification_reasons.append(verification.reason)
+        if verification is None or not verification.used_llm or not verification.findings:
+            raise ModelResponseError(
+                "verification_preflight_invalid",
+                details=tuple(verification_reasons),
+            )
     except Exception as error:
         return _record_failure(
             report,

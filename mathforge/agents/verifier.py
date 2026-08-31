@@ -347,7 +347,17 @@ class VerifierSkepticAgent:
         obligations: dict[str, list[ProofObligation]],
     ) -> list[SkepticFinding]:
         payload = _json_payload(response)
-        raw_findings = payload.get("findings", []) if isinstance(payload, dict) else []
+        # The prompt requests ``{"findings": [...]}``, but the official
+        # Intern endpoint can occasionally unwrap that single field and
+        # return the findings array itself. Treat that response as the same
+        # public artifact; all candidate/claim/obligation validation below
+        # still applies and no Host-owned identifiers are synthesized.
+        if isinstance(payload, dict):
+            raw_findings = payload.get("findings", [])
+        elif isinstance(payload, list):
+            raw_findings = payload
+        else:
+            raw_findings = []
         if not isinstance(raw_findings, list):
             return []
         candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
