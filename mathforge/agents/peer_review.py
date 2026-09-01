@@ -209,6 +209,7 @@ class SolverPeerReviewAgent:
             stage=stage,
             optional=False,
             action_category="peer_review_response",
+            stage_timeout_seconds=budget.stage_timeout_seconds("peer_review"),
         )
         budget.record_prompt_chars(
             sum(len(item["content"]) for item in messages),

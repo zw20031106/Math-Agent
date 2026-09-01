@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
+from math import ceil
 from threading import Lock
 from typing import ClassVar
 
@@ -10,6 +12,7 @@ from mathforge.harness.budget_types import CallBudgetSnapshot
 from mathforge.harness.cancellation import CancellationToken
 from mathforge.harness.deadline import DeadlineController
 from mathforge.harness.errors import BudgetExceeded
+from mathforge.harness.model_policy import stage_call_timeout
 
 
 @dataclass
@@ -43,6 +46,7 @@ class CallBudget:
     model_context_window_tokens: int = 262144
     context_safety_margin_tokens: int = 8192
     model_call_policy: str = "adaptive_bounded"
+    stage_execution_policy: dict[str, dict[str, int | float]] | None = None
     soft_call_checkpoints: tuple[int, ...] = ()
     speculative_exploration_cutoff: int = 0
     closure_reserve_calls: int = 0
@@ -106,6 +110,10 @@ class CallBudget:
         self.fallback_prompt_tokens = 0
         self.requested_output_tokens = 0
         self.observed_output_tokens = 0
+        self._observed_output_window: deque[int] = deque(maxlen=8)
+        self._reserved_output_tokens = 0
+        self._pending_output_predictions: deque[int] = deque()
+        self._active_output_predictions: deque[int] = deque()
         self.output_chars = 0
         self.model_call_elapsed_seconds = 0.0
         self.model_queue_wait_seconds = 0.0
@@ -205,6 +213,7 @@ class CallBudget:
         stage: str = "unallocated",
         optional: bool = False,
         action_category: str | None = None,
+        stage_timeout_seconds: float | None = None,
     ) -> None:
         with self._lock:
             self._ensure_mutable_locked()
@@ -217,10 +226,43 @@ class CallBudget:
                 used_calls=self.used_calls,
                 action_category=category,
             )
-            if not self.deadline.can_start_model_call(optional=optional):
+            can_start = (
+                self.deadline.can_start_model_call(optional=optional)
+                if stage_timeout_seconds is None
+                else self.deadline.can_start_stage_call(
+                    stage_timeout=stage_timeout_seconds,
+                    optional=optional,
+                )
+            )
+            if not can_start:
+                rejection_reason = (
+                    "model_stage_window_insufficient"
+                    if stage_timeout_seconds is not None
+                    else "model_response_deadline_exceeded"
+                )
+                self.model_admission_rejection_count += 1
+                self.model_admission_rejection_reasons[rejection_reason] = (
+                    self.model_admission_rejection_reasons.get(
+                        rejection_reason,
+                        0,
+                    )
+                    + 1
+                )
                 if self.deadline.hard_expired():
                     self.cancellation_token.cancel("case_deadline_expired")
                 raise BudgetExceeded("model call deadline reached")
+            predicted_output = self._predicted_output_tokens_locked()
+            if (
+                self.max_tokens > 0
+                and predicted_output > 0
+                and self.used_tokens
+                + self._reserved_output_tokens
+                + predicted_output
+                > self.max_tokens
+            ):
+                raise BudgetExceeded("model token budget admission exhausted")
+            self._pending_output_predictions.append(predicted_output)
+            self._reserved_output_tokens += predicted_output
             self.used_calls += 1
             self._stage_calls[stage] = self._stage_calls.get(stage, 0) + 1
 
@@ -236,6 +278,7 @@ class CallBudget:
                 self._stage_calls.pop(stage, None)
             else:
                 self._stage_calls[stage] = used_for_stage - 1
+            self._release_output_prediction_locked()
             return True
 
     def record_tokens(self, tokens: int) -> None:
@@ -296,9 +339,11 @@ class CallBudget:
                 "protocol_assurance_degradation": "none",
                 "candidate_parse_tier": "not_attempted",
                 "observed_output_tokens": 0,
+                "predicted_output_tokens": self._take_output_prediction_locked(),
                 "output_counting_mode": "",
                 "output_chars": 0,
                 "output_budget_exceeded": False,
+                "truncation_status": "unknown",
                 "finish_reason": str(
                     allocation.get("finish_reason", "unobservable")
                 ),
@@ -338,6 +383,7 @@ class CallBudget:
         transport_attempts: int = 1,
         output_budget_exceeded: bool = False,
         finish_reason: str = "",
+        truncation_status: str = "complete",
     ) -> None:
         with self._lock:
             self._ensure_mutable_locked()
@@ -345,6 +391,12 @@ class CallBudget:
             characters = max(0, int(output_chars))
             elapsed = max(0.0, float(elapsed_seconds))
             attempts = max(1, int(transport_attempts))
+            status = str(truncation_status).strip().casefold()
+            if status not in {"complete", "suspect", "truncated"}:
+                raise ValueError("invalid truncation status")
+            truncated = bool(output_budget_exceeded or status == "truncated")
+            self._release_output_prediction_locked()
+            self._observed_output_window.append(observed)
             self.observed_output_tokens += observed
             self.output_chars += characters
             self.model_call_elapsed_seconds += elapsed
@@ -360,10 +412,8 @@ class CallBudget:
                         output_budget_exceeded
                     ),
                     "finish_reason": str(finish_reason),
-                    "response_truncated": bool(
-                        output_budget_exceeded
-                        or str(finish_reason).casefold() == "length"
-                    ),
+                    "truncation_status": status,
+                    "response_truncated": truncated,
                     "elapsed_seconds": round(elapsed, 6),
                     "stop_reason": "response_received",
                 }
@@ -381,6 +431,7 @@ class CallBudget:
             self._ensure_mutable_locked()
             elapsed = max(0.0, float(elapsed_seconds))
             attempts = max(1, int(transport_attempts))
+            self._release_output_prediction_locked()
             self.model_call_timeout_count += 1
             self.model_call_failure_count += 1
             self.transport_attempts += attempts
@@ -407,6 +458,7 @@ class CallBudget:
             self._ensure_mutable_locked()
             elapsed = max(0.0, float(elapsed_seconds))
             attempts = max(1, int(transport_attempts))
+            self._release_output_prediction_locked()
             self.model_call_failure_count += 1
             self.transport_attempts += attempts
             self.model_call_elapsed_seconds += elapsed
@@ -736,6 +788,49 @@ class CallBudget:
                 self.retry_reasons.get(normalized, 0) + 1
             )
 
+    def observed_output_tokens_mean(self) -> float:
+        """Return the bounded observed-output mean used for admission."""
+
+        with self._lock:
+            return self._observed_output_tokens_mean_locked()
+
+    def stage_timeout_seconds(self, stage: str) -> float:
+        """Resolve a stage timeout from the active competition policy."""
+
+        return stage_call_timeout(stage, self.stage_execution_policy)
+
+    def _observed_output_tokens_mean_locked(self) -> float:
+        if not self._observed_output_window:
+            return 0.0
+        return sum(self._observed_output_window) / len(
+            self._observed_output_window
+        )
+
+    def _predicted_output_tokens_locked(self) -> int:
+        mean = self._observed_output_tokens_mean_locked()
+        return max(0, int(ceil(mean)))
+
+    def _take_output_prediction_locked(self) -> int:
+        prediction = (
+            self._pending_output_predictions.popleft()
+            if self._pending_output_predictions
+            else 0
+        )
+        self._active_output_predictions.append(prediction)
+        return prediction
+
+    def _release_output_prediction_locked(self) -> None:
+        if self._active_output_predictions:
+            prediction = self._active_output_predictions.popleft()
+        elif self._pending_output_predictions:
+            prediction = self._pending_output_predictions.popleft()
+        else:
+            prediction = 0
+        self._reserved_output_tokens = max(
+            0,
+            self._reserved_output_tokens - prediction,
+        )
+
     def _elapsed(self) -> float:
         return self.deadline.elapsed_seconds()
 
@@ -799,6 +894,14 @@ class CallBudget:
                 "fallback_prompt_tokens": self.fallback_prompt_tokens,
                 "requested_output_tokens": self.requested_output_tokens,
                 "observed_output_tokens": self.observed_output_tokens,
+                "observed_output_tokens_mean": round(
+                    self._observed_output_tokens_mean_locked(),
+                    6,
+                ),
+                "observed_output_tokens_window": list(
+                    self._observed_output_window
+                ),
+                "reserved_output_tokens": self._reserved_output_tokens,
                 "output_chars": self.output_chars,
                 "model_call_elapsed_seconds": round(
                     self.model_call_elapsed_seconds,

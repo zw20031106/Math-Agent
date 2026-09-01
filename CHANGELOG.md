@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Completed the 2026-09-01 full-review Phase 1 time-budget and truncation
+  controls. Stage admission now reasons about the concrete stage timeout and
+  keeps a deterministic-finalization reserve, while Provider execution clips
+  the live wait to the remaining model-call window. Competition timing uses a
+  30-second model-start margin and a 770-second exploration boundary. Model
+  responses use conservative `complete`/`suspect`/`truncated` classification;
+  only hard truncation evidence drives retry/partial handling. Context-aware
+  output caps subtract prompt tokens and the safety margin, and output-budget
+  admission uses an observed rolling mean. Provider circuit accounting now
+  counts transport/service failures only, with a six-failure threshold and
+  half-open cooldown recovery. Added Phase 1 invariant coverage; no real-model
+  accuracy or official 112-case gate is claimed by this change alone.
 - Started the 2026-09-01 full-review Phase 0 diagnostic recovery. Competition
   traces now retain a bounded 4000-character window, judge/public traces expose
   a fixed diagnostics step, per-case metrics record the two-state answer source

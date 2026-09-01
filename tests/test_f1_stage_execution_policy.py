@@ -39,7 +39,7 @@ def test_proof_turn_uses_larger_cap_and_records_effective_policy():
     assert record["effective_output_tokens"] == 40_960
     assert record["configured_stage_timeout_seconds"] == 420.0
     assert record["effective_stage_timeout_seconds"] <= 420.0
-    assert record["finish_reason"] == "length_inferred"
+    assert record["finish_reason"] == "stop_inferred"
     assert record["logical_call_consumed"] is True
     assert record["dispatched"] is True
 

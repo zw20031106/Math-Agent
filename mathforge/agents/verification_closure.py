@@ -311,7 +311,12 @@ class VerificationClosureAgent:
         input_artifact_ids: tuple[str, ...],
         prompt_component_tokens: dict[str, int] | None = None,
     ) -> str:
-        budget.consume(stage="verifier", optional=False, action_category=action_category)
+        budget.consume(
+            stage="verifier",
+            optional=False,
+            action_category=action_category,
+            stage_timeout_seconds=budget.stage_timeout_seconds("verifier"),
+        )
         budget.record_prompt_chars(
             sum(len(item["content"]) for item in messages),
             components=prompt_component_tokens,

@@ -342,6 +342,15 @@ class SolverExecutor:
                 budget.consume(
                     stage=stage,
                     optional=optional or attempt > 0,
+                    stage_timeout_seconds=budget.stage_timeout_seconds(
+                        "lemma_curator"
+                        if stage == "lemma"
+                        else (
+                            "solver_candidate_proof"
+                            if request.problem.response_mode == "proof_full"
+                            else "solver_candidate_standard"
+                        )
+                    ),
                 )
             except BudgetExceeded:
                 if last_response_error is not None:
@@ -498,6 +507,9 @@ class SolverExecutor:
             stage="primary",
             optional=False,
             action_category="candidate_completion",
+            stage_timeout_seconds=budget.stage_timeout_seconds(
+                "solver_compact_synthesis"
+            ),
         )
         budget.record_prompt_chars(
             sum(len(message["content"]) for message in compilation.messages),
@@ -562,6 +574,7 @@ class SolverExecutor:
             stage="primary",
             optional=optional,
             action_category="speculative_exploration",
+            stage_timeout_seconds=budget.stage_timeout_seconds("solver_progress"),
         )
         budget.record_prompt_chars(
             sum(len(message["content"]) for message in compilation.messages),
@@ -635,6 +648,7 @@ class SolverExecutor:
             stage=stage,
             optional=optional,
             action_category="speculative_exploration",
+            stage_timeout_seconds=budget.stage_timeout_seconds("solver_progress"),
         )
         budget.record_prompt_chars(
             sum(len(message["content"]) for message in compilation.messages),
@@ -766,6 +780,7 @@ class SolverExecutor:
             stage=stage,
             optional=False,
             action_category="candidate_completion",
+            stage_timeout_seconds=budget.stage_timeout_seconds(turn_kind),
         )
         budget.record_prompt_chars(
             sum(len(message["content"]) for message in compilation.messages),
@@ -991,6 +1006,9 @@ class SolverExecutor:
             stage=stage,
             optional=False,
             action_category="candidate_completion",
+            stage_timeout_seconds=budget.stage_timeout_seconds(
+                "solver_compact_synthesis"
+            ),
         )
         if request.reasoning_state_json.strip() or request.checkpoint_state_json.strip():
             # Stateful recovery keeps the public frontier and asks for a
@@ -1316,12 +1334,16 @@ def _problem_structure_prompt(problem: ProblemIR) -> str:
 def _response_was_truncated(response: str) -> bool:
     return bool(
         getattr(response, "output_budget_exceeded", False)
+        or str(getattr(response, "truncation_status", "")).casefold()
+        == "truncated"
         or str(getattr(response, "finish_reason", "")).casefold()
         in {"length", "length_inferred"}
     )
 
 
 def _response_truncation_reason(response: str) -> str:
+    if str(getattr(response, "truncation_status", "")).casefold() == "truncated":
+        return "truncation_status_truncated"
     finish_reason = str(getattr(response, "finish_reason", "")).casefold()
     if finish_reason in {"length", "length_inferred"}:
         return "finish_reason_length"

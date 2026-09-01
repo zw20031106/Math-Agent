@@ -104,7 +104,10 @@ class VerifierSkepticAgent:
                 "no_reviewable_targets",
             )
         try:
-            budget.consume(stage="verifier")
+            budget.consume(
+                stage="verifier",
+                stage_timeout_seconds=budget.stage_timeout_seconds("verifier"),
+            )
             visible = (
                 self._review_payload_from_view(context_view)
                 if context_view is not None

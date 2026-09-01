@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from math import isfinite
 from time import monotonic
 from typing import Callable
 
@@ -68,6 +69,58 @@ class DeadlineController:
         if optional and not self.optional_work_allowed():
             return False
         return self.exploration_allowed()
+
+    def can_start_stage_call(
+        self,
+        *,
+        stage_timeout: float,
+        optional: bool = False,
+    ) -> bool:
+        """Check whether one concrete stage can still finish safely.
+
+        The old admission check only looked at the global model-call margin.
+        That made a long stage start with too little time left and left the
+        request running after the case had already reached its hard deadline.
+        Admission is now tied to the stage's actual timeout and the
+        deterministic-finalization reserve.  A short, bounded stage remains
+        eligible after the exploration deadline so a late answer-extraction
+        or finalization step can still publish a result.
+        """
+
+        try:
+            timeout = float(stage_timeout)
+        except (TypeError, ValueError) as error:
+            raise ValueError("stage timeout must be a nonnegative number") from error
+        if not isfinite(timeout) or timeout < 0:
+            raise ValueError("stage timeout must be a nonnegative number")
+        if optional and not self.optional_work_allowed():
+            return False
+        if timeout <= 0:
+            return False
+
+        remaining = self.remaining_seconds()
+        reserve = self.finalize_reserve_seconds
+        # A configured stage timeout can exceed a synthetic/test deadline.
+        # The provider will clip the actual wait to the available window, so
+        # use that same hard upper bound for feasibility instead of making an
+        # otherwise valid short-deadline call impossible to exercise.
+        bounded_timeout = min(timeout, max(0.0, self.hard_deadline_seconds - reserve))
+        required_window = bounded_timeout + reserve
+        # Keep a strict reserve for normal configured stages: an exact fit
+        # leaves no scheduling/cleanup margin.  Synthetic callers may pass a
+        # timeout larger than their hard deadline; the provider clips that
+        # timeout to the test window, so retain the historical exact-fit
+        # compatibility for that case.
+        fits_window = (
+            remaining > required_window
+            if timeout <= self.hard_deadline_seconds
+            else remaining >= required_window
+        )
+        if not fits_window:
+            return False
+        if timeout <= 60.0:
+            return True
+        return self.elapsed_seconds() < self.exploration_deadline_seconds
 
     def can_start_stage(self, *, optional: bool = False) -> bool:
         if optional and not self.optional_work_allowed():

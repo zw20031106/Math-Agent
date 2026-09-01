@@ -60,7 +60,10 @@ class RepairAgent:
             if record.candidate_id == candidate.candidate_id
             and record.claim_id in affected_claim_ids
         ]
-        budget.consume(stage="repair")
+        budget.consume(
+            stage="repair",
+            stage_timeout_seconds=budget.stage_timeout_seconds("repair"),
+        )
         user = (
             f"Problem:\n{problem.normalized_problem}\n\n"
             f"{condition_envelope.to_prompt()}\n\n"

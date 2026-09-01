@@ -33,6 +33,7 @@ class ObservedModelResponse(str):
     model_call_index: int | None
     output_budget_exceeded: bool
     finish_reason: str
+    truncation_status: str
     protocol_turn_id: str
 
     def __new__(
@@ -43,6 +44,7 @@ class ObservedModelResponse(str):
         model_call_index: int | None = None,
         output_budget_exceeded: bool = False,
         finish_reason: str = "",
+        truncation_status: str = "complete",
         protocol_turn_id: str = "",
     ) -> ObservedModelResponse:
         instance = super().__new__(cls, value)
@@ -50,6 +52,10 @@ class ObservedModelResponse(str):
         instance.model_call_index = model_call_index
         instance.output_budget_exceeded = bool(output_budget_exceeded)
         instance.finish_reason = str(finish_reason)
+        normalized_truncation = str(truncation_status).strip().casefold()
+        if normalized_truncation not in {"complete", "suspect", "truncated"}:
+            raise ValueError("unsupported truncation status")
+        instance.truncation_status = normalized_truncation
         instance.protocol_turn_id = str(protocol_turn_id)
         return instance
 

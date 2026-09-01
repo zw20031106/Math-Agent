@@ -2233,6 +2233,9 @@ def _model_activity(
                 "finish_reason": str(
                     record.get("finish_reason", "unobservable")
                 ),
+                "truncation_status": str(
+                    record.get("truncation_status", "unknown")
+                ),
                 "tail_state": str(record.get("tail_state", "none")),
                 "stop_reason": str(record.get("stop_reason", "")),
                 "execution_elapsed_seconds": _nonnegative_float(
@@ -2299,6 +2302,7 @@ def _model_activity(
         "transport_attempt_reservation",
         "transport_attempt_observability",
         "finish_reason",
+        "truncation_status",
         "tail_state",
         "stop_reason",
         "total_elapsed_seconds",
@@ -2670,6 +2674,7 @@ def _bound_event(
                     "client_timeout_seconds",
                     "effective_stage_timeout_seconds",
                     "finish_reason",
+                    "truncation_status",
                 )
                 if key in call
             }

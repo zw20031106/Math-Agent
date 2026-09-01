@@ -51,7 +51,11 @@ class LLMFinalizer:
     ) -> FinalizationResult:
         try:
             condition_envelope = build_problem_condition_envelope(problem)
-            budget.consume(stage="finalizer", optional=True)
+            budget.consume(
+                stage="finalizer",
+                optional=True,
+                stage_timeout_seconds=budget.stage_timeout_seconds("finalizer"),
+            )
             selected = (
                 f"Authorized finalizer context:\n{context_view.to_prompt_json()}"
                 if context_view is not None

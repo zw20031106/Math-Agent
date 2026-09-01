@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 from threading import Event, Lock, Thread
-from time import perf_counter, sleep
+from time import monotonic, perf_counter, sleep
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -83,7 +83,7 @@ MODEL_PREFLIGHT_MAX_TOKENS = PREFLIGHT_STAGE_MAX_TOKENS
 MODEL_FAST_FAILURE_ATTEMPTS = 1
 MODEL_FAST_FAILURE_SECONDS = 10.0
 MODEL_FAST_FAILURE_BACKOFF_SECONDS = 1.0
-DEFAULT_MAX_CONSECUTIVE_PROVIDER_FAILURES = 3
+DEFAULT_MAX_CONSECUTIVE_PROVIDER_FAILURES = 6
 DEFAULT_RERUN_STATUSES = frozenset({"failed", "timeout"})
 PUBLIC_CASE_STATUSES = frozenset({"success", "failed", "timeout"})
 
@@ -94,14 +94,8 @@ _PROVIDER_CIRCUIT_REASONS = frozenset(
         "provider_5xx",
         "network_connect_failure",
         "network_read_timeout",
-        "response_shape_invalid",
         "empty_response",
-        "model_response_deadline_exceeded",
-        "model_concurrency_wait_exceeded",
         "unknown_provider_failure",
-        "candidate_json_incomplete",
-        "candidate_json_invalid",
-        "candidate_schema_invalid",
     }
 )
 
@@ -164,30 +158,80 @@ class ConsecutiveProviderFailureCircuitBreaker:
     def __init__(
         self,
         max_consecutive_failures: int = DEFAULT_MAX_CONSECUTIVE_PROVIDER_FAILURES,
+        *,
+        cooldown_seconds: float = 60.0,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         if max_consecutive_failures < 1:
             raise ValueError("max_consecutive_failures must be positive")
+        if cooldown_seconds <= 0:
+            raise ValueError("cooldown_seconds must be positive")
         self.max_consecutive_failures = int(max_consecutive_failures)
+        self.cooldown_seconds = float(cooldown_seconds)
+        self._clock = clock
         self.consecutive_failures = 0
         self.opened = False
+        self.half_open = False
+        self.opened_at: float | None = None
         self.last_failure_reasons: list[str] = []
 
     def observe(self, record: BenchmarkRecord) -> bool:
+        self._refresh()
         reasons = _provider_failure_reasons(record)
+        if self.half_open:
+            # The first observation after the cooldown is the half-open probe.
+            self.half_open = False
+            if not reasons:
+                self.consecutive_failures = 0
+                self.last_failure_reasons = []
+                self.opened = False
+                self.opened_at = None
+                return False
+            self.consecutive_failures = self.max_consecutive_failures
+            self.last_failure_reasons = reasons
+            self.opened = True
+            self.opened_at = self._clock()
+            return True
         if reasons:
             self.consecutive_failures += 1
             self.last_failure_reasons = reasons
+            if self.consecutive_failures >= self.max_consecutive_failures:
+                self.opened = True
+                self.opened_at = self._clock()
         else:
             self.consecutive_failures = 0
             self.last_failure_reasons = []
-        self.opened = self.consecutive_failures >= self.max_consecutive_failures
+            self.opened = False
+            self.opened_at = None
         return self.opened
 
+    def is_open(self) -> bool:
+        self._refresh()
+        return self.opened
+
+    def _refresh(self) -> None:
+        if (
+            self.opened
+            and self.opened_at is not None
+            and self._clock() - self.opened_at >= self.cooldown_seconds
+        ):
+            self.opened = False
+            self.half_open = True
+
     def to_dict(self) -> dict[str, Any]:
+        self._refresh()
         return {
             "max_consecutive_failures": self.max_consecutive_failures,
             "consecutive_failures": self.consecutive_failures,
             "opened": self.opened,
+            "state": (
+                "half_open"
+                if self.half_open
+                else "open"
+                if self.opened
+                else "closed"
+            ),
+            "cooldown_seconds": self.cooldown_seconds,
             "last_failure_reasons": list(self.last_failure_reasons),
         }
 
@@ -1041,6 +1085,19 @@ def main(argv: list[str] | None = None) -> int:
                     "PROVIDER_CIRCUIT_OPEN "
                     f"consecutive_failures={breaker.consecutive_failures}"
                 )
+            elif provider_circuit_open.is_set() and not breaker.is_open():
+                # A successful observation (or the cooldown transition to a
+                # half-open probe) reopens scheduling for pending cases.
+                provider_circuit_open.clear()
+
+        def should_stop_scheduling() -> bool:
+            if stop_controller.requested:
+                return True
+            if breaker.is_open():
+                provider_circuit_open.set()
+                return True
+            provider_circuit_open.clear()
+            return False
 
         completed_records, _ = run_benchmark(
             attempted_cases,
@@ -1048,9 +1105,7 @@ def main(argv: list[str] | None = None) -> int:
             concurrency=args.concurrency,
             seed=args.seed,
             on_record_completed=persist_and_observe,
-            should_stop_scheduling=lambda: (
-                stop_controller.requested or provider_circuit_open.is_set()
-            ),
+            should_stop_scheduling=should_stop_scheduling,
         )
         pending_case_count = manifest.lifecycle_summary()["pending_case_count"]
         if stop_controller.requested and pending_case_count:
@@ -1228,15 +1283,18 @@ def model_http_timeout_seconds(config: Any) -> int:
 def _provider_failure_reasons(record: BenchmarkRecord) -> list[str]:
     if record.run_metrics.outcome == "primary":
         return []
-    reasons = {
-        str(event.get("reason", ""))
-        for event in record.result.get("trace", [])
-        if isinstance(event, dict)
-        and event.get("event") == "candidate_generation_failed"
-        and str(event.get("reason", "")) in _PROVIDER_CIRCUIT_REASONS
-    }
-    if not reasons and record.run_metrics.model_call_failure_count:
-        reasons.add("unknown_provider_failure")
+    reasons: set[str] = set()
+    for event in record.result.get("trace", []):
+        if not isinstance(event, dict):
+            continue
+        # Provider failures may be projected as a candidate failure, a model
+        # activity record, or a terminal stop reason.  Only an explicit code
+        # from the transport/service failure allow-list is circuit-worthy;
+        # aggregate failure counts and schema errors remain non-provider data.
+        for field in ("reason", "failure_code", "stop_reason", "error_code"):
+            value = str(event.get(field, ""))
+            if value in _PROVIDER_CIRCUIT_REASONS:
+                reasons.add(value)
     return sorted(reasons)
 
 

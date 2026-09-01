@@ -96,6 +96,7 @@ class LLMLemmaCuratorAgent:
             stage="lemma",
             optional=optional,
             action_category="speculative_exploration",
+            stage_timeout_seconds=budget.stage_timeout_seconds("lemma_curator"),
         )
         budget.record_prompt_chars(
             sum(len(message["content"]) for message in compilation.messages),
@@ -115,21 +116,29 @@ class LLMLemmaCuratorAgent:
             agent_action_protocol=True,
         )
         try:
+            truncation_status = str(
+                getattr(response, "truncation_status", "")
+            ).casefold()
+            finish_reason = str(
+                getattr(response, "finish_reason", "")
+            ).casefold()
+            response_truncated = bool(
+                getattr(response, "output_budget_exceeded", False)
+                or truncation_status == "truncated"
+                or finish_reason == "length"
+            )
             parsed = AgentTurnPayloadParser().parse(
                 response,
                 allowed_actions=_ACTION_REGISTRY.prompt_actions(
                     self.role,
                     phase="lemma_turn",
                 ),
-                truncated=bool(
-                    getattr(response, "output_budget_exceeded", False)
-                    or str(getattr(response, "finish_reason", "")).casefold()
-                    == "length"
-                ),
+                truncated=response_truncated,
                 truncation_reason=(
-                    "finish_reason_length"
-                    if str(getattr(response, "finish_reason", "")).casefold()
-                    == "length"
+                    "truncation_status_truncated"
+                    if truncation_status == "truncated"
+                    else "finish_reason_length"
+                    if finish_reason == "length"
                     else "observed_output_exceeded_contract"
                     if getattr(response, "output_budget_exceeded", False)
                     else ""
@@ -227,14 +236,20 @@ class LLMLemmaCuratorAgent:
         turn_id = str(getattr(response, "protocol_turn_id", ""))
         if runtime is None or not turn_id:
             return
+        truncation_status = str(
+            getattr(response, "truncation_status", "")
+        ).casefold()
+        finish_reason = str(getattr(response, "finish_reason", "")).casefold()
         truncated = bool(
             getattr(response, "output_budget_exceeded", False)
-            or str(getattr(response, "finish_reason", "")).casefold()
-            == "length"
+            or truncation_status == "truncated"
+            or finish_reason == "length"
         )
         reason = (
-            "finish_reason_length"
-            if str(getattr(response, "finish_reason", "")).casefold() == "length"
+            "truncation_status_truncated"
+            if truncation_status == "truncated"
+            else "finish_reason_length"
+            if finish_reason == "length"
             else "observed_output_exceeded_contract"
             if getattr(response, "output_budget_exceeded", False)
             else ""

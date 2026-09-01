@@ -22,12 +22,12 @@ from mathforge.parsing.solution_parser import (
 @pytest.mark.parametrize(
     ("response", "maximum", "observed", "expected"),
     [
-        ("", 100, 0, True),
-        ("x" * 95, 100, 95, True),
-        ('{"answer":"2"', 100, 4, True),
-        ("<think>unfinished", 100, 4, True),
-        ("The answer continues", 100, 4, True),
-        ('{"answer":"2"}', 100, 4, False),
+        ("", 100, 0, "truncated"),
+        ("x" * 95, 100, 95, "complete"),
+        ('{"answer":"2"', 100, 4, "truncated"),
+        ("<think>unfinished", 100, 4, "truncated"),
+        ("The answer continues", 100, 4, "complete"),
+        ('{"answer":"2"}', 100, 4, "complete"),
     ],
 )
 def test_string_only_provider_infers_truncation(
@@ -36,7 +36,7 @@ def test_string_only_provider_infers_truncation(
     observed: int,
     expected: bool,
 ) -> None:
-    assert _looks_truncated(response, maximum, observed) is expected
+    assert _looks_truncated(response, maximum, observed) == expected
 
 
 def test_provider_records_inferred_finish_reason() -> None:

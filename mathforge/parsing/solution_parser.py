@@ -139,6 +139,8 @@ class SolutionParser:
             parse_tier=CandidateParseTier.ANSWER_RECOVERED.value,
             degraded=bool(
                 getattr(response, "output_budget_exceeded", False)
+                or str(getattr(response, "truncation_status", "")).casefold()
+                == "truncated"
                 or str(getattr(response, "finish_reason", "")).casefold()
                 in {"length", "length_inferred"}
             ),

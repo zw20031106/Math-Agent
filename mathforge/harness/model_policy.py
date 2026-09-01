@@ -95,13 +95,43 @@ def effective_output_tokens(
     stage: str,
     configured_max_tokens: int,
     policy: dict[str, dict[str, int | float]] | None = None,
+    *,
+    prompt_tokens: int | None = None,
+    context_window_tokens: int | None = None,
+    context_safety_margin_tokens: int = 0,
 ) -> int:
-    """Apply the stage policy, with an optional per-call downward limit."""
+    """Apply stage, per-call, and (when supplied) context limits.
+
+    Context-aware callers may pass the prompt count and the active context
+    window.  Keeping the constraint here makes the effective output cap a
+    single, inspectable policy rather than a stage-only ``min``.
+    """
 
     if type(configured_max_tokens) is not int or configured_max_tokens < 0:
         raise ValueError("configured max output tokens must be nonnegative")
+    if prompt_tokens is not None:
+        if type(prompt_tokens) is not int or prompt_tokens < 0:
+            raise ValueError("prompt tokens must be a nonnegative integer")
+        if context_window_tokens is None:
+            raise ValueError("context window is required with prompt tokens")
+    if context_window_tokens is not None:
+        if type(context_window_tokens) is not int or context_window_tokens <= 0:
+            raise ValueError("context window must be a positive integer")
+        if type(context_safety_margin_tokens) is not int or context_safety_margin_tokens < 0:
+            raise ValueError("context safety margin must be a nonnegative integer")
+        prompt = 0 if prompt_tokens is None else prompt_tokens
+        available = (
+            context_window_tokens - prompt - context_safety_margin_tokens
+        )
+        if available <= 0:
+            return 0
+    else:
+        available = None
     cap = stage_output_cap(stage, policy)
-    return cap if configured_max_tokens == 0 else min(cap, configured_max_tokens)
+    effective = cap if configured_max_tokens == 0 else min(cap, configured_max_tokens)
+    if available is not None:
+        effective = min(effective, available)
+    return effective
 
 
 def stage_call_timeout(

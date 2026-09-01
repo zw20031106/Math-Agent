@@ -54,6 +54,7 @@ from mathforge.harness.effective_config import (
     build_effective_config_snapshot,
 )
 from mathforge.harness.model_policy import (
+    stage_call_timeout,
     stage_output_cap,
     stage_p95_seconds,
     stage_sequence_feasible_parallel,
@@ -423,6 +424,7 @@ class MathForgeHarness:
             if self._config.enable_shadow
             else None
         )
+
         frozen_lemma_store = None
         if self._config.enable_frozen_lemma_store:
             from mathforge.memory.frozen_lemma_store import FrozenLemmaStore
@@ -499,6 +501,17 @@ class MathForgeHarness:
             **identity.to_dict(),
             "provenance_hash": self._run_provenance.fingerprint,
         }
+
+    def _model_stage_timeout(self, session, stage: str) -> float:
+        """Bound each scheduler wave by its real stage policy timeout."""
+
+        return max(
+            0.0,
+            min(
+                session.budget.deadline.remaining_for_model_call(),
+                stage_call_timeout(stage, self._config.stage_execution_policy),
+            ),
+        )
 
     def _solver_protocol_variant(self, *, direct_candidate_mode: bool) -> str:
         """Select the protocol used by benchmark-only prompt A/B runs.
@@ -606,6 +619,7 @@ class MathForgeHarness:
                     self._config.context_safety_margin_tokens
                 ),
                 model_call_policy=self._config.model_call_policy,
+                stage_execution_policy=self._config.stage_execution_policy,
                 soft_call_checkpoints=self._config.soft_call_checkpoints,
                 speculative_exploration_cutoff=(
                     self._config.speculative_exploration_cutoff
@@ -868,6 +882,10 @@ class MathForgeHarness:
                                 stage="router",
                                 optional=False,
                                 action_category="replan",
+                                stage_timeout_seconds=stage_call_timeout(
+                                    "router",
+                                    self._config.stage_execution_policy,
+                                ),
                             )
                         )
                         if router_enabled
@@ -900,7 +918,7 @@ class MathForgeHarness:
             router_outcomes = router_executor.run_wave(
                 ("router",),
                 operations={"router": run_router_plan},
-                timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+                timeout_seconds=self._model_stage_timeout(session, "router"),
             )
             router_outcome = router_outcomes[0].value if router_outcomes else None
             if router_outcome is None:
@@ -4938,7 +4956,7 @@ class MathForgeHarness:
                 outcomes = graph_executor.run_wave(
                     (node_id,),
                     operations={node_id: operation},
-                    timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+                    timeout_seconds=self._model_stage_timeout(session, stage),
                 )
             except (KeyError, RuntimeError, TypeError, ValueError) as error:
                 trace.add(
@@ -5174,7 +5192,7 @@ class MathForgeHarness:
             progress_outcomes = graph_executor.run_wave(
                 tuple(progress_tasks),
                 operations=progress_tasks,
-                timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+                timeout_seconds=self._model_stage_timeout(session, "solver_progress"),
                 preserve_start_order=True,
             )
             for outcome in progress_outcomes:
@@ -5764,7 +5782,14 @@ class MathForgeHarness:
         synthesis_outcomes = graph_executor.run_wave(
             tuple(synthesis_tasks),
             operations=synthesis_tasks,
-            timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+            timeout_seconds=self._model_stage_timeout(
+                session,
+                (
+                    "solver_candidate_proof"
+                    if session.problem_ir.response_mode == "proof_full"
+                    else "solver_candidate_standard"
+                ),
+            ),
         )
         trace.add(
             "parallel_solver_wave_completed",
@@ -6463,7 +6488,7 @@ class MathForgeHarness:
             wave_outcomes = review_executor.run_wave(
                 tuple(review_tasks),
                 operations=review_tasks,
-                timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+                timeout_seconds=self._model_stage_timeout(session, "peer_review"),
             )
         else:
             wave_outcomes = ()
@@ -6949,6 +6974,10 @@ class MathForgeHarness:
                     stage="router",
                     optional=True,
                     action_category="replan",
+                    stage_timeout_seconds=stage_call_timeout(
+                        "replan",
+                        self._config.stage_execution_policy,
+                    ),
                 ),
                 max_tokens=self._config.primary_max_tokens,
                 previous_plan=previous,
@@ -7445,7 +7474,7 @@ class MathForgeHarness:
         outcomes = executor.run_wave(
             (node_id,),
             operations={node_id: operation},
-            timeout_seconds=session.budget.deadline.remaining_for_model_call(),
+            timeout_seconds=self._model_stage_timeout(session, action),
         )
         outcome = outcomes[0] if outcomes else None
         if outcome is None:

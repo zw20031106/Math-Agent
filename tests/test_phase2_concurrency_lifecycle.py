@@ -444,7 +444,7 @@ def test_competition_deadline_profile_is_explicit_and_preserves_terminal_reserve
     assert config.outer_platform_limit_seconds == 900.0
     assert config.hard_deadline_seconds == 850.0
     assert config.soft_deadline_seconds == 600.0
-    assert config.exploration_deadline_seconds == 720.0
+    assert config.exploration_deadline_seconds == 770.0
     assert config.deterministic_finalize_reserve_seconds == 50.0
     assert config.model_queue_budget_seconds > 0
     assert config.model_max_concurrency == 6
@@ -457,7 +457,7 @@ def test_competition_deadline_profile_is_explicit_and_preserves_terminal_reserve
         exploration_deadline_seconds=720.0,
         hard_deadline_seconds=850.0,
         deterministic_finalize_reserve_seconds=50.0,
-        model_call_start_margin_seconds=100.0,
+        model_call_start_margin_seconds=30.0,
         clock=lambda: now[0],
     )
     now[0] = 800.0

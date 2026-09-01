@@ -106,7 +106,7 @@ def test_competition_config_uses_reliable_completion_cap_and_e1_deadlines():
         config.hard_deadline_seconds,
         config.deterministic_finalize_reserve_seconds,
         config.model_call_start_margin_seconds,
-    ) == (600.0, 720.0, 850.0, 50.0, 100.0)
+    ) == (600.0, 770.0, 850.0, 50.0, 30.0)
 
 
 def test_zero_token_quota_records_without_enforcement_and_positive_quota_remains_hard():

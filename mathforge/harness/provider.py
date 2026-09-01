@@ -4,6 +4,7 @@ from copy import deepcopy
 from collections.abc import Callable
 from collections import deque
 from dataclasses import dataclass, field
+import re
 from threading import Event, Lock, Thread
 from time import monotonic, perf_counter
 from typing import Any, TYPE_CHECKING
@@ -55,7 +56,8 @@ _TRANSPORT_HEALTH_FAILURE_CODES = frozenset(
         "unknown_provider_failure",
     }
 )
-_COMPLETE_RESPONSE_ENDINGS = frozenset('}]"\'。．.!?$')
+_STRUCTURAL_OPENERS = {"{": "}", "[": "]"}
+_TRUNCATION_STATUSES = frozenset({"complete", "suspect", "truncated"})
 
 
 @dataclass
@@ -82,21 +84,65 @@ def _looks_truncated(
     response: str,
     max_output_tokens: int,
     observed_output_tokens: int,
-) -> bool:
-    """Infer length truncation from signals exposed by the string-only client."""
+) -> str:
+    """Classify truncation without treating a final character as evidence.
+
+    The injected client exposes a string in the common case, so the provider
+    can only infer truncation from hard structural/length signals. A weak
+    long-tail signal is retained as ``suspect`` for observability, but it is
+    deliberately not consumed as a rejection or retry trigger by callers.
+    """
 
     text = str(response).strip()
     if not text:
-        return True
+        return "truncated"
     maximum = max(0, int(max_output_tokens))
     observed = max(0, int(observed_output_tokens))
-    if maximum and observed >= max(1, int(maximum * 0.95)):
-        return True
-    if text.startswith("{") and not text.endswith("}"):
-        return True
+    if maximum and observed >= max(1, int(maximum * 0.98)):
+        return "truncated"
     if "<think>" in text and "</think>" not in text:
+        return "truncated"
+    for opener, closer in _STRUCTURAL_OPENERS.items():
+        if text.startswith(opener) and _container_depth(text, opener, closer) > 0:
+            return "truncated"
+    if len(text) > 200 and _ends_mid_token(text):
+        return "suspect"
+    return "complete"
+
+
+def _container_depth(text: str, opener: str, closer: str) -> int:
+    """Return the unmatched depth for one JSON-like container pair."""
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == opener:
+            depth += 1
+        elif character == closer:
+            depth = max(0, depth - 1)
+    return depth
+
+
+def _ends_mid_token(text: str) -> bool:
+    """Recognize only a weak, long-response token-boundary signal."""
+
+    stripped = text.rstrip()
+    if not stripped or stripped[-1] in "。．.!?;；:：,，、)]}\"'»”》】）":
+        return False
+    if stripped.endswith("\\"):
         return True
-    return text[-1] not in _COMPLETE_RESPONSE_ENDINGS
+    return re.search(r"(?:\\[A-Za-z]+|[A-Za-z0-9_]+)$", stripped) is not None
 
 
 def _record_protocol_dispatch(budget, call_index, runtime, turn) -> None:
@@ -257,9 +303,10 @@ class ModelCallGate:
             timing_callback,
         )
         started = perf_counter()
+        stage_timeout_explicit = stage_timeout_seconds is not None
         stage_timeout = (
             stage_call_timeout(stage)
-            if stage_timeout_seconds is None
+            if not stage_timeout_explicit
             else max(0.0, float(stage_timeout_seconds))
         )
         queue_budget = (
@@ -304,20 +351,6 @@ class ModelCallGate:
             self._admission.release(lease, dispatched=False)
             self._abandon_half_open_probe(case_key, half_open_probe)
             raise
-        if not deadline.can_start_model_call():
-            self._admission.release(lease, dispatched=False)
-            self._abandon_half_open_probe(case_key, half_open_probe)
-            self._emit_timing(
-                timing_callback,
-                queue_elapsed_seconds=queue_elapsed,
-                agent_wait_seconds=lease.agent_wait_seconds,
-                scheduler_wait_seconds=lease.scheduler_wait_seconds,
-                rate_wait_seconds=lease.rate_wait_seconds,
-                execution_elapsed_seconds=0.0,
-                total_elapsed_seconds=queue_elapsed,
-            )
-            raise ModelCallRejected("model_response_deadline_exceeded")
-
         execution_timeout = max(
             0.0,
             min(
@@ -343,6 +376,23 @@ class ModelCallGate:
             )
             raise ModelCallRejected("model_stage_window_insufficient")
         if execution_timeout <= 0:
+            self._admission.release(lease, dispatched=False)
+            self._abandon_half_open_probe(case_key, half_open_probe)
+            self._emit_timing(
+                timing_callback,
+                queue_elapsed_seconds=queue_elapsed,
+                agent_wait_seconds=lease.agent_wait_seconds,
+                scheduler_wait_seconds=lease.scheduler_wait_seconds,
+                rate_wait_seconds=lease.rate_wait_seconds,
+                execution_elapsed_seconds=0.0,
+                total_elapsed_seconds=queue_elapsed,
+            )
+            raise ModelCallRejected("model_response_deadline_exceeded")
+        if (
+            stage_timeout_explicit
+            and stage_timeout <= deadline.hard_deadline_seconds
+            and not deadline.can_start_stage_call(stage_timeout=stage_timeout)
+        ):
             self._admission.release(lease, dispatched=False)
             self._abandon_half_open_probe(case_key, half_open_probe)
             self._emit_timing(
@@ -984,6 +1034,19 @@ class OfficialClientProvider:
             messages,
             configured_max_output_tokens=effective_max_tokens,
         )
+        context_limited_output_tokens = effective_output_tokens(
+            active_turn_kind,
+            effective_max_tokens,
+            self._stage_execution_policy,
+            prompt_tokens=allocation.prompt_tokens,
+            context_window_tokens=allocation.context_window_tokens,
+            context_safety_margin_tokens=allocation.safety_margin_tokens,
+        )
+        # ``ModelContextBudget.allocate`` applies the same bound while
+        # constructing the immutable allocation. Keep the explicit policy
+        # result in telemetry so a caller can verify which constraint won.
+        if context_limited_output_tokens != allocation.max_output_tokens:
+            raise RuntimeError("context output policy disagrees with allocation")
         protocol_turn = (
             protocol_runtime.begin_model_turn(
                 stage=stage,
@@ -1042,6 +1105,7 @@ class OfficialClientProvider:
             "configured_output_tokens": max_tokens,
             "requested_max_output_tokens": max_tokens,
             "effective_output_tokens": allocation.max_output_tokens,
+            "context_limited_output_tokens": context_limited_output_tokens,
             "effective_max_output_tokens": allocation.max_output_tokens,
             "turn_kind": active_turn_kind,
             "action_category": ResourceGovernor.action_category_for_turn(
@@ -1137,7 +1201,11 @@ class OfficialClientProvider:
                 case_id=active_case_id,
                 agent_id=(protocol_turn.agent_id if protocol_turn else (agent_id or active_turn_kind)),
                 queue_budget_seconds=queue_budget,
-                stage_timeout_seconds=effective_stage_timeout,
+                # Give the gate the configured stage boundary. It applies
+                # the live ``min(stage_timeout, remaining_for_model_call())``
+                # at dispatch time, while deadline admission reasons about
+                # the un-clipped stage requirement.
+                stage_timeout_seconds=configured_stage_timeout,
                 minimum_start_window_seconds=(
                     effective_minimum_start_window
                     if budget is None
@@ -1309,19 +1377,27 @@ class OfficialClientProvider:
         observed_finish_reason = str(
             getattr(response, "finish_reason", "")
         ).casefold()
-        output_budget_exceeded = (
-            observed_finish_reason == "length"
-            or _looks_truncated(
-                response,
-                allocation.max_output_tokens,
-                output.tokens,
-            )
+        inferred_truncation_status = _looks_truncated(
+            response,
+            allocation.max_output_tokens,
+            output.tokens,
         )
+        # A native length marker is a hard provider signal. Otherwise only
+        # the hard ``truncated`` inference is a rejection/retry input;
+        # ``suspect`` is preserved as an observable unknown state.
+        truncation_status = (
+            "truncated"
+            if observed_finish_reason == "length"
+            else inferred_truncation_status
+        )
+        output_budget_exceeded = truncation_status == "truncated"
         finish_reason = (
             "length"
             if observed_finish_reason == "length"
             else "length_inferred"
             if output_budget_exceeded
+            else "unknown_inferred"
+            if truncation_status == "suspect"
             else "stop_inferred"
         )
         if budget is not None and call_index is not None:
@@ -1334,6 +1410,7 @@ class OfficialClientProvider:
                 transport_attempts=attempts,
                 output_budget_exceeded=output_budget_exceeded,
                 finish_reason=finish_reason,
+                truncation_status=truncation_status,
             )
             if protocol_runtime is not None and protocol_turn is not None:
                 if agent_action_protocol:
@@ -1368,6 +1445,7 @@ class OfficialClientProvider:
             model_call_index=call_index,
             output_budget_exceeded=output_budget_exceeded,
             finish_reason=finish_reason,
+            truncation_status=truncation_status,
             protocol_turn_id=(
                 protocol_turn.turn_id if protocol_turn is not None else ""
             ),
