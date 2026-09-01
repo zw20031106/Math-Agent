@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Started the 2026-09-01 full-review Phase 4 complexity-governance work. Replaced
+  the oversized judge-trace projection with a bounded declaration-driven public
+  projection, added a fixed local88 30-case ground-truth accuracy regression gate
+  that consumes public case outputs, and added a reproducible mathforge source-line
+  budget check. Competition-disabled RAG/Shadow/Finalizer compatibility paths and
+  the injected RouterPlanner call remain protected by the higher-priority multi-agent
+  contract. The current source-line and ≤400-line projection targets are reported as
+  open gates; no real-model accuracy claim is made by this change alone.
+
 - Completed the 2026-09-01 full-review Phase 3 answer-delivery work. Added an
   auditable L1–L5 answer ladder, retained bounded raw model outputs for salvage,
   recovered boxed and tail answers from truncated or unclosed-think responses,

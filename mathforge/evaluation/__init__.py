@@ -40,6 +40,14 @@ from mathforge.evaluation.evidence_registry import (
     baseline_registration_errors,
     can_register_baseline as can_register_registry_baseline,
 )
+from mathforge.evaluation.accuracy_gate import (
+    AccuracyCase,
+    AccuracyRegressionReport,
+    DEFAULT_MAX_DROP,
+    GOLDEN_SET_SCHEMA_VERSION,
+    evaluate_accuracy_regression,
+    load_golden_set,
+)
 from mathforge.evaluation.debug_artifact import (
     EVALUATION_ARTIFACT_SCHEMA_VERSION,
     EVALUATION_ARTIFACT_SECTIONS,
@@ -100,6 +108,12 @@ __all__ = [
     "validate_failure_attributions",
     "baseline_registration_errors",
     "can_register_registry_baseline",
+    "AccuracyCase",
+    "AccuracyRegressionReport",
+    "DEFAULT_MAX_DROP",
+    "GOLDEN_SET_SCHEMA_VERSION",
+    "evaluate_accuracy_regression",
+    "load_golden_set",
     "EVALUATION_ARTIFACT_SCHEMA_VERSION",
     "EVALUATION_ARTIFACT_SECTIONS",
     "EvaluationArtifact",

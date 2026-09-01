@@ -1,8 +1,11 @@
-"""Private implementation of judge-trace projection and validation."""
+"""Judge Trace 的精简、可审计投影。
+
+内部 trace 可以很大，但公开 trace 只保留数学过程、候选血缘、证据闭环和
+诊断信号。所有裁剪与脱敏都在 Host 侧完成，绝不公开私有推理或原始响应。
+"""
 
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 from hashlib import sha256
 import json
@@ -10,170 +13,61 @@ import math
 import re
 from typing import Any, Iterable, Mapping
 
-from mathforge.output.deterministic_formatter import latex_final_answer
-from mathforge.output.loop_health import (
-    build_closed_loop_health,
-    minimal_closed_loop_health,
-)
+from mathforge.harness.events import EVENT_STAGES
 from mathforge.harness.trace import trace_accuracy_priority
+from mathforge.output.deterministic_formatter import latex_final_answer
+from mathforge.output.loop_health import build_closed_loop_health
 
 
 JUDGE_TRACE_SCHEMA_VERSION = "4.0"
 JUDGE_EVENT_STAGES = {
+    **EVENT_STAGES,
     "solution_process": "solution",
     "workflow_overview": "workflow",
     "diagnostics": "diagnostics",
-    "session_started": "session",
-    "effective_config_snapshot": "session",
-    "problem_parsed": "parsing",
-    "problem_obligations_planned": "verification",
-    "route_planned": "routing",
-    "reasoning_state_initialized": "reasoning",
-    "autonomous_solver_planned": "reasoning",
-    "autonomous_agent_action": "reasoning",
-    "autonomous_stall_detected": "reasoning",
-    "autonomous_turn_failed": "reasoning",
-    "information_gain_scored": "reasoning",
-    "truncation_assessed": "reasoning",
-    "checkpoint_committed": "reasoning",
-    "checkpoint_restored": "reasoning",
-    "round_summary": "reasoning",
-    "reasoning_loop_completed": "reasoning",
-    "skills_selected": "skill_selection",
-    "model_activity": "model_activity",
-    "agent_protocol": "orchestration",
-    "agent_created": "agent_lifecycle",
-    "task_assigned": "agent_lifecycle",
-    "model_turn_started": "agent_lifecycle",
-    "model_turn_completed": "agent_lifecycle",
-    "artifact_published": "communication",
-    "message_sent": "communication",
-    "message_delivered": "communication",
-    "message_consumed": "communication",
-    "replan_acknowledged": "communication",
-    "agent_stopped": "agent_lifecycle",
-    "candidate_pool_initialized": "peer_review",
-    "peer_review_completed": "peer_review",
-    "rebuttal_completed": "peer_review",
-    "solver_peer_review_phase_completed": "peer_review",
-    "tool_feedback_completed": "evidence",
-    "agent_tool_request_completed": "evidence",
-    "llm_lemma_curator_completed": "lemma",
-    "lemma_request_completed": "lemma",
-    "agent_replan_completed": "routing",
-    "candidate_partial_recovery_started": "candidate_generation",
-    "candidate_stateful_rebuilt": "candidate_generation",
-    "emergency_deferred": "candidate_generation",
-    "recovery_corroboration": "verification",
-    "verified_fact_promoted": "evidence",
-    "proof_backbone_updated": "verification",
-    "proof_token_canary_degraded": "candidate_generation",
-    "verifier_completed": "verification",
-    "new_branch_started": "verification",
-    "new_branch_completed": "verification",
-    "final_audit_started": "verification",
-    "final_audit_completed": "verification",
-    "audit_reentry_decision": "verification",
     "candidate_summaries": "candidate_generation",
     "evidence_summary": "evidence",
     "proof_completion_summary": "verification",
-    "proof_status_finalized": "verification",
-    "verification_closure_recomputed": "verification",
     "decision_summary": "arbitration",
-    "candidate_arbitrated": "arbitration",
-    "decision_committed": "arbitration",
-    "candidate_salvaged": "arbitration",
+    "model_activity": "model_activity",
     "repair_history": "repair",
-    "repair_committed": "repair",
-    "repair_rolled_back": "repair",
-    "final_answer_selected": "finalization",
-    "answer_ladder_selected": "finalization",
-    "fallback_used": "fallback",
-    "deadline_finalize": "deadline",
-    "per_case_wall_clock_timeout": "deadline",
-    "case_execution_failed": "completion",
-    "closed_loop_health": "finalization",
-    "budget_summary": "finalization",
     "trace_compaction": "finalization",
-    "run_completed": "completion",
-    "formal_entry_compatibility": "completion",
 }
-_PROTECTED_EVENTS = frozenset(
-    {
-        "solution_process",
-        "workflow_overview",
-        "diagnostics",
-        "session_started",
-        "candidate_pool_initialized",
-        "truncation_assessed",
-        "checkpoint_committed",
-        "checkpoint_restored",
-        "candidate_stateful_rebuilt",
-        "emergency_deferred",
-        "recovery_corroboration",
-        "verified_fact_promoted",
-        "proof_backbone_updated",
-        "solver_peer_review_phase_completed",
-        "tool_feedback_completed",
-        "evidence_summary",
-        "proof_completion_summary",
-        "verification_closure_recomputed",
-        "new_branch_completed",
-        "final_audit_completed",
-        "decision_summary",
-        "candidate_arbitrated",
-        "decision_committed",
-        "candidate_salvaged",
-        "repair_history",
-        "final_answer_selected",
-        "answer_ladder_selected",
-        "fallback_used",
-        "deadline_finalize",
-        "per_case_wall_clock_timeout",
-        "case_execution_failed",
-        "closed_loop_health",
-        "budget_summary",
-        "run_completed",
-    }
-)
-_ESSENTIAL_PROTECTED_EVENTS = frozenset(
+_ESSENTIAL_EVENTS = frozenset(
     {
         "solution_process",
         "workflow_overview",
         "session_started",
         "evidence_summary",
         "proof_completion_summary",
-        "decision_summary",
         "candidate_arbitrated",
         "final_answer_selected",
+        "closed_loop_health",
+        "budget_summary",
+        "run_completed",
         "fallback_used",
         "deadline_finalize",
         "per_case_wall_clock_timeout",
         "case_execution_failed",
-        "closed_loop_health",
-        "budget_summary",
-        "run_completed",
     }
 )
 _FORBIDDEN_KEYS = re.compile(
-    r"^(?:"
-    r"raw_(?:response|completion|prompt)|candidate_text|solution_text|"
+    r"^(?:raw_(?:response|completion|prompt)|candidate_text|solution_text|"
     r"chain[_-]?of[_-]?thought|scratchpad|hidden[_-]?reasoning|"
     r"private[_-]?reasoning|internal[_-]?prompt|traceback|exception|"
-    r"api[_-]?key|authorization|credentials?"
-    r")$",
+    r"api[_-]?key|authorization|credentials?)$",
     re.I,
 )
-_ABSOLUTE_PATH = re.compile(
-    r"(?:(?<![A-Za-z0-9_])[A-Za-z]:[\\/]|/(?:home|Users|root|tmp)/)[^\s]+"
+_UNSAFE_VALUE = re.compile(
+    r"(?:(?<![A-Za-z0-9_])[A-Za-z]:[\\/]|/(?:home|Users|root|tmp)/)|"
+    r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}|"
+    r"\bbearer\s+\S+|\btraceback\s*\(most recent call last\)",
+    re.I,
 )
-_API_TOKEN_VALUE = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}")
-_AUTHORIZATION_VALUE = re.compile(r"\bbearer\s+\S+", re.I)
-_TRACEBACK_VALUE = re.compile(r"\btraceback\s*\(most recent call last\)", re.I)
 
 
 class JudgeTraceIntegrityError(ValueError):
-    pass
+    """公开 Judge Trace 不满足 schema 或安全边界。"""
 
 
 @dataclass(frozen=True)
@@ -186,19 +80,18 @@ class JudgeTraceLimits:
     candidate_summary_max_count: int = 8
 
     @classmethod
-    def from_mapping(
-        cls,
-        payload: Mapping[str, Any] | None,
-    ) -> JudgeTraceLimits:
+    def from_mapping(cls, payload: Mapping[str, Any] | None) -> "JudgeTraceLimits":
         if payload is None:
-            return cls()
-        values = {
-            field: int(payload.get(field, getattr(cls(), field)))
-            for field in cls.__dataclass_fields__
-        }
-        limits = cls(**values)
-        limits.validate()
-        return limits
+            result = cls()
+        else:
+            result = cls(
+                **{
+                    name: int(payload.get(name, getattr(cls(), name)))
+                    for name in cls.__dataclass_fields__
+                }
+            )
+        result.validate()
+        return result
 
     def validate(self) -> None:
         if not 4096 <= self.final_response_max_chars <= 200000:
@@ -221,2865 +114,451 @@ def project_judge_trace(
     final_response: str,
     limits: Mapping[str, Any] | JudgeTraceLimits | None = None,
 ) -> list[dict[str, Any]]:
-    active_limits = _limits(limits)
-    by_name = _events_by_name(trace)
-    selected_id = _selected_candidate_id(by_name)
-    events: list[dict[str, Any]] = []
-    last_elapsed = 0
+    """把内部事件压缩为稳定的 judge-facing trace。"""
 
-    def append(
-        name: str,
-        source: dict[str, Any] | None,
-        details: dict[str, Any],
-        *,
-        elapsed_override: int | None = None,
-    ) -> None:
-        nonlocal last_elapsed
+    active = _limits(limits)
+    grouped = _group(trace)
+    selected = _selected_id(grouped)
+    events: list[dict[str, Any]] = []
+    elapsed = 0
+
+    def add(name: str, source: Mapping[str, Any] | None, details: Mapping[str, Any] | None = None, *, at: int | None = None) -> None:
+        nonlocal elapsed
         if source is None:
             return
-        elapsed = (
-            _nonnegative_int(elapsed_override)
-            if elapsed_override is not None
-            else _nonnegative_int(source.get("elapsed_ms", last_elapsed))
-        )
-        last_elapsed = max(last_elapsed, elapsed)
-        event = {
-            "schema_version": JUDGE_TRACE_SCHEMA_VERSION,
-            "seq": len(events) + 1,
-            "elapsed_ms": last_elapsed,
-            "event": name,
-            "stage": JUDGE_EVENT_STAGES[name],
-            **details,
-        }
-        events.append(_bound_event(event, active_limits))
+        value = dict(details) if details is not None else _public(source)
+        for key in ("event", "stage", "schema_version", "seq", "elapsed_ms"):
+            value.pop(key, None)
+        elapsed = max(elapsed, _n(at if at is not None else source.get("elapsed_ms", elapsed)))
+        events.append(_bound_event({"schema_version": JUDGE_TRACE_SCHEMA_VERSION, "seq": len(events) + 1, "elapsed_ms": elapsed, "event": name, "stage": JUDGE_EVENT_STAGES[name], **value}, active))
 
-    session = _first(by_name, "session_started")
-    problem = _last(by_name, "problem_parsed")
-    final_event = _last(by_name, "final_answer_selected")
-    public_solution = (
-        final_event.get("public_solution", {})
-        if isinstance(final_event, dict)
-        else {}
-    )
+    problem = _last(grouped, "problem_parsed")
+    final = _last(grouped, "final_answer_selected")
+    source = final or _last(grouped, "run_completed") or _last(grouped, "fallback_used") or _first(grouped, "session_started")
+    public_solution = final.get("public_solution", {}) if final else {}
     if not isinstance(public_solution, dict):
         public_solution = {}
-    solution_source = (
-        final_event
-        or _last(by_name, "run_completed")
-        or _last(by_name, "fallback_used")
-        or session
-    )
-    append(
-        "solution_process",
-        solution_source,
-        {
-            "status": "complete" if selected_id else "unavailable",
-            "response_mode": str(
-                problem.get("response_mode", "answer_only")
-                if isinstance(problem, dict)
-                else "answer_only"
-            ),
-            "candidate_id": selected_id,
-            "method": _selected_candidate_method(by_name, selected_id),
-            "steps": _selected_steps(
-                public_solution.get("public_solution_steps", []),
-                active_limits,
-            ),
-            "conclusion": _compact_text(
-                latex_final_answer(
-                    str(public_solution.get("final_answer", "")),
-                    str(
-                        problem.get("answer_type", "text")
-                        if isinstance(problem, dict)
-                        else "text"
-                    ),
-                ),
-                max(256, active_limits.judge_trace_event_max_chars // 4),
-            ),
-        },
-        elapsed_override=0,
-    )
-    append(
-        "workflow_overview",
-        solution_source,
-        _workflow_overview(by_name, selected_id),
-        elapsed_override=0,
-    )
-    append(
-        "session_started",
-        session,
-        _select(
-            session,
-            (
-                "session_id",
-                "request_fingerprint",
-                "config_profile",
-                "config_schema_version",
-                "config_hash",
-                "prompt_hash",
-                "skill_hash",
-                "rag_hash",
-                "tool_hash",
-                "code_commit",
-                "code_dirty",
-                "requested_model",
-                "request_source",
-                "response_model_observable",
-                "thinking_mode_observable",
-                "provenance_hash",
-            ),
-        ),
-    )
-    append(
-        "problem_parsed",
-        problem,
-        _select(
-            problem,
-            (
-                "problem_type",
-                "answer_type",
-                "response_mode",
-                "answer_type_confidence",
-                "target_phrase",
-                "target_kind",
-                "domain",
-                "assumptions",
-                "definitions",
-                "quantifiers",
-                "constraints",
-                "ambiguities",
-                "difficulty_features",
-                "subproblem_hints",
-                "parse_confidence",
-                "parser_confidence",
-            ),
-        ),
-    )
-    problem_obligations = _last(
-        by_name,
-        "problem_obligations_planned",
-    )
-    append(
-        "problem_obligations_planned",
-        problem_obligations,
-        {
-            **_select(
-                problem_obligations,
-                ("enabled", "timing"),
-            ),
-            "obligations": [
-                _select(
-                    item,
-                    (
-                        "obligation_id",
-                        "kind",
-                        "description",
-                        "required",
-                        "origin",
-                    ),
-                )
-                for item in (
-                    problem_obligations.get("obligations", [])
-                    if isinstance(problem_obligations, dict)
-                    else []
-                )
-                if isinstance(item, dict)
-            ],
-        },
-    )
-    route = _last(by_name, "route_planned")
-    append(
-        "route_planned",
-        route,
-        _select(
-            route,
-            (
-                "router_llm_attempted",
-                "router_source",
-                "router_fallback_reason",
-                "plan_id",
-                "plan_version",
-                "parent_plan_id",
-                "original_condition_digest",
-                "subgoals",
-                "task_proposals",
-                "route_artifact_id",
-                "plan_artifact_id",
-                "plan_message_id",
-                "primary_subject",
-                "auxiliary_subject",
-                "risk_level",
-                "routing_confidence",
-                "complexity_flags",
-                "selected_skills",
-                "selected_tools",
-                "method_families",
-                "routing_reasons",
-            ),
-        ),
-    )
-    state_initialized = _last(by_name, "reasoning_state_initialized")
-    append(
-        "reasoning_state_initialized",
-        state_initialized,
-        _select(
-            state_initialized,
-            (
-                "state_id",
-                "state_version",
-                "reasoning_state_schema_version",
-                "problem_frame_digest",
-                "preserved_invariants",
-            ),
-        ),
-    )
-    autonomous_planned = _last(by_name, "autonomous_solver_planned")
-    append(
-        "autonomous_solver_planned",
-        autonomous_planned,
-        _select(
-            autonomous_planned,
-            (
-                "enabled",
-                "governance",
-                "remaining_calls",
-                "remaining_seconds",
-            ),
-        ),
-    )
-    for round_event in by_name.get("round_summary", []):
-        append(
-            "round_summary",
-            round_event,
-            _select(
-                round_event,
-                (
-                    "state_id",
-                    "state_version",
-                    "round_index",
-                    "mode",
-                    "added_subgoal_ids",
-                    "updated_subgoal_ids",
-                    "closed_subgoal_ids",
-                    "added_claim_ids",
-                    "claim_dependency_refs",
-                    "evidence_ids",
-                    "opened_obligation_ids",
-                    "closed_obligation_ids",
-                    "information_gain",
-                    "next_step",
-                    "stop_reason",
-                    "degraded_reason",
-                    "state_tokens",
-                    "state_counting_mode",
-                    "state_compressed",
-                    "omitted_rounds",
-                ),
-            ),
-        )
-    for feedback_event in by_name.get("tool_feedback_completed", []):
-        append(
-            "tool_feedback_completed",
-            feedback_event,
-            {
-                **_select(
-                    feedback_event,
-                    (
-                        "state_id",
-                        "state_version",
-                        "round_index",
-                        "next_protocol",
-                        "constructible_count",
-                        "work_item_count",
-                        "constructibility_rate",
-                        "failure_codes",
-                        "strategy_changed",
-                    ),
-                ),
-                "results": [
-                    _select(
-                        item,
-                        (
-                            "work_item_id",
-                            "claim_id",
-                            "tool_name",
-                            "status",
-                            "strength",
-                            "summary",
-                            "result_digest",
-                            "impact",
-                            "reason_code",
-                        ),
-                    )
-                    for item in feedback_event.get("results", [])
-                    if isinstance(item, dict)
-                ],
-            },
-        )
-    reasoning_completed = _last(by_name, "reasoning_loop_completed")
-    append(
-        "reasoning_loop_completed",
-        reasoning_completed,
-        _select(
-            reasoning_completed,
-            (
-                "state_id",
-                "enabled",
-                "completed_rounds",
-                "action_turns",
-                "progress_turns",
-                "candidate_attempts",
-                "candidate_synthesis_attempts",
-                "abstained_agents",
-                "stall_stops",
-                "compact_recoveries",
-                "proof_token_degradations",
-                "agent_stop_reasons",
-                "stop_reason",
-                "degraded_reason",
-                "candidate_id",
-            ),
-        ),
-    )
-    for event_name in (
-        "llm_lemma_curator_completed",
-        "lemma_request_completed",
-        "agent_tool_request_completed",
-        "agent_replan_completed",
-        "candidate_partial_recovery_started",
-        "proof_token_canary_degraded",
-    ):
-        event = _last(by_name, event_name)
-        append(
-            event_name,
-            event,
-            {
-                key: value
-                for key, value in (event or {}).items()
-                if key
-                not in {
-                    "event",
-                    "schema_version",
-                    "seq",
-                    "elapsed_ms",
-                    "stage",
-                }
-            },
-        )
-    skills = _last(by_name, "skills_selected")
-    append(
-        "skills_selected",
-        skills,
-        _skill_summary(skills),
-    )
-
-    budget = _last(by_name, "budget_summary")
-    model_calls = _model_activity(by_name, budget)
-    if model_calls:
-        append(
-            "model_activity",
-            budget,
-            {
-                "call_count": len(model_calls),
-                "calls": model_calls,
-            },
-        )
-    protocol = _last(by_name, "agent_protocol")
-    append(
-        "agent_protocol",
-        protocol,
-        {
-            **_select(
-                protocol,
-                (
-                    "protocol_schema_version",
-                    "mode",
-                    "selection_authority",
-                    "counts",
-                    "call_turn_count_match",
-                    "communication_integrity",
-                ),
-            ),
-            "tasks": [
-                _select(
-                    item,
-                    (
-                        "task_id",
-                        "task_type",
-                        "assigned_agent_id",
-                        "status",
-                        "input_artifact_ids",
-                        "output_artifact_ids",
-                    ),
-                )
-                for item in (protocol or {}).get("tasks", [])
-                if isinstance(item, dict)
-            ],
-            "messages": [
-                _select(
-                    item,
-                    (
-                        "message_id",
-                        "thread_id",
-                        "sender_agent_id",
-                        "recipient_agent_id",
-                        "message_type",
-                        "task_id",
-                        "artifact_ids",
-                        "reply_to_message_id",
-                    ),
-                )
-                for item in (protocol or {}).get("messages", [])
-                if isinstance(item, dict)
-            ],
-            "message_consumptions": [
-                _select(
-                    item,
-                    (
-                        "receipt_id",
-                        "message_id",
-                        "consumer_agent_id",
-                        "turn_id",
-                        "artifact_ids",
-                    ),
-                )
-                for item in (protocol or {}).get("message_consumptions", [])
-                if isinstance(item, dict)
-            ],
-            "threads": [
-                _select(
-                    item,
-                    (
-                        "thread_id",
-                        "participant_agent_ids",
-                        "message_ids",
-                        "status",
-                    ),
-                )
-                for item in (protocol or {}).get("threads", [])
-                if isinstance(item, dict)
-            ],
-            "protocol_sequence": [
-                _select(
-                    item,
-                    (
-                        "sequence",
-                        "event_type",
-                        "agent_id",
-                        "task_id",
-                        "turn_id",
-                        "artifact_id",
-                        "message_id",
-                        "plan_version",
-                    ),
-                )
-                for item in (protocol or {}).get("protocol_sequence", [])
-                if isinstance(item, dict)
-            ],
-        },
-    )
-    for lifecycle_name in (
-        "agent_created",
-        "task_assigned",
-        "model_turn_started",
-        "model_turn_completed",
-        "artifact_published",
-        "message_sent",
-        "message_delivered",
-        "message_consumed",
-        "replan_acknowledged",
-        "repair_committed",
-        "repair_rolled_back",
-        "agent_stopped",
-    ):
-        lifecycle = _last(by_name, lifecycle_name)
-        append(
-            lifecycle_name,
-            lifecycle,
-            {
-                key: value
-                for key, value in (lifecycle or {}).items()
-                if key
-                not in {
-                    "event",
-                    "schema_version",
-                    "seq",
-                    "elapsed_ms",
-                    "stage",
-                }
-            },
-        )
-
-    candidate_pool = _last(by_name, "candidate_pool_initialized")
-    append(
-        "candidate_pool_initialized",
-        candidate_pool,
-        _select(
-            candidate_pool,
-            (
-                "submitted_count",
-                "independent_count",
-                "structural_independence_gate",
-                "candidate_isolation_released",
-                "entries",
-            ),
-        ),
-    )
-    for review_event in by_name.get("peer_review_completed", []):
-        append(
-            "peer_review_completed",
-            review_event,
-            _select(
-                review_event,
-                (
-                    "status",
-                    "review_id",
-                    "reviewer_role",
-                    "reviewer_agent_id",
-                    "author_agent_id",
-                    "candidate_id",
-                    "candidate_version",
-                    "finding_ids",
-                    "claim_ids",
-                    "challenged",
-                    "independent_model_call",
-                    "host_generated",
-                    "artifact_id",
-                    "message_id",
-                    "thread_id",
-                    "failure_code",
-                ),
-            ),
-        )
-    for rebuttal_event in by_name.get("rebuttal_completed", []):
-        append(
-            "rebuttal_completed",
-            rebuttal_event,
-            _select(
-                rebuttal_event,
-                (
-                    "status",
-                    "rebuttal_id",
-                    "review_id",
-                    "candidate_id",
-                    "finding_ids",
-                    "actions",
-                    "conceded_finding_ids",
-                    "independent_model_call",
-                    "artifact_id",
-                    "message_id",
-                    "thread_id",
-                    "thread_status",
-                    "failure_code",
-                ),
-            ),
-        )
-    review_phase = _last(by_name, "solver_peer_review_phase_completed")
-    append(
-        "solver_peer_review_phase_completed",
-        review_phase,
-        _select(
-            review_phase,
-            (
-                "status",
-                "bidirectional_reviews",
-                "rebuttals",
-                "active_candidate_ids",
-                "candidate_pool",
-                "downstream_candidate_filter_applied",
-            ),
-        ),
-    )
-
-    case_summary_event = _last(by_name, "case_trace_summary")
-    case_summary = (
-        case_summary_event.get("summary", {})
-        if isinstance(case_summary_event, dict)
-        else {}
-    )
-    candidate_summaries, omitted_candidates = _candidate_summaries(
-        by_name,
-        case_summary,
-        selected_id=selected_id,
-        limit=active_limits.candidate_summary_max_count,
-        limits=active_limits,
-    )
-    if candidate_summaries or omitted_candidates:
-        details: dict[str, Any] = {"candidates": candidate_summaries}
-        if omitted_candidates:
-            details["omitted"] = omitted_candidates
-        append(
-            "candidate_summaries",
-            case_summary_event or _last(by_name, "candidate_generated"),
-            details,
-        )
-
-    hard_gate = _last(by_name, "hard_evidence_gate")
-    evidence_counts = (
-        case_summary.get("evidence", {})
-        if isinstance(case_summary, dict)
-        else {}
-    )
-    selected_evidence = _selected_evidence_summary(case_summary, selected_id)
-    if hard_gate is not None or case_summary_event is not None:
-        append(
-            "evidence_summary",
-            hard_gate or case_summary_event,
-            {
-                "selected_candidate_id": selected_id,
-                "selected_candidate": selected_evidence,
-                "totals": _status_counts(evidence_counts),
-                "hard_gate_accepted": bool(
-                    selected_id
-                    and selected_id in _string_list(hard_gate, "accepted")
-                ),
-                "accepted_candidate_ids": _string_list(hard_gate, "accepted"),
-                "rejected_candidate_ids": _string_list(hard_gate, "rejected"),
-            },
-        )
-
-    for verifier_event in by_name.get("verifier_completed", []):
-        append(
-            "verifier_completed",
-            verifier_event,
-            _select(
-                verifier_event,
-                (
-                    "used_llm",
-                    "finding_count",
-                    "reviewed_candidates",
-                    "reason",
-                    "status",
-                    "round",
-                    "review_targets",
-                    "reviewed_targets",
-                    "unreviewed_targets",
-                    "critique_id",
-                    "critique_artifact_id",
-                    "recommended_action",
-                    "peer_review_assessment_count",
-                    "independent_model_call",
-                ),
-            ),
-        )
-
-    for event_name in (
-        "new_branch_started",
-        "new_branch_completed",
-        "final_audit_started",
-        "final_audit_completed",
-        "audit_reentry_decision",
-        "verification_closure_recomputed",
-        "decision_committed",
-    ):
-        for event in by_name.get(event_name, []):
-            append(
-                event_name,
-                event,
-                {
-                    key: value
-                    for key, value in event.items()
-                    if key
-                    not in {
-                        "event",
-                        "schema_version",
-                        "seq",
-                        "elapsed_ms",
-                        "stage",
-                    }
-                },
-            )
-
-    repair_source, repair_attempts = _repair_history(by_name, active_limits)
-    if repair_attempts:
-        append(
-            "repair_history",
-            repair_source,
-            {"attempts": repair_attempts},
-        )
-
-    proof_gate = _last(by_name, "proof_completion_gate")
-    graph_event = _last(by_name, "proof_graph_completed")
-    proof_details = _proof_summary(
-        proof_gate,
-        graph_event,
-        selected_candidate_id=selected_id,
-    )
-    final_proof = _last(by_name, "proof_status_finalized")
-    final_statuses = (
-        final_proof.get("statuses", [])
-        if isinstance(final_proof, dict)
-        else []
-    )
-    selected_final_status = next(
-        (
-            item
-            for item in final_statuses
-            if isinstance(item, dict)
-            and str(item.get("candidate_id", "")) == selected_id
-        ),
-        None,
-    )
-    if selected_final_status is not None:
-        proof_details["status"] = str(
-            selected_final_status.get("status", "incomplete")
-        )
-        proof_details["final_reason_code"] = str(
-            selected_final_status.get("reason_code", "")
-        )
-    if proof_gate is not None or graph_event is not None:
-        append(
-            "proof_completion_summary",
-            proof_gate or graph_event,
-            proof_details,
-        )
-    append(
-        "proof_status_finalized",
-        final_proof,
-        _select(final_proof, ("statuses", "allowed_statuses")),
-    )
-
-    arbitration = _last(by_name, "candidate_arbitrated")
+    add("solution_process", source, {"status": "complete" if selected else "unavailable", "response_mode": str((problem or {}).get("response_mode", "answer_only")), "candidate_id": selected, "method": _selected_method(grouped, selected), "steps": _steps(public_solution.get("public_solution_steps", []), active), "conclusion": _text(latex_final_answer(str(public_solution.get("final_answer", "")), str((problem or {}).get("answer_type", "text"))), max(256, active.judge_trace_event_max_chars // 4))}, at=0)
+    add("workflow_overview", source, _workflow(grouped, selected), at=0)
+    add("session_started", _first(grouped, "session_started"), _select(_first(grouped, "session_started"), ("session_id", "request_fingerprint", "config_profile", "config_schema_version", "config_hash", "prompt_hash", "skill_hash", "rag_hash", "tool_hash", "code_commit", "code_dirty", "requested_model", "request_source", "response_model_observable", "thinking_mode_observable", "provenance_hash")))
+    add("problem_parsed", problem, _select(problem, ("problem_type", "answer_type", "response_mode", "answer_type_confidence", "target_phrase", "target_kind", "domain", "domains", "assumptions", "definitions", "quantifiers", "constraints", "ambiguities", "difficulty_features", "subproblem_hints", "parse_confidence", "parser_confidence")))
+    obligations = _last(grouped, "problem_obligations_planned")
+    add("problem_obligations_planned", obligations, {**_select(obligations, ("enabled", "timing")), "obligations": [_select(item, ("obligation_id", "kind", "description", "required", "origin")) for item in (obligations or {}).get("obligations", []) if isinstance(item, dict)]})
+    route = _last(grouped, "route_planned")
+    add("route_planned", route, _select(route, ("router_llm_attempted", "router_source", "router_fallback_reason", "protocol_parse_tier", "protocol_recovery_reason", "protocol_assurance_degradation", "plan_id", "plan_version", "parent_plan_id", "original_condition_digest", "subgoals", "task_proposals", "route_artifact_id", "plan_artifact_id", "plan_message_id", "primary_subject", "auxiliary_subject", "risk_level", "routing_confidence", "ambiguity_margin", "complexity_flags", "subject_candidates", "selected_skills", "selected_tools", "method_families", "routing_reasons")))
+    state = _last(grouped, "reasoning_state_initialized")
+    add("reasoning_state_initialized", state, _select(state, ("state_id", "state_version", "reasoning_state_schema_version", "problem_frame_digest", "preserved_invariants")))
+    planned = _last(grouped, "autonomous_solver_planned")
+    add("autonomous_solver_planned", planned, _select(planned, ("enabled", "governance", "remaining_calls", "remaining_seconds")))
+    for name in ("round_summary", "tool_feedback_completed"):
+        for item in grouped.get(name, []):
+            add(name, item, _round_or_tool(item))
+    reasoning = _last(grouped, "reasoning_loop_completed")
+    add("reasoning_loop_completed", reasoning, _select(reasoning, ("state_id", "enabled", "completed_rounds", "action_turns", "progress_turns", "candidate_attempts", "candidate_synthesis_attempts", "abstained_agents", "stall_stops", "compact_recoveries", "proof_token_degradations", "agent_stop_reasons", "stop_reason", "degraded_reason", "candidate_id")))
+    for name in ("llm_lemma_curator_completed", "lemma_request_completed", "agent_tool_request_completed", "agent_replan_completed", "candidate_partial_recovery_started", "candidate_stateful_rebuilt", "emergency_deferred", "recovery_corroboration", "verified_fact_promoted", "proof_backbone_updated", "proof_token_canary_degraded"):
+        add(name, _last(grouped, name))
+    add("skills_selected", _last(grouped, "skills_selected"), _skills(_last(grouped, "skills_selected")))
+    budget = _last(grouped, "budget_summary")
+    calls = _model_activity(grouped, budget)
+    if calls:
+        add("model_activity", budget, {"call_count": len(calls), "calls": calls})
+    protocol = _last(grouped, "agent_protocol")
+    if protocol:
+        add("agent_protocol", protocol, _protocol(protocol))
+    for name in ("agent_created", "task_assigned", "model_turn_started", "model_turn_completed", "artifact_published", "message_sent", "message_delivered", "message_consumed", "replan_acknowledged", "repair_committed", "repair_rolled_back", "agent_stopped"):
+        add(name, _last(grouped, name))
+    pool = _last(grouped, "candidate_pool_initialized")
+    add("candidate_pool_initialized", pool, _select(pool, ("submitted_count", "independent_count", "structural_independence_gate", "candidate_isolation_released", "entries")))
+    for name in ("peer_review_completed", "rebuttal_completed"):
+        for item in grouped.get(name, []):
+            add(name, item, _select(item, ("status", "review_id", "reviewer_role", "reviewer_agent_id", "author_agent_id", "candidate_id", "candidate_version", "finding_ids", "claim_ids", "challenged", "independent_model_call", "host_generated", "artifact_id", "message_id", "thread_id", "thread_status", "failure_code", "actions", "conceded_finding_ids")))
+    phase = _last(grouped, "solver_peer_review_phase_completed")
+    add("solver_peer_review_phase_completed", phase, _select(phase, ("status", "bidirectional_reviews", "rebuttals", "active_candidate_ids", "candidate_pool", "downstream_candidate_filter_applied")))
+    case_event = _last(grouped, "case_trace_summary")
+    case_summary = case_event.get("summary", {}) if case_event else {}
+    candidate_rows, omitted = _candidate_summaries(grouped, case_summary, selected, active)
+    if candidate_rows or omitted:
+        payload: dict[str, Any] = {"candidates": candidate_rows}
+        if omitted:
+            payload["omitted"] = omitted
+        add("candidate_summaries", case_event or _last(grouped, "candidate_generated"), payload)
+    hard_gate = _last(grouped, "hard_evidence_gate")
+    if hard_gate is not None or case_event is not None:
+        evidence = case_summary.get("evidence", {}) if isinstance(case_summary, dict) else {}
+        add("evidence_summary", hard_gate or case_event, {"selected_candidate_id": selected, "selected_candidate": _selected_evidence(case_summary, selected), "totals": _counts(evidence), "hard_gate_accepted": bool(selected and selected in _strings(hard_gate, "accepted")), "accepted_candidate_ids": _strings(hard_gate, "accepted"), "rejected_candidate_ids": _strings(hard_gate, "rejected")})
+    for item in grouped.get("verifier_completed", []):
+        add("verifier_completed", item, _select(item, ("used_llm", "finding_count", "reviewed_candidates", "reason", "status", "round", "review_targets", "reviewed_targets", "unreviewed_targets", "critique_id", "critique_artifact_id", "recommended_action", "peer_review_assessment_count", "independent_model_call")))
+    for name in ("new_branch_started", "new_branch_completed", "final_audit_started", "final_audit_completed", "audit_reentry_decision", "verification_closure_recomputed", "decision_committed"):
+        for item in grouped.get(name, []):
+            add(name, item)
+    repair = _repair_history(grouped, active)
+    if repair:
+        add("repair_history", repair[0], {"attempts": repair[1]})
+    proof_gate = _last(grouped, "proof_completion_gate")
+    graph = _last(grouped, "proof_graph_completed")
+    proof = _proof_summary(proof_gate, graph, selected)
+    status_final = _last(grouped, "proof_status_finalized")
+    for item in (status_final or {}).get("statuses", []) if status_final else ():
+        if isinstance(item, dict) and str(item.get("candidate_id", "")) == selected:
+            proof.update(status=str(item.get("status", "incomplete")), final_reason_code=str(item.get("reason_code", "")))
+    if proof_gate is not None or graph is not None:
+        add("proof_completion_summary", proof_gate or graph, proof)
+    add("proof_status_finalized", status_final, _select(status_final, ("statuses", "allowed_statuses")))
+    arbitration = _last(grouped, "candidate_arbitrated")
     if arbitration is not None:
-        rank_details = arbitration.get("rank_details", [])
-        if not isinstance(rank_details, list):
-            rank_details = []
-        selected_rank = next(
-            (
-                item
-                for item in rank_details
-                if isinstance(item, dict)
-                and str(item.get("candidate_id", "")) == selected_id
-            ),
-            {},
-        )
-        append(
-            "candidate_arbitrated",
-            arbitration,
-            {
-                "selected": selected_id,
-                "viable_candidates": _string_list(
-                    arbitration,
-                    "viable_candidates",
-                ),
-                "rejected_candidates": _rejection_summaries(arbitration),
-                "selection_reason": str(
-                    arbitration.get("selection_reason", "")
-                ),
-                "tie_break_reason": str(
-                    arbitration.get("tie_break_reason", "")
-                ),
-                "selected_verification_status": str(
-                    arbitration.get(
-                        "selected_verification_status",
-                        "",
-                    )
-                ),
-                "selected_evidence_tier": str(
-                    selected_rank.get("evidence_tier", "")
-                ),
-                "selected_review_support": _signed_int(
-                    selected_rank.get("review_support", 0)
-                ),
-                "equivalence_cluster_count": len(
-                    arbitration.get("equivalence_clusters", [])
-                    if isinstance(
-                        arbitration.get("equivalence_clusters", []),
-                        list,
-                    )
-                    else []
-                ),
-                "used_llm_arbiter": bool(
-                    arbitration.get("used_llm_arbiter", False)
-                ),
-            },
-        )
-
-    decision_source, decision_details = _decision_summary(by_name)
-    append(
-        "decision_summary",
-        decision_source,
-        decision_details,
-    )
-
-    if final_event is not None:
-        append(
-            "final_answer_selected",
-            final_event,
-            {
-                "candidate_id": selected_id,
-                "selection_reason": str(
-                    final_event.get("selection_reason", "")
-                ),
-                "public_solution": {
-                    "solution_process_ref": "trace[0]",
-                    "final_answer": _compact_text(
-                        str(public_solution.get("final_answer", "")),
-                        max(256, active_limits.judge_trace_event_max_chars // 4),
-                    ),
-                },
-                "final_response_digest": sha256(
-                    final_response.encode("utf-8")
-                ).hexdigest(),
-                "answer_validation": _safe_mapping(
-                    final_event.get("answer_validation", {})
-                ),
-            },
-        )
-
-    for terminal_name in (
-        "fallback_used",
-        "deadline_finalize",
-        "per_case_wall_clock_timeout",
-        "case_execution_failed",
-    ):
-        terminal_event = _last(by_name, terminal_name)
-        if terminal_event is not None:
-            append(
-                terminal_name,
-                terminal_event,
-                _select(
-                    terminal_event,
-                    (
-                        "reason",
-                        "error_code",
-                        "failed_phase",
-                        "checkpoint",
-                        "disabled",
-                        "elapsed_seconds",
-                        "wall_clock_seconds",
-                        "serialization_reserve_seconds",
-                        "final_phase",
-                    ),
-                ),
-            )
-
-    formal_compatibility = _last(by_name, "formal_entry_compatibility")
-    append(
-        "formal_entry_compatibility",
-        formal_compatibility,
-        _select(
-            formal_compatibility,
-            (
-                "public_contract",
-                "immutable_files",
-                "status_field_owner",
-                "harness_status_limitation",
-            ),
-        ),
-    )
-    completed = _last(by_name, "run_completed")
-    health = _last(by_name, "closed_loop_health")
-    if health is None:
-        health_details = build_closed_loop_health(
-            trace,
-            budget=budget,
-            selected_candidate_id=selected_id,
-            outcome=str(completed.get("outcome", "")) if completed else "",
-            error_code=str(completed.get("error_code", "")) if completed else "",
-        )
-    else:
-        health_details = _select(
-            health,
-            (
-                "health",
-                "model_dispatch",
-                "candidate_flow",
-                "verification_flow",
-                "closure",
-            ),
-        )
-    append(
-        "closed_loop_health",
-        health or completed or budget,
-        health_details,
-    )
-    append(
-        "diagnostics",
-        budget or completed or health or session,
-        _diagnostics_summary(by_name, budget, completed),
-    )
-    append(
-        "budget_summary",
-        budget,
-        _budget_summary(budget),
-    )
-    append(
-        "run_completed",
-        completed,
-        _select(
-            completed,
-            ("outcome", "error_code", "final_phase"),
-        ),
-    )
-
-    events = _bound_trace(events, active_limits)
-    validate_judge_trace(
-        events,
-        final_response=final_response,
-        limits=active_limits,
-    )
-    return events
-
-
-def validate_judge_trace(
-    trace: list[dict[str, Any]],
-    *,
-    final_response: str,
-    limits: Mapping[str, Any] | JudgeTraceLimits | None = None,
-) -> None:
-    active_limits = _limits(limits)
-    errors: list[str] = []
-    if not trace:
-        raise JudgeTraceIntegrityError("Judge Trace must not be empty")
-    if len(trace) > active_limits.judge_trace_max_events:
-        errors.append("Judge Trace event budget exceeded")
-    if _serialized_chars(trace) > active_limits.judge_trace_max_chars:
-        errors.append("Judge Trace character budget exceeded")
-
-    elapsed: list[int] = []
-    by_name: dict[str, list[dict[str, Any]]] = {}
-    for index, event in enumerate(trace, start=1):
-        if not isinstance(event, dict):
-            errors.append(f"event {index} is not an object")
-            continue
-        name = str(event.get("event", ""))
-        by_name.setdefault(name, []).append(event)
-        if event.get("schema_version") != JUDGE_TRACE_SCHEMA_VERSION:
-            errors.append(f"event {index} Judge Trace schema is invalid")
-        if event.get("seq") != index:
-            errors.append(f"event {index} sequence is invalid")
-        event_elapsed = event.get("elapsed_ms")
-        if type(event_elapsed) is not int or event_elapsed < 0:
-            errors.append(f"event {index} elapsed time is invalid")
-        else:
-            elapsed.append(event_elapsed)
-        if name not in JUDGE_EVENT_STAGES:
-            errors.append(f"event {index} is not judge-facing")
-        elif event.get("stage") != JUDGE_EVENT_STAGES[name]:
-            errors.append(f"event {index} stage is invalid")
-        if _serialized_chars(event) > active_limits.judge_trace_event_max_chars:
-            errors.append(f"event {index} character budget exceeded")
-        if _contains_unsafe_content(event):
-            errors.append(f"event {index} contains unsafe content")
-        try:
-            if json.loads(
-                json.dumps(
-                    event,
-                    ensure_ascii=False,
-                    allow_nan=False,
-                    separators=(",", ":"),
-                )
-            ) != event:
-                errors.append(f"event {index} does not JSON round-trip")
-        except (TypeError, ValueError):
-            errors.append(f"event {index} is not JSON serializable")
-    if elapsed != sorted(elapsed):
-        errors.append("Judge Trace elapsed time is not monotonic")
-    if trace[0].get("event") != "solution_process":
-        errors.append("solution_process must be the first Judge Trace event")
-    if len(trace) < 2 or trace[1].get("event") != "workflow_overview":
-        errors.append("workflow_overview must follow solution_process")
-    if trace[-1].get("event") != "run_completed":
-        errors.append("run_completed must be the final Judge Trace event")
-    for required in (
-        "solution_process",
-        "workflow_overview",
-        "session_started",
-        "closed_loop_health",
-        "budget_summary",
-        "run_completed",
-    ):
-        if len(by_name.get(required, [])) != 1:
-            errors.append(f"{required} must occur exactly once")
-
-    completed = by_name.get("run_completed", [{}])[-1]
-    outcome = completed.get("outcome")
-    if outcome == "primary":
-        for required in (
-            "evidence_summary",
-            "proof_completion_summary",
-            "candidate_arbitrated",
-            "final_answer_selected",
-        ):
-            if len(by_name.get(required, [])) != 1:
-                errors.append(f"primary Judge Trace requires {required}")
-    elif outcome in {"fallback", "timeout"} and not any(
-        by_name.get(name)
-        for name in (
-            "fallback_used",
-            "deadline_finalize",
-            "per_case_wall_clock_timeout",
-        )
-    ):
-        errors.append("terminal Judge Trace lacks a safe failure category")
-
-    selected_event = by_name.get("final_answer_selected", [{}])[-1]
-    selected_id = str(selected_event.get("candidate_id", ""))
-    process = by_name.get("solution_process", [{}])[-1]
-    if outcome == "primary":
-        if process.get("status") != "complete":
-            errors.append("primary Judge Trace solution process is incomplete")
-        if str(process.get("candidate_id", "")) != selected_id:
-            errors.append("solution process candidate is inconsistent")
-        if not isinstance(process.get("steps"), list) or not process.get("steps"):
-            errors.append("primary Judge Trace lacks public solution steps")
-        if not process.get("conclusion"):
-            errors.append("primary Judge Trace lacks a public conclusion")
-    if by_name.get("final_answer_selected"):
-        solution = selected_event.get("public_solution")
-        if not isinstance(solution, dict):
-            errors.append("selected public solution is invalid")
-        elif "final_response" in solution:
-            errors.append("Judge Trace duplicates final_response")
-        expected_digest = sha256(final_response.encode("utf-8")).hexdigest()
-        if selected_event.get("final_response_digest") != expected_digest:
-            errors.append("Judge Trace final response digest is inconsistent")
-    for event in by_name.get("candidate_summaries", []):
-        candidates = event.get("candidates")
-        if not isinstance(candidates, list):
-            errors.append("candidate summaries must be a list")
-            continue
-        if len(candidates) > active_limits.candidate_summary_max_count:
-            errors.append("candidate summary count exceeded")
-        if selected_id and sum(
-            isinstance(candidate, dict)
-            and str(candidate.get("candidate_id", "")) == selected_id
-            for candidate in candidates
-        ) != 1:
-            errors.append("candidate summaries lack the selected candidate")
-        expected = {
-            "candidate_id",
-            "role",
-            "method_family",
-            "status",
-            "content_digest",
-            "rejection_category",
-            "evidence_summary",
-            "public_final_answer",
-            "public_solution_steps",
-            "proof_status",
-            "selection_reason",
-            "selected",
-            "solution_process_ref",
-        }
-        for candidate in candidates:
-            if not isinstance(candidate, dict) or set(candidate) != expected:
-                errors.append("candidate summary schema is invalid")
-                continue
-            is_selected = str(candidate.get("candidate_id", "")) == selected_id
-            if bool(candidate.get("selected")) != is_selected:
-                errors.append("candidate selected marker is inconsistent")
-            if is_selected:
-                if candidate.get("solution_process_ref") != "trace[0]":
-                    errors.append("selected candidate lacks solution process reference")
-                if (
-                    candidate.get("public_final_answer")
-                    or candidate.get("public_solution_steps")
-                ):
-                    errors.append("selected candidate duplicates solution process")
-            elif candidate.get("solution_process_ref"):
-                errors.append("unselected candidate has a solution process reference")
-
-    _validate_model_activity(by_name, errors)
-    _validate_repair_history(by_name, errors)
-    _validate_workflow_overview(by_name, selected_id, errors)
-
-    _validate_closed_loop_health(by_name, outcome, selected_id, errors)
-
-    if not isinstance(final_response, str) or not final_response.strip():
-        errors.append("final_response must be a non-empty string")
-    if errors:
-        raise JudgeTraceIntegrityError("; ".join(dict.fromkeys(errors)))
-
-
-def minimal_judge_trace(
-    *,
-    outcome: str = "fallback",
-    error_code: str = "all_candidates_failed",
-) -> list[dict[str, Any]]:
-    events = [
-        _judge_event(
-            1,
-            "solution_process",
-            status="unavailable",
-            response_mode="answer_only",
-            candidate_id="",
-            method="",
-            steps=[],
-            conclusion="",
-        ),
-        _judge_event(
-            2,
-            "workflow_overview",
-            outcome=outcome,
-            selected_candidate_id="",
-            steps=[
-                {
-                    "step_index": 1,
-                    "phase": "fallback",
-                    "outcome": "used",
-                    "summary": error_code,
-                    "related_events": ["fallback_used"],
-                }
-            ],
-        ),
-        _judge_event(
-            3,
-            "session_started",
-            request_source="official_client_injected",
-        ),
-        _judge_event(
-            4,
-            "fallback_used",
-            reason=error_code,
-            error_code=error_code,
-            failed_phase="created",
-        ),
-        _judge_event(
-            5,
-            "closed_loop_health",
-            **minimal_closed_loop_health(
-                health="timeout" if outcome == "timeout" else "failed",
-                root_failure_code=error_code,
-            ),
-        ),
-        _judge_event(6, "budget_summary", outcome=outcome),
-        _judge_event(
-            7,
-            "run_completed",
-            outcome=outcome,
-            error_code=error_code,
-            final_phase="fallback_completed",
-        ),
-    ]
-    return events
-
-
-def _candidate_summaries(
-    by_name: dict[str, list[dict[str, Any]]],
-    case_summary: Any,
-    *,
-    selected_id: str,
-    limit: int,
-    limits: JudgeTraceLimits,
-) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    starts = {
-        str(event.get("candidate_id", "")): event
-        for event in by_name.get("candidate_generation_started", [])
-        if event.get("candidate_id")
-    }
-    generated = {
-        str(event.get("candidate_id", "")): event
-        for event in by_name.get("candidate_generated", [])
-        if event.get("candidate_id")
-    }
-    for event in by_name.get("repair_proposed", []):
-        candidate_id = str(event.get("proposed_candidate_id", ""))
-        content = event.get("proposed_content", {})
-        if candidate_id and isinstance(content, dict):
-            generated[candidate_id] = {
-                "candidate_id": candidate_id,
-                "role": "RepairAgent",
-                "planned_method_family": "claim-local-repair",
-                "status": "generated",
-                "content": content,
-                "content_digest": str(event.get("content_digest", "")),
-            }
-    failed = {
-        str(event.get("candidate_id", "")): event
-        for event in by_name.get("candidate_generation_failed", [])
-        if event.get("candidate_id")
-    }
-    state_items = (
-        case_summary.get("candidates", [])
-        if isinstance(case_summary, dict)
-        else []
-    )
-    summary_states = {
-        str(item.get("candidate_id", "")): item
-        for item in state_items
-        if isinstance(item, dict) and item.get("candidate_id")
-    }
-    final_state_event = _last(by_name, "candidate_final_states")
-    final_state_items = (
-        final_state_event.get("candidates", [])
-        if isinstance(final_state_event, dict)
-        else []
-    )
-    final_states = {
-        str(item.get("candidate_id", "")): item
-        for item in final_state_items
-        if isinstance(item, dict) and item.get("candidate_id")
-    }
-    states = {
-        candidate_id: {
-            **final_states.get(candidate_id, {}),
-            **summary_states.get(candidate_id, {}),
-        }
-        for candidate_id in set(summary_states) | set(final_states)
-    }
-    order = list(
-        dict.fromkeys(
-            [selected_id, *starts, *generated, *failed, *states]
-        )
-    )
-    summaries: list[dict[str, Any]] = []
-    omitted_source: list[dict[str, Any]] = []
-    for candidate_id in order:
-        if not candidate_id:
-            continue
-        start = starts.get(candidate_id, {})
-        candidate = generated.get(candidate_id, {})
-        failure = failed.get(candidate_id, {})
-        state = states.get(candidate_id, {})
-        reason_codes = state.get("reason_codes", [])
-        rejection = (
-            str(reason_codes[0])
-            if isinstance(reason_codes, list) and reason_codes
-            else str(failure.get("reason", "not_selected_by_arbitration"))
-        )
-        selected = candidate_id == selected_id
-        generated_content = bool(candidate)
-        content = candidate.get("content", {})
-        if not isinstance(content, dict):
-            content = {}
-        candidate_char_share = max(
-            512,
-            limits.judge_trace_event_max_chars // max(1, limit),
-        )
-        summary = {
-            "candidate_id": candidate_id,
-            "role": str(
-                candidate.get("role")
-                or start.get("role")
-                or state.get("role")
-                or "unknown"
-            ),
-            "method_family": str(
-                candidate.get("planned_method_family")
-                or start.get("planned_method_family")
-                or "unavailable"
-            ),
-            "status": str(
-                "selected"
-                if selected
-                else state.get("status")
-                or failure.get("status")
-                or candidate.get("status")
-                or "unknown"
-            ),
-            "content_digest": str(
-                candidate.get("content_digest")
-                or _digest(
-                    {
-                        "candidate_id": candidate_id,
-                        "status": failure.get("status", "unavailable"),
-                    }
-                )
-            ),
-            "rejection_category": "" if selected else rejection,
-            "evidence_summary": _status_counts(
-                state.get("evidence", {})
-                if isinstance(state, dict)
-                else {}
-            ),
-            "public_final_answer": (
-                _compact_text(
-                    str(content.get("final_answer", "")),
-                    max(128, candidate_char_share // 4),
-                )
-                if generated_content and not selected
-                else ""
-            ),
-            "public_solution_steps": (
-                _candidate_steps(
-                    content.get("public_solution_steps", []),
-                    candidate_char_share,
-                )
-                if generated_content and not selected
-                else []
-            ),
-            "proof_status": _candidate_proof_status(state),
-            "selection_reason": (
-                "selected_by_arbitration"
-                if selected
-                else (
-                    rejection
-                    if state.get("status") == "viable_not_selected"
-                    else f"rejected:{rejection}"
-                )
-            ),
-            "selected": selected,
-            "solution_process_ref": "trace[0]" if selected else "",
-        }
-        if len(summaries) < limit:
-            summaries.append(summary)
-        else:
-            omitted_source.append(summary)
-    omitted = None
-    if omitted_source:
-        omitted = {
-            "kind": "candidate_summary_overflow",
-            "count": len(omitted_source),
-            "content_digest": _digest(omitted_source),
-        }
-    return summaries, omitted
-
-
-def _proof_summary(
-    proof_gate: dict[str, Any] | None,
-    graph_event: dict[str, Any] | None,
-    *,
-    selected_candidate_id: str,
-) -> dict[str, Any]:
-    if not selected_candidate_id:
-        return {
-            "selected_candidate_id": "",
-            "status": "not_available",
-            "unresolved_obligation_ids": [],
-            "failed_obligation_ids": [],
-            "failed_claim_ids": [],
-            "hard_satisfied_obligation_ids": [],
-            "model_reviewed_obligation_ids": [],
-            "evidence_tier": "incomplete",
-            "graph_summary": {},
-            "mode": "",
-            "verifier_reason": "",
-        }
-    selected_decision: dict[str, Any] = {}
-    if proof_gate is not None:
-        decisions = proof_gate.get("decisions", [])
-        if isinstance(decisions, list):
-            selected_decision = next(
-                (
-                    item
-                    for item in decisions
-                    if isinstance(item, dict)
-                    and str(item.get("candidate_id", ""))
-                    == selected_candidate_id
-                ),
-                {},
-            )
-    graph = (
-        graph_event.get("graph", {})
-        if isinstance(graph_event, dict)
-        else {}
-    )
-    graph_summary = (
-        graph.get("summary", {})
-        if isinstance(graph, dict)
-        else {}
-    )
-    return {
-        "selected_candidate_id": selected_candidate_id,
-        "status": str(
-            selected_decision.get(
-                "status",
-                "complete_hard"
-                if _nonnegative_int(
-                    graph_summary.get("unresolved_required_obligations", 0)
-                )
-                == 0
-                else "incomplete",
-            )
-        ),
-        "unresolved_obligation_ids": _plain_string_list(
-            selected_decision.get("unresolved_obligation_ids", [])
-        ),
-        "failed_obligation_ids": _plain_string_list(
-            selected_decision.get("failed_obligation_ids", [])
-        ),
-        "failed_claim_ids": _plain_string_list(
-            selected_decision.get("failed_claim_ids", [])
-        ),
-        "hard_satisfied_obligation_ids": _plain_string_list(
-            selected_decision.get(
-                "hard_satisfied_obligation_ids",
-                [],
-            )
-        ),
-        "model_reviewed_obligation_ids": _plain_string_list(
-            selected_decision.get(
-                "model_reviewed_obligation_ids",
-                [],
-            )
-        ),
-        "evidence_tier": str(
-            selected_decision.get("evidence_tier", "incomplete")
-        ),
-        "graph_summary": _safe_mapping(graph_summary),
-        "mode": str(proof_gate.get("mode", "")) if proof_gate else "",
-        "verifier_reason": (
-            str(proof_gate.get("verifier_reason", ""))
-            if proof_gate
-            else ""
-        ),
-    }
-
-
-def _candidate_proof_status(state: dict[str, Any]) -> str:
-    obligations = state.get("proof_obligations", [])
-    if not isinstance(obligations, list):
-        return "not_available"
-    required = [
-        item
-        for item in obligations
-        if isinstance(item, dict) and item.get("required") is True
-    ]
-    if not required:
-        return "not_available"
-    if all(item.get("status") == "reviewed" for item in required):
-        return "incomplete"
-    return (
-        "complete_hard"
-        if all(item.get("status") == "satisfied" for item in required)
-        else "incomplete"
-    )
-
-
-def _decision_summary(
-    by_name: dict[str, list[dict[str, Any]]],
-) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    cache = _last(by_name, "frozen_lemma_cache")
-    shadow = _last(by_name, "shadow_probe_completed")
-    fanout = _last(by_name, "adaptive_fanout_decided")
-    cross_review = _last(by_name, "candidate_conflict_matrix")
-    source = cross_review or fanout or shadow or cache
-    if source is None:
-        return None, {}
-
-    details: dict[str, Any] = {}
-    if cache is not None:
-        hits = cache.get("hits", [])
-        if not isinstance(hits, list):
-            hits = []
-        details["cache"] = {
-            "requested": bool(cache.get("requested", False)),
-            "enabled": bool(cache.get("enabled", False)),
-            "disabled_reason": str(cache.get("disabled_reason", "")),
-            "record_count": _nonnegative_int(
-                cache.get("record_count", 0)
-            ),
-            "store_hash": str(cache.get("store_hash", "")),
-            "hit_count": len(hits),
-            "hits": [
-                _select(
-                    hit,
-                    (
-                        "lemma_id",
-                        "content_hash",
-                        "score",
-                        "assumption_checks",
-                    ),
-                )
-                for hit in hits
-                if isinstance(hit, dict)
-            ],
-            "runtime_write_count": _nonnegative_int(
-                cache.get("runtime_write_count", 0)
-            ),
-        }
-    if shadow is not None:
-        details["shadow"] = _select(
-            shadow,
-            (
-                "enabled",
-                "status",
-                "capability",
-                "normalized_input",
-                "limitations",
-                "elapsed_seconds",
-                "model_calls_added",
-            ),
-        )
-    if fanout is not None:
-        details["adaptive_fanout"] = _select(
-            fanout,
-            (
-                "requested_candidates",
-                "admitted_candidates",
-                "reason_codes",
-                "budget",
-            ),
-        )
-    if cross_review is not None:
-        matrix = cross_review.get("matrix", {})
-        if not isinstance(matrix, dict):
-            matrix = {}
-        conflicts = matrix.get("conflicts", [])
-        if not isinstance(conflicts, list):
-            conflicts = []
-        details["cross_review"] = {
-            "candidate_ids": _plain_string_list(
-                matrix.get("candidate_ids", [])
-            ),
-            "pair_count": len(conflicts),
-            "answer_conflict_count": sum(
-                isinstance(item, dict)
-                and item.get("answer_conflict") is True
-                for item in conflicts
-            ),
-            "assumption_conflict_count": sum(
-                isinstance(item, dict)
-                and item.get("assumption_conflict") is True
-                for item in conflicts
-            ),
-            "obligation_conflict_count": sum(
-                isinstance(item, dict)
-                and item.get("obligation_conflict") is True
-                for item in conflicts
-            ),
-            "critical_claim_conflict_count": sum(
-                isinstance(item, dict)
-                and item.get("critical_claim_conflict") is True
-                for item in conflicts
-            ),
-        }
-        verifier = _last(by_name, "verifier_completed")
-        if verifier is not None:
-            details["cross_review"].update(
-                {
-                    "review_target_count": len(
-                        _plain_string_list(
-                            verifier.get("review_targets", [])
-                        )
-                    ),
-                    "reviewed_target_count": len(
-                        _plain_string_list(
-                            verifier.get("reviewed_targets", [])
-                        )
-                    ),
-                    "unreviewed_target_count": len(
-                        _plain_string_list(
-                            verifier.get("unreviewed_targets", [])
-                        )
-                    ),
-                    "review_status": str(
-                        verifier.get("status", "unknown")
-                    ),
-                }
-            )
-    return source, details
-
-
-def _validate_closed_loop_health(
-    by_name: dict[str, list[dict[str, Any]]],
-    outcome: Any,
-    selected_id: str,
-    errors: list[str],
-) -> None:
-    events = by_name.get("closed_loop_health", [])
-    if len(events) != 1:
-        return
-    event = events[0]
-    expected_fields = {
-        "health",
-        "model_dispatch",
-        "candidate_flow",
-        "verification_flow",
-        "closure",
-    }
-    if not expected_fields <= set(event):
-        errors.append("closed-loop health schema is incomplete")
-        return
-    health = str(event.get("health", ""))
-    allowed = {
-        "primary": {"healthy", "degraded"},
-        "success": {"healthy", "degraded"},
-        "fallback": {"failed"},
-        "error": {"failed"},
-        "failed": {"failed"},
-        "timeout": {"timeout"},
-        "interrupted": {"interrupted"},
-    }
-    if health not in allowed.get(str(outcome), {"failed"}):
-        errors.append("closed-loop health conflicts with terminal outcome")
-
-    candidate_flow = event.get("candidate_flow", {})
-    closure = event.get("closure", {})
-    if not isinstance(candidate_flow, dict) or not isinstance(closure, dict):
-        errors.append("closed-loop health flow schema is invalid")
-        return
-    if str(candidate_flow.get("selected_candidate_id", "")) != selected_id:
-        errors.append("closed-loop health selected candidate is inconsistent")
-    if bool(closure.get("answer_available", False)) != bool(selected_id):
-        errors.append("closed-loop health answer availability is inconsistent")
-
-    proof_events = by_name.get("proof_completion_summary", [])
-    expected_proof = "not_available"
-    if proof_events and selected_id:
-        status = str(proof_events[-1].get("status", "incomplete"))
-        expected_proof = (
-            status
-            if status in {
-                "complete_hard",
-                "complete_audited",
-                "incomplete",
-                "failed",
-            }
-            else "incomplete"
-        )
-    if closure.get("proof_status") != expected_proof:
-        errors.append("closed-loop health proof status is inconsistent")
-
-
-def _validate_model_activity(
-    by_name: dict[str, list[dict[str, Any]]],
-    errors: list[str],
-) -> None:
-    for event in by_name.get("model_activity", []):
-        calls = event.get("calls")
-        if not isinstance(calls, list):
-            errors.append("model activity calls must be a list")
-            continue
-        if event.get("call_count") != len(calls):
-            errors.append("model activity call count is inconsistent")
-        indexes = [
-            call.get("call_index")
-            for call in calls
-            if isinstance(call, dict)
-        ]
-        if indexes != list(range(1, len(calls) + 1)):
-            errors.append("model activity call indexes are not contiguous")
-        for call in calls:
-            if not isinstance(call, dict):
-                errors.append("model activity call must be an object")
-                continue
-            if not isinstance(call.get("candidate_ids"), list):
-                errors.append("model activity candidate IDs must be a list")
-            if not str(call.get("role", "")) or not str(
-                call.get("purpose", "")
-            ):
-                errors.append("model activity attribution is incomplete")
-
-
-def _validate_repair_history(
-    by_name: dict[str, list[dict[str, Any]]],
-    errors: list[str],
-) -> None:
-    for event in by_name.get("repair_history", []):
-        attempts = event.get("attempts")
-        if not isinstance(attempts, list) or not attempts:
-            errors.append("repair history attempts are invalid")
-            continue
-        for attempt in attempts:
-            if not isinstance(attempt, dict):
-                errors.append("repair history attempt must be an object")
-                continue
-            if attempt.get("accepted") is True and attempt.get("rolled_back") is True:
-                errors.append("rolled-back repair cannot be accepted")
-            if not isinstance(attempt.get("public_solution_steps"), list):
-                errors.append("repair history public steps must be a list")
-
-
-def _validate_workflow_overview(
-    by_name: dict[str, list[dict[str, Any]]],
-    selected_id: str,
-    errors: list[str],
-) -> None:
-    for event in by_name.get("workflow_overview", []):
-        steps = event.get("steps")
-        if not isinstance(steps, list) or not steps:
-            errors.append("workflow overview steps are invalid")
-            continue
-        if event.get("selected_candidate_id") != selected_id:
-            errors.append("workflow overview selected candidate is inconsistent")
-        for index, step in enumerate(steps, start=1):
-            if not isinstance(step, dict):
-                errors.append("workflow overview step must be an object")
-                continue
-            if step.get("step_index") != index:
-                errors.append("workflow overview indexes are not contiguous")
-            if not str(step.get("phase", "")) or not str(
-                step.get("outcome", "")
-            ) or not str(step.get("summary", "")):
-                errors.append("workflow overview step is incomplete")
-            if not isinstance(step.get("related_events"), list):
-                errors.append("workflow overview references are invalid")
-
-
-def _workflow_overview(
-    by_name: dict[str, list[dict[str, Any]]],
-    selected_id: str,
-) -> dict[str, Any]:
-    steps: list[dict[str, Any]] = []
-
-    def add(
-        phase: str,
-        outcome: str,
-        summary: str,
-        related_events: list[str],
-    ) -> None:
-        steps.append(
-            {
-                "step_index": len(steps) + 1,
-                "phase": phase,
-                "outcome": outcome,
-                "summary": summary,
-                "related_events": related_events,
-            }
-        )
-
-    problem = _last(by_name, "problem_parsed") or {}
-    add(
-        "problem_understanding",
-        "completed" if problem else "unavailable",
-        (
-            "Parsed the task as "
-            f"{problem.get('problem_type', 'unknown')} with response mode "
-            f"{problem.get('response_mode', 'answer_only')}."
-        ),
-        ["problem_parsed"],
-    )
-
-    route = _last(by_name, "route_planned") or {}
-    add(
-        "planning",
-        "completed" if route else "deterministic_default",
-        (
-            "Selected the reasoning route for domain "
-            f"{route.get('primary_subject', problem.get('domain', 'unknown'))}."
-        ),
-        ["route_planned", "skills_selected"],
-    )
-
-    generated_ids = list(
-        dict.fromkeys(
-            str(event.get("candidate_id", ""))
-            for event in by_name.get("candidate_generated", [])
-            if event.get("candidate_id")
-        )
-    )
-    failed_ids = list(
-        dict.fromkeys(
-            str(event.get("candidate_id", ""))
-            for event in by_name.get("candidate_generation_failed", [])
-            if event.get("candidate_id")
-        )
-    )
-    add(
-        "candidate_generation",
-        "completed" if generated_ids else "failed",
-        (
-            f"Generated {len(generated_ids)} candidate solution(s); "
-            f"{len(failed_ids)} candidate attempt(s) failed."
-        ),
-        ["model_activity", "candidate_summaries"],
-    )
-
-    hard_gate = _last(by_name, "hard_evidence_gate") or {}
-    verifier = _last(by_name, "verifier_completed") or {}
-    accepted_ids = _plain_string_list(hard_gate.get("accepted", []))
-    rejected_ids = _plain_string_list(hard_gate.get("rejected", []))
-    verification_outcome = (
-        "accepted"
-        if selected_id and selected_id in accepted_ids
-        else ("completed" if hard_gate or verifier else "not_requested")
-    )
-    add(
-        "verification",
-        verification_outcome,
-        (
-            f"Evidence gates accepted {len(accepted_ids)} and rejected "
-            f"{len(rejected_ids)} candidate(s); verifier status is "
-            f"{verifier.get('status', 'not_used')}."
-        ),
-        ["evidence_summary", "verifier_completed", "proof_completion_summary"],
-    )
-
-    repairs = [
-        event
-        for event in by_name.get("repair_completed", [])
-        if isinstance(event, dict)
-    ]
-    if repairs:
-        accepted_repairs = sum(
-            bool(event.get("proposed_candidate_id"))
-            and not bool(event.get("rolled_back", False))
-            for event in repairs
-        )
-        add(
-            "repair",
-            "accepted" if accepted_repairs else "rolled_back",
-            (
-                f"Completed {len(repairs)} claim-local repair attempt(s); "
-                f"{accepted_repairs} improved candidate(s) were retained."
-            ),
-            ["repair_history"],
-        )
-
-    add(
-        "arbitration",
-        "selected" if selected_id else "no_selection",
-        (
-            f"Selected candidate {selected_id}."
-            if selected_id
-            else "No candidate passed final arbitration."
-        ),
-        ["candidate_arbitrated"],
-    )
-
-    run_completed = _last(by_name, "run_completed") or {}
-    run_outcome = str(run_completed.get("outcome", "fallback"))
-    add(
-        "finalization",
-        run_outcome,
-        (
-            "Formatted the selected candidate as the final response."
-            if selected_id
-            else "Returned the deterministic fallback response."
-        ),
-        ["final_answer_selected" if selected_id else "fallback_used"],
-    )
-    return {
-        "outcome": run_outcome,
-        "selected_candidate_id": selected_id,
-        "steps": steps,
-    }
-
-
-def _model_activity(
-    by_name: dict[str, list[dict[str, Any]]],
-    budget: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
-    records = budget.get("model_call_records", []) if budget else []
-    if not isinstance(records, list):
-        return []
-    starts = [
-        event
-        for event in by_name.get("candidate_generation_started", [])
-        if isinstance(event, dict)
-    ]
-    primary_ids = [
-        str(event.get("candidate_id", ""))
-        for event in starts
-        if event.get("role") == "PrimarySolver" and event.get("candidate_id")
-    ]
-    alternative_ids = [
-        str(event.get("candidate_id", ""))
-        for event in starts
-        if event.get("role") == "AlternativeSolver" and event.get("candidate_id")
-    ]
-    proposed_ids = [
-        str(event.get("proposed_candidate_id", ""))
-        for event in by_name.get("repair_proposed", [])
-        if event.get("proposed_candidate_id")
-    ]
-    verifier = _last(by_name, "verifier_completed") or {}
-    verifier_ids = _plain_string_list(verifier.get("reviewed_candidates", []))
-    selected_id = _selected_candidate_id(by_name)
-    stage_counts: Counter[str] = Counter()
-    calls: list[dict[str, Any]] = []
-    for call_index, record in enumerate(records, start=1):
-        if not isinstance(record, dict):
-            continue
-        stage = str(record.get("stage", "unknown"))
-        stage_index = stage_counts[stage]
-        stage_counts[stage] += 1
-        candidate_ids: list[str] = []
-        if stage == "primary" and primary_ids:
-            candidate_ids = [primary_ids[0]]
-        elif stage == "alternative" and alternative_ids:
-            candidate_ids = [
-                alternative_ids[min(stage_index, len(alternative_ids) - 1)]
-            ]
-        elif stage == "repair" and proposed_ids:
-            candidate_ids = [
-                proposed_ids[min(stage_index, len(proposed_ids) - 1)]
-            ]
-        elif stage == "verifier":
-            candidate_ids = verifier_ids
-        elif stage == "finalizer" and selected_id:
-            candidate_ids = [selected_id]
-        calls.append(
-            {
-                "call_index": call_index,
-                "call_id": str(record.get("call_id", "")),
-                "logical_call_index": _nonnegative_int(
-                    record.get("logical_call_index", call_index)
-                ),
-                "logical_call_consumed": bool(
-                    record.get("logical_call_consumed", False)
-                ),
-                "dispatched": bool(record.get("dispatched", False)),
-                "stage": stage,
-                "turn_kind": str(record.get("turn_kind", stage)),
-                "agent_id": str(record.get("agent_id", "")),
-                "task_id": str(record.get("task_id", "")),
-                "turn_id": str(record.get("turn_id", "")),
-                "plan_id": str(record.get("plan_id", "")),
-                "subgoal_ids": _plain_string_list(
-                    record.get("subgoal_ids", [])
-                ),
-                "planned_method_family": str(
-                    record.get("planned_method_family", "")
-                ),
-                "output_artifact_id": str(record.get("output_artifact_id", "")),
-                "message_id": str(record.get("message_id", "")),
-                "agent_mode": str(record.get("agent_mode", "")),
-                "role": str(record.get("agent_role", "")) or _model_role(stage),
-                "purpose": _model_purpose(
-                    stage,
-                    str(record.get("turn_kind", stage)),
-                ),
-                "candidate_ids": candidate_ids,
-                "status": str(record.get("status", "unknown")),
-                "failure_code": str(record.get("failure_code", "")),
-                "response_validation": str(
-                    record.get("response_validation", "not_applicable")
-                ),
-                "protocol_parse_tier": str(
-                    record.get("protocol_parse_tier", "not_attempted")
-                ),
-                "protocol_recovery_reason": str(
-                    record.get("protocol_recovery_reason", "")
-                ),
-                "protocol_assurance_degradation": str(
-                    record.get("protocol_assurance_degradation", "none")
-                ),
-                "candidate_parse_tier": str(
-                    record.get("candidate_parse_tier", "not_attempted")
-                ),
-                "transport_attempts": _nonnegative_int(
-                    record.get("transport_attempts", 0)
-                ),
-                "prompt_tokens": _nonnegative_int(
-                    record.get("prompt_tokens", 0)
-                ),
-                "available_input_tokens": _nonnegative_int(
-                    record.get("available_input_tokens", 0)
-                ),
-                "configured_output_tokens": _nonnegative_int(
-                    record.get("configured_output_tokens", 0)
-                ),
-                "requested_max_output_tokens": _nonnegative_int(
-                    record.get(
-                        "requested_max_output_tokens",
-                        record.get("configured_output_tokens", 0),
-                    )
-                ),
-                "effective_output_tokens": _nonnegative_int(
-                    record.get(
-                        "effective_output_tokens",
-                        record.get("max_output_tokens", 0),
-                    )
-                ),
-                "effective_max_output_tokens": _nonnegative_int(
-                    record.get(
-                        "effective_max_output_tokens",
-                        record.get("max_output_tokens", 0),
-                    )
-                ),
-                "stage_output_cap_tokens": _nonnegative_int(
-                    record.get("stage_output_cap_tokens", 0)
-                ),
-                "max_output_tokens": _nonnegative_int(
-                    record.get("max_output_tokens", 0)
-                ),
-                "context_window_tokens": _nonnegative_int(
-                    record.get("context_window_tokens", 0)
-                ),
-                "safety_margin_tokens": _nonnegative_int(
-                    record.get("safety_margin_tokens", 0)
-                ),
-                "counting_mode": str(record.get("counting_mode", "")),
-                "observed_output_tokens": _nonnegative_int(
-                    record.get("observed_output_tokens", 0)
-                ),
-                "output_chars": _nonnegative_int(
-                    record.get("output_chars", 0)
-                ),
-                "queue_elapsed_seconds": _nonnegative_float(
-                    record.get("queue_elapsed_seconds", 0.0)
-                ),
-                "agent_wait_seconds": _nonnegative_float(
-                    record.get("agent_wait_seconds", 0.0)
-                ),
-                "scheduler_wait_seconds": _nonnegative_float(
-                    record.get("scheduler_wait_seconds", 0.0)
-                ),
-                "rate_wait_seconds": _nonnegative_float(
-                    record.get("rate_wait_seconds", 0.0)
-                ),
-                "stage_p95_seconds": _nonnegative_float(
-                    record.get("stage_p95_seconds", 0.0)
-                ),
-                "effective_queue_budget_seconds": _nonnegative_float(
-                    record.get("effective_queue_budget_seconds", 0.0)
-                ),
-                "configured_stage_timeout_seconds": _nonnegative_float(
-                    record.get("configured_stage_timeout_seconds", 0.0)
-                ),
-                "stage_timeout_seconds": _nonnegative_float(
-                    record.get(
-                        "stage_timeout_seconds",
-                        record.get("configured_stage_timeout_seconds", 0.0),
-                    )
-                ),
-                "minimum_start_window_seconds": _nonnegative_float(
-                    record.get("minimum_start_window_seconds", 0.0)
-                ),
-                "effective_minimum_start_window_seconds": _nonnegative_float(
-                    record.get(
-                        "effective_minimum_start_window_seconds",
-                        0.0,
-                    )
-                ),
-                "client_timeout_seconds": _nonnegative_float(
-                    record.get("client_timeout_seconds", 0.0)
-                ),
-                "effective_stage_timeout_seconds": _nonnegative_float(
-                    record.get("effective_stage_timeout_seconds", 0.0)
-                ),
-                "finish_reason": str(
-                    record.get("finish_reason", "unobservable")
-                ),
-                "truncation_status": str(
-                    record.get("truncation_status", "unknown")
-                ),
-                "tail_state": str(record.get("tail_state", "none")),
-                "stop_reason": str(record.get("stop_reason", "")),
-                "execution_elapsed_seconds": _nonnegative_float(
-                    record.get(
-                        "execution_elapsed_seconds",
-                        record.get("elapsed_seconds", 0.0),
-                    )
-                ),
-                "total_elapsed_seconds": _nonnegative_float(
-                    record.get(
-                        "total_elapsed_seconds",
-                        record.get("elapsed_seconds", 0.0),
-                    )
-                ),
-                "transport_attempt_reservation": _nonnegative_int(
-                    record.get("transport_attempt_reservation", 0)
-                ),
-                "transport_attempt_observability": str(
-                    record.get("transport_attempt_observability", "pending")
-                ),
-            }
-        )
-    public_fields = {
-        "call_index",
-        "call_id",
-        "logical_call_index",
-        "logical_call_consumed",
-        "dispatched",
-        "stage",
-        "turn_kind",
-        "agent_id",
-        "agent_mode",
-        "task_id",
-        "turn_id",
-        "role",
-        "purpose",
-        "candidate_ids",
-        "status",
-        "failure_code",
-        "response_validation",
-        "protocol_parse_tier",
-        "protocol_recovery_reason",
-        "protocol_assurance_degradation",
-        "candidate_parse_tier",
-        "prompt_tokens",
-        "configured_output_tokens",
-        "requested_max_output_tokens",
-        "effective_max_output_tokens",
-        "stage_output_cap_tokens",
-        "max_output_tokens",
-        "context_window_tokens",
-        "safety_margin_tokens",
-        "agent_wait_seconds",
-        "scheduler_wait_seconds",
-        "rate_wait_seconds",
-        "stage_p95_seconds",
-        "effective_queue_budget_seconds",
-        "stage_timeout_seconds",
-        "configured_stage_timeout_seconds",
-        "client_timeout_seconds",
-        "effective_stage_timeout_seconds",
-        "minimum_start_window_seconds",
-        "effective_minimum_start_window_seconds",
-        "transport_attempt_reservation",
-        "transport_attempt_observability",
-        "finish_reason",
-        "truncation_status",
-        "tail_state",
-        "stop_reason",
-        "total_elapsed_seconds",
-    }
-    return [
-        {key: value for key, value in call.items() if key in public_fields}
-        for call in calls
-    ]
-
-
-def _model_role(stage: str) -> str:
-    return {
-        "router": "RouterPlanner",
-        "primary": "PrimarySolver",
-        "alternative": "AlternativeSolver",
-        "lemma": "LemmaCurator",
-        "verifier": "VerifierSkeptic",
-        "repair": "RepairAgent",
-        "finalizer": "LLMFinalizer",
-    }.get(stage, "UnknownRole")
-
-
-def _model_purpose(stage: str, turn_kind: str = "") -> str:
-    if turn_kind == "peer_review":
-        return "solver_peer_review_or_rebuttal"
-    return {
-        "router": "route_planning",
-        "primary": "candidate_reasoning",
-        "alternative": "alternative_candidate_reasoning",
-        "lemma": "lemma_curation",
-        "verifier": "candidate_cross_review",
-        "repair": "claim_local_repair",
-        "finalizer": "verified_exposition_finalization",
-    }.get(stage, "model_work")
-
-
-def _repair_history(
-    by_name: dict[str, list[dict[str, Any]]],
-    limits: JudgeTraceLimits,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    proposals = {
-        str(event.get("proposed_candidate_id", "")): event
-        for event in by_name.get("repair_proposed", [])
-        if event.get("proposed_candidate_id")
-    }
-    completions = by_name.get("repair_completed", [])
-    attempts: list[dict[str, Any]] = []
-    char_budget = max(
-        512,
-        limits.judge_trace_event_max_chars // max(1, len(completions)),
-    )
-    for completion in completions:
-        if not isinstance(completion, dict):
-            continue
-        proposed_id = str(completion.get("proposed_candidate_id", ""))
-        proposal = proposals.get(proposed_id, {})
-        content = proposal.get("proposed_content", {})
-        if not isinstance(content, dict):
-            content = {}
-        rolled_back = bool(completion.get("rolled_back", False))
-        attempts.append(
-            {
-                "source_candidate_id": str(
-                    completion.get("source_candidate_id", "")
-                ),
-                "proposed_candidate_id": proposed_id,
-                "selected_candidate_id": str(
-                    completion.get("selected_candidate_id", "")
-                ),
-                "affected_claim_ids": _plain_string_list(
-                    completion.get("affected_claim_ids", [])
-                ),
-                "reverified_claim_ids": _plain_string_list(
-                    completion.get("reverified_claim_ids", [])
-                ),
-                "evidence_ids": _plain_string_list(
-                    completion.get("evidence_ids", [])
-                ),
-                "rolled_back": rolled_back,
-                "accepted": bool(proposed_id) and not rolled_back,
-                "reason": str(completion.get("reason", "")),
-                "repair_stage": str(completion.get("repair_stage", "")),
-                "public_final_answer": _compact_text(
-                    str(content.get("final_answer", "")),
-                    max(128, char_budget // 4),
-                ),
-                "public_solution_steps": _candidate_steps(
-                    content.get("public_solution_steps", []),
-                    char_budget,
-                ),
-                "content_digest": str(proposal.get("content_digest", "")),
-            }
-        )
-    source = (
-        completions[-1]
-        if completions
-        else (next(reversed(proposals.values())) if proposals else None)
-    )
-    return source, attempts
-
-
-def _diagnostics_summary(
-    by_name: dict[str, list[dict[str, Any]]],
-    budget: dict[str, Any] | None,
-    completed: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Build the fixed, bounded diagnostic payload required by Phase 0."""
-
-    verdicts = {"complete": 0, "suspect": 0, "truncated": 0}
-    for event in by_name.get("truncation_assessed", []):
-        status = str(event.get("status", "")).upper()
-        if status == "COMPLETE":
-            key = "complete"
-        elif status in {"PROBABLE_TRUNCATION", "UNKNOWN", "SUSPECT"}:
-            key = "suspect"
-        else:
-            key = "truncated"
-        verdicts[key] += 1
-
-    budget = budget if isinstance(budget, dict) else {}
-    completed = completed if isinstance(completed, dict) else {}
-    model_calls = _nonnegative_int(
-        budget.get("model_calls", budget.get("used_calls", 0))
-    )
-    prompt_tokens = _nonnegative_int(budget.get("prompt_tokens", 0))
-    issues: list[str] = []
-    for event in by_name.get("answer_validation_warning", []):
-        codes = event.get("codes", [])
-        if isinstance(codes, list):
-            issues.extend(str(code) for code in codes if str(code).strip())
-    selected = _last(by_name, "final_answer_selected") or {}
-    validation = selected.get("answer_validation", {})
-    if isinstance(validation, dict):
-        codes = validation.get("codes", [])
-        if isinstance(codes, list):
-            issues.extend(str(code) for code in codes if str(code).strip())
-    raw_source_counts = budget.get("answer_source_counts", {})
-    source_counts = (
-        {
-            level: _nonnegative_int(raw_source_counts.get(level, 0))
-            for level in ("L1", "L2", "L3", "L4", "L5")
-        }
-        if isinstance(raw_source_counts, dict)
-        else {level: 0 for level in ("L1", "L2", "L3", "L4", "L5")}
-    )
-    return {
-        "truncation_verdicts": verdicts,
-        "deadline_phase": str(budget.get("deadline_phase", "unknown")),
-        "elapsed_seconds": _nonnegative_float(budget.get("elapsed_seconds", 0)),
-        "model_calls": model_calls,
-        "prompt_tokens_avg": round(prompt_tokens / model_calls, 3)
-        if model_calls
-        else 0,
-        "circuit_open": str(
-            budget.get("provider_health_state", "")
-        ).casefold()
-        == "circuit_open",
-        "salvage_used": bool(
-            by_name.get("candidate_salvaged")
-            or by_name.get("answer_ladder_selected")
-            or str(completed.get("error_code", "")) == "degraded_candidate_salvage"
-        ),
-        "answer_source": str(budget.get("answer_source", "L5")),
-        "answer_source_counts": source_counts,
-        "sanitizer_issues": list(dict.fromkeys(issues)),
-        "error_code": str(completed.get("error_code", "")) or None,
-    }
-
-
-def _budget_summary(event: dict[str, Any] | None) -> dict[str, Any]:
-    fields = (
-        "max_calls",
-        "used_calls",
-        "calls_used",
-        "model_calls",
-        "model_call_policy",
-        "budget_phase",
-        "soft_call_checkpoints",
-        "speculative_exploration_cutoff",
-        "closure_reserve_calls",
-        "calls_remaining",
-        "prompt_tokens",
-        "requested_output_tokens",
-        "observed_output_tokens",
-        "output_chars",
-        "model_queue_budget_seconds",
-        "model_queue_wait_seconds",
-        "model_execution_seconds",
-        "model_call_elapsed_seconds",
-        "model_call_timeout_count",
-        "model_queue_timeout_count",
-        "model_admission_rejection_count",
-        "model_admission_rejection_reasons",
-        "model_call_failure_count",
-        "model_response_rejection_count",
-        "provider_health_state",
-        "provider_active_tails",
-        "provider_peak_tails",
-        "provider_scheduler_peak",
-        "provider_rate_reserved_weight",
-        "provider_rate_peak_weight",
-        "provider_rate_wait_count",
-        "provider_rate_admitted_weight",
-        "provider_circuit_trips",
-        "provider_fast_failures",
-        "used_tool_calls",
-        "used_evidence_records",
-        "elapsed_seconds",
-        "remaining_seconds",
-        "deadline_phase",
-        "outcome",
-        "answer_source",
-        "answer_source_counts",
-    )
-    return _select(event, fields)
-
-
-def _skill_summary(event: dict[str, Any] | None) -> dict[str, Any]:
-    if event is None:
-        return {}
-    grouped: dict[tuple[str, str, str], set[str]] = {}
-    for skill in event.get("skills", []):
-        if not isinstance(skill, dict):
-            continue
-        key = (
-            str(skill.get("name", "")),
-            str(skill.get("version", "")),
-            str(skill.get("reason", "")),
-        )
-        roles = skill.get("roles", [skill.get("role", "")])
-        if key[0] and isinstance(roles, list):
-            grouped.setdefault(key, set()).update(
-                str(role) for role in roles if role
-            )
-    result: dict[str, Any] = {
-        "skill_fingerprint": str(event.get("skill_fingerprint", "")),
-        "selection_context": str(event.get("selection_context", "")),
-        "skills": [
-            {
-                "name": name,
-                "version": version,
-                "reason": reason,
-                "roles": sorted(roles),
-                "rank": min(
-                    _nonnegative_int(item.get("rank", 0))
-                    for item in event.get("skills", [])
-                    if isinstance(item, dict)
-                    and str(item.get("name", "")) == name
-                    and str(item.get("version", "")) == version
-                    and str(item.get("reason", "")) == reason
-                ),
-                "score": max(
-                    _nonnegative_int(item.get("score", 0))
-                    for item in event.get("skills", [])
-                    if isinstance(item, dict)
-                    and str(item.get("name", "")) == name
-                    and str(item.get("version", "")) == version
-                    and str(item.get("reason", "")) == reason
-                ),
-            }
-            for (name, version, reason), roles in sorted(grouped.items())
-        ],
-    }
+        ranks = arbitration.get("rank_details", []); selected_rank = next((item for item in ranks if isinstance(item, dict) and str(item.get("candidate_id", "")) == selected), {}) if isinstance(ranks, list) else {}
+        add("candidate_arbitrated", arbitration, {"selected": selected, "viable_candidates": _strings(arbitration, "viable_candidates"), "rejected_candidates": _rejections(arbitration), "selection_reason": str(arbitration.get("selection_reason", "")), "tie_break_reason": str(arbitration.get("tie_break_reason", "")), "selected_verification_status": str(arbitration.get("selected_verification_status", "")), "selected_evidence_tier": str(selected_rank.get("evidence_tier", "")), "selected_review_support": _signed(selected_rank.get("review_support", 0)), "equivalence_cluster_count": len(arbitration.get("equivalence_clusters", [])) if isinstance(arbitration.get("equivalence_clusters", []), list) else 0, "used_llm_arbiter": bool(arbitration.get("used_llm_arbiter", False))})
+    decision = _decision(grouped)
+    if decision[0] is not None:
+        add("decision_summary", decision[0], decision[1])
+    if final is not None:
+        add("final_answer_selected", final, {"candidate_id": selected, "selection_reason": str(final.get("selection_reason", "")), "public_solution": {"solution_process_ref": "trace[0]", "final_answer": _text(str(public_solution.get("final_answer", "")), max(256, active.judge_trace_event_max_chars // 4))}, "final_response_digest": sha256(str(final_response).encode("utf-8")).hexdigest(), "answer_validation": _safe(final.get("answer_validation", {}))})
+    for name in ("fallback_used", "deadline_finalize", "per_case_wall_clock_timeout", "case_execution_failed"):
+        item = _last(grouped, name); add(name, item, _select(item, ("reason", "error_code", "failed_phase", "checkpoint", "disabled", "elapsed_seconds", "wall_clock_seconds", "serialization_reserve_seconds", "final_phase")))
+    formal = _last(grouped, "formal_entry_compatibility")
+    add("formal_entry_compatibility", formal, _select(formal, ("public_contract", "immutable_files", "status_field_owner", "harness_status_limitation")))
+    completed = _last(grouped, "run_completed"); health = _last(grouped, "closed_loop_health")
+    health_details = _select(health, ("health", "model_dispatch", "candidate_flow", "verification_flow", "closure")) if health else build_closed_loop_health(trace, budget=budget, selected_candidate_id=selected, outcome=str((completed or {}).get("outcome", "")), error_code=str((completed or {}).get("error_code", "")))
+    add("closed_loop_health", health or completed or budget, health_details)
+    add("diagnostics", budget or completed or _first(grouped, "session_started"), _diagnostics(grouped, budget, completed))
+    add("budget_summary", budget, _budget(budget))
+    add("run_completed", completed, _select(completed, ("outcome", "error_code", "final_phase")))
+    result = _bound_trace(events, active)
+    validate_judge_trace(result, final_response=final_response, limits=active)
     return result
 
 
-def _selected_evidence_summary(case_summary: Any, selected_id: str) -> dict[str, int]:
-    candidates = (
-        case_summary.get("candidates", [])
-        if isinstance(case_summary, dict)
-        else []
-    )
-    for candidate in candidates:
-        if (
-            isinstance(candidate, dict)
-            and str(candidate.get("candidate_id", "")) == selected_id
-        ):
-            return _status_counts(candidate.get("evidence", {}))
-    return _status_counts({})
+def validate_judge_trace(trace: list[dict[str, Any]], *, final_response: str, limits: Mapping[str, Any] | JudgeTraceLimits | None = None) -> None:
+    active = _limits(limits); errors: list[str] = []
+    if not isinstance(trace, list) or not trace: raise JudgeTraceIntegrityError("Judge Trace must not be empty")
+    if len(trace) > active.judge_trace_max_events or _chars(trace) > active.judge_trace_max_chars: errors.append("Judge Trace budget exceeded")
+    grouped: dict[str, list[dict[str, Any]]] = {}; elapsed: list[int] = []
+    for index, event in enumerate(trace, 1):
+        if not isinstance(event, dict): errors.append(f"event {index} is not an object"); continue
+        name = str(event.get("event", "")); grouped.setdefault(name, []).append(event)
+        if event.get("schema_version") != JUDGE_TRACE_SCHEMA_VERSION or event.get("seq") != index: errors.append(f"event {index} schema or sequence is invalid")
+        value = event.get("elapsed_ms")
+        if type(value) is not int or value < 0: errors.append(f"event {index} elapsed time is invalid")
+        else: elapsed.append(value)
+        if name not in JUDGE_EVENT_STAGES or event.get("stage") != JUDGE_EVENT_STAGES.get(name): errors.append(f"event {index} stage is invalid")
+        if _chars(event) > active.judge_trace_event_max_chars or _unsafe(event): errors.append(f"event {index} exceeds public safety bounds")
+        try: json.dumps(event, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError): errors.append(f"event {index} is not JSON serializable")
+    if elapsed != sorted(elapsed): errors.append("Judge Trace elapsed time is not monotonic")
+    if trace[0].get("event") != "solution_process": errors.append("solution_process must be first")
+    if len(trace) < 2 or trace[1].get("event") != "workflow_overview": errors.append("workflow_overview must follow solution_process")
+    if trace[-1].get("event") != "run_completed": errors.append("run_completed must be final")
+    for name in ("solution_process", "workflow_overview", "session_started", "closed_loop_health", "budget_summary", "run_completed"):
+        if len(grouped.get(name, [])) != 1: errors.append(f"{name} must occur exactly once")
+    outcome = grouped.get("run_completed", [{}])[-1].get("outcome")
+    if outcome == "primary":
+        for name in ("evidence_summary", "proof_completion_summary", "candidate_arbitrated", "final_answer_selected"):
+            if len(grouped.get(name, [])) != 1: errors.append(f"primary trace requires {name}")
+    elif outcome in {"fallback", "timeout", "failed", "error"} and not any(grouped.get(name) for name in ("fallback_used", "deadline_finalize", "per_case_wall_clock_timeout", "case_execution_failed")): errors.append("terminal trace lacks failure category")
+    process = grouped.get("solution_process", [{}])[-1]; selected = str(grouped.get("final_answer_selected", [{}])[-1].get("candidate_id", ""))
+    if outcome == "primary" and (process.get("status") != "complete" or str(process.get("candidate_id", "")) != selected or not isinstance(process.get("steps"), list) or not process.get("steps") or not process.get("conclusion")): errors.append("primary solution process is incomplete")
+    if grouped.get("final_answer_selected"):
+        selected_event = grouped["final_answer_selected"][-1]; solution = selected_event.get("public_solution")
+        if not isinstance(solution, dict) or "final_response" in solution: errors.append("selected public solution is invalid")
+        if selected_event.get("final_response_digest") != sha256(str(final_response).encode("utf-8")).hexdigest(): errors.append("final response digest is inconsistent")
+    expected = {"candidate_id", "role", "method_family", "status", "content_digest", "rejection_category", "evidence_summary", "public_final_answer", "public_solution_steps", "proof_status", "selection_reason", "selected", "solution_process_ref"}
+    for event in grouped.get("candidate_summaries", []):
+        candidates = event.get("candidates")
+        if not isinstance(candidates, list) or len(candidates) > active.candidate_summary_max_count: errors.append("candidate summaries are invalid"); continue
+        for candidate in candidates:
+            if not isinstance(candidate, dict) or set(candidate) != expected: errors.append("candidate summary schema is invalid"); continue
+            chosen = str(candidate.get("candidate_id", "")) == selected
+            if bool(candidate.get("selected")) != chosen: errors.append("candidate selected marker is inconsistent")
+            if chosen and candidate.get("solution_process_ref") != "trace[0]": errors.append("selected candidate lacks solution reference")
+    for event in grouped.get("model_activity", []):
+        calls = event.get("calls")
+        if not isinstance(calls, list) or event.get("call_count") != len(calls): errors.append("model activity is invalid"); continue
+        if [item.get("call_index") for item in calls if isinstance(item, dict)] != list(range(1, len(calls) + 1)): errors.append("model activity indexes are not contiguous")
+        for item in calls:
+            if not isinstance(item, dict) or not isinstance(item.get("candidate_ids"), list) or not str(item.get("role", "")) or not str(item.get("purpose", "")): errors.append("model activity attribution is incomplete")
+    for event in grouped.get("repair_history", []):
+        attempts = event.get("attempts")
+        if not isinstance(attempts, list) or not attempts: errors.append("repair history is invalid")
+        for item in attempts or []:
+            if isinstance(item, dict) and item.get("accepted") is True and item.get("rolled_back") is True: errors.append("accepted repair cannot be rolled back")
+    overview = grouped.get("workflow_overview", [{}])[-1]; steps = overview.get("steps")
+    if not isinstance(steps, list) or not steps or overview.get("selected_candidate_id") != selected: errors.append("workflow overview is invalid")
+    for index, step in enumerate(steps or [], 1):
+        if not isinstance(step, dict) or step.get("step_index") != index or not str(step.get("phase", "")) or not str(step.get("outcome", "")) or not str(step.get("summary", "")) or not isinstance(step.get("related_events"), list): errors.append("workflow overview step is invalid")
+    health = grouped.get("closed_loop_health", [{}])[-1]
+    if not {"health", "model_dispatch", "candidate_flow", "verification_flow", "closure"} <= set(health): errors.append("closed-loop health schema is incomplete")
+    if not isinstance(final_response, str) or not final_response.strip(): errors.append("final_response must be non-empty")
+    if errors: raise JudgeTraceIntegrityError("; ".join(dict.fromkeys(errors)))
 
 
-def _rejection_summaries(event: dict[str, Any]) -> list[dict[str, str]]:
-    values = event.get("rejected_candidates", [])
-    if not isinstance(values, list):
-        return []
-    summaries: list[dict[str, str]] = []
-    for value in values:
-        if isinstance(value, dict):
-            candidate_id = str(value.get("candidate_id", ""))
-            reasons = value.get("reason_codes", value.get("reasons", []))
-            category = (
-                str(reasons[0])
-                if isinstance(reasons, list) and reasons
-                else str(value.get("reason", "rejected"))
-            )
-        else:
-            candidate_id = str(value)
-            category = "rejected"
-        if candidate_id:
-            summaries.append(
-                {
-                    "candidate_id": candidate_id,
-                    "rejection_category": category,
-                }
-            )
-    return summaries
+def minimal_judge_trace(*, outcome: str = "fallback", error_code: str = "all_candidates_failed") -> list[dict[str, Any]]:
+    zero = {level: 0 for level in ("L1", "L2", "L3", "L4", "L5")}
+    return _bound_trace([_event(1, "solution_process", status="unavailable", response_mode="answer_only", candidate_id="", method="", steps=[], conclusion=""), _event(2, "workflow_overview", outcome=outcome, selected_candidate_id="", steps=[{"step_index": 1, "phase": "fallback", "outcome": "used", "summary": error_code, "related_events": ["fallback_used"]}]), _event(3, "session_started", request_source="official_client_injected"), _event(4, "fallback_used", reason=error_code, error_code=error_code, failed_phase="created"), _event(5, "closed_loop_health", health="failed", model_dispatch={"status": "not_started"}, candidate_flow={"selected_candidate_id": ""}, verification_flow={"proof_status": "not_available"}, closure={"answer_available": False, "proof_status": "not_available"}), _event(6, "diagnostics", truncation_verdicts={"complete": 0, "suspect": 0, "truncated": 0}, deadline_phase="unknown", elapsed_seconds=0.0, model_calls=0, prompt_tokens_avg=0, circuit_open=False, salvage_used=False, answer_source="L5", answer_source_counts=zero, sanitizer_issues=[], error_code=error_code), _event(7, "budget_summary", outcome=outcome, answer_source="L5", answer_source_counts=zero), _event(8, "run_completed", outcome=outcome, error_code=error_code, final_phase="fallback_completed")], JudgeTraceLimits())
 
 
-def _selected_steps(value: Any, limits: JudgeTraceLimits) -> list[Any]:
-    if not isinstance(value, list):
-        return []
-    text_limit = max(256, limits.judge_trace_event_max_chars // 6)
-    item_limit = min(32, max(1, limits.judge_trace_event_max_chars // 512))
-    steps = [
-        _compact_text(str(step), text_limit)
-        for step in value[:item_limit]
-    ]
-    if len(value) > item_limit:
-        steps.append(
-            {
-                "kind": "step_overflow",
-                "item_count": len(value),
-                "content_digest": _digest(value),
-            }
-        )
-    return steps
+def _group(trace: Iterable[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {}
+    for event in trace:
+        if isinstance(event, Mapping): result.setdefault(str(event.get("event", "")), []).append(dict(event))
+    return result
 
 
-def _candidate_steps(value: Any, char_budget: int) -> list[Any]:
-    if not isinstance(value, list):
-        return []
-    item_limit = min(4, max(1, char_budget // 512))
-    text_limit = max(96, char_budget // max(2, item_limit * 2))
-    steps = [
-        _compact_text(str(step), text_limit)
-        for step in value[:item_limit]
-    ]
-    if len(value) > item_limit:
-        steps.append(
-            {
-                "kind": "step_overflow",
-                "item_count": len(value),
-                "content_digest": _digest(value),
-            }
-        )
-    return steps
+def _first(grouped: Mapping[str, list[dict[str, Any]]], name: str) -> dict[str, Any] | None:
+    values = grouped.get(name, []); return values[0] if values else None
 
 
-def _bound_event(
-    event: dict[str, Any],
-    limits: JudgeTraceLimits,
-) -> dict[str, Any]:
-    if event.get("event") == "model_activity" and isinstance(
-        event.get("calls"),
-        list,
-    ):
-        if _serialized_chars(event) <= limits.judge_trace_event_max_chars:
-            return event
-        compact_calls = [
-            {
-                key: call.get(key)
-                for key in (
-                    "call_index",
-                    "logical_call_index",
-                    "stage",
-                    "turn_kind",
-                    "agent_id",
-                    "agent_mode",
-                    "role",
-                    "purpose",
-                    "candidate_ids",
-                    "status",
-                    "failure_code",
-                    "task_id",
-                    "turn_id",
-                    "plan_id",
-                    "output_artifact_id",
-                    "response_validation",
-                    "effective_max_output_tokens",
-                    "configured_stage_timeout_seconds",
-                    "client_timeout_seconds",
-                    "effective_stage_timeout_seconds",
-                    "finish_reason",
-                    "truncation_status",
-                )
-                if key in call
-            }
-            for call in event["calls"]
-            if isinstance(call, dict)
-        ]
-        compacted_activity = {
-            **{
-                key: value
-                for key, value in event.items()
-                if key != "calls"
-            },
-            "call_count": len(compact_calls),
-            "calls": compact_calls,
-        }
-        if _serialized_chars(compacted_activity) <= limits.judge_trace_event_max_chars:
-            return compacted_activity
-        minimal_calls = [
-            {
-                key: call.get(key)
-                for key in (
-                    "call_index",
-                    "logical_call_index",
-                    "stage",
-                    "turn_kind",
-                    "agent_id",
-                    "agent_mode",
-                    "role",
-                    "purpose",
-                    "candidate_ids",
-                    "status",
-                    "failure_code",
-                    "turn_id",
-                    "output_artifact_id",
-                )
-                if key in call
-            }
-            for call in compact_calls
-        ]
-        minimal_activity = {
-            **{
-                key: value
-                for key, value in event.items()
-                if key != "calls"
-            },
-            "call_count": len(minimal_calls),
-            "calls": minimal_calls,
-        }
-        if _serialized_chars(minimal_activity) <= limits.judge_trace_event_max_chars:
-            return minimal_activity
-    text_limit = max(256, limits.judge_trace_event_max_chars // 6)
-    compacted = {
-        key: (
-            value
-            if key in {
-                "schema_version",
-                "seq",
-                "elapsed_ms",
-                "event",
-                "stage",
-                "candidate_id",
-                "selected",
-                "selected_candidate_id",
-            }
-            else _compact_value(value, text_limit=text_limit)
-        )
-        for key, value in event.items()
-    }
-    if _serialized_chars(compacted) <= limits.judge_trace_event_max_chars:
-        return compacted
-    header = {
-        key: compacted[key]
-        for key in ("schema_version", "seq", "elapsed_ms", "event", "stage")
-    }
-    for key in ("candidate_id", "selected", "selected_candidate_id", "outcome"):
-        if key in compacted and isinstance(compacted[key], (str, int, bool)):
-            header[key] = compacted[key]
-    header["payload_summary"] = {
-        "kind": "event_payload_summary",
-        "fields": sorted(
-            key for key in event if key not in header
-        ),
-        "original_chars": _serialized_chars(event),
-        "content_digest": _digest(event),
-    }
-    return header
+def _last(grouped: Mapping[str, list[dict[str, Any]]], name: str) -> dict[str, Any] | None:
+    values = grouped.get(name, []); return values[-1] if values else None
 
 
-def _bound_trace(
-    events: list[dict[str, Any]],
-    limits: JudgeTraceLimits,
-) -> list[dict[str, Any]]:
-    resident = list(events)
-    omitted: list[dict[str, Any]] = []
-
-    def remove_optional() -> bool:
-        candidates = [
-            (trace_accuracy_priority(event.get("event")), index)
-            for index, event in enumerate(resident)
-            if event.get("event") not in _PROTECTED_EVENTS
-        ]
-        if candidates:
-            _, index = max(candidates, key=lambda item: (item[0], -item[1]))
-            omitted.append(resident.pop(index))
-            return True
-        return False
-
-    def remove_nonessential_protected() -> bool:
-        candidates = [
-            (trace_accuracy_priority(event.get("event")), index)
-            for index, event in enumerate(resident)
-            if event.get("event") not in _ESSENTIAL_PROTECTED_EVENTS
-        ]
-        if candidates:
-            _, index = max(candidates, key=lambda item: (item[0], -item[1]))
-            omitted.append(resident.pop(index))
-            return True
-        return False
-
-    while len(resident) + (1 if omitted else 0) > limits.judge_trace_max_events:
-        if not remove_optional():
-            if not remove_nonessential_protected():
-                break
-    while _serialized_chars(resident) > limits.judge_trace_max_chars:
-        if not remove_optional():
-            if not remove_nonessential_protected():
-                break
-    if omitted:
-        source_elapsed = max(
-            (_nonnegative_int(event.get("elapsed_ms", 0)) for event in resident),
-            default=0,
-        )
-        compaction = _bound_event(
-            {
-                "schema_version": JUDGE_TRACE_SCHEMA_VERSION,
-                "seq": 0,
-                "elapsed_ms": source_elapsed,
-                "event": "trace_compaction",
-                "stage": JUDGE_EVENT_STAGES["trace_compaction"],
-                "omitted_event_count": len(omitted),
-                "omitted_event_names": sorted(
-                    str(event.get("event", "")) for event in omitted
-                ),
-                "content_digest": _digest(omitted),
-            },
-            limits,
-        )
-        insert_at = next(
-            (
-                index
-                for index, event in enumerate(resident)
-                if event.get("event") == "budget_summary"
-            ),
-            max(0, len(resident) - 1),
-        )
-        resident.insert(insert_at, compaction)
-    if (
-        len(resident) > limits.judge_trace_max_events
-        or _serialized_chars(resident) > limits.judge_trace_max_chars
-    ):
-        raise JudgeTraceIntegrityError(
-            "protected Judge Trace events exceed configured limits"
-        )
-    last_elapsed = 0
-    for sequence, event in enumerate(resident, start=1):
-        event["seq"] = sequence
-        last_elapsed = max(
-            last_elapsed,
-            _nonnegative_int(event.get("elapsed_ms", 0)),
-        )
-        event["elapsed_ms"] = last_elapsed
-    return resident
+def _select(value: Mapping[str, Any] | None, fields: Iterable[str]) -> dict[str, Any]:
+    return {field: value[field] for field in fields if value is not None and field in value}
 
 
-def _compact_value(value: Any, *, text_limit: int) -> Any:
-    if value is None or isinstance(value, (bool, int)):
-        return value
-    if isinstance(value, float):
-        return value if math.isfinite(value) else str(value)
-    if isinstance(value, str):
-        return _compact_text(value, text_limit)
+def _public(value: Any, limit: int = 4096) -> Any:
+    if value is None or isinstance(value, (bool, int)): return value
+    if isinstance(value, float): return value if math.isfinite(value) else str(value)
+    if isinstance(value, str): return _text(value, limit)
+    if isinstance(value, Mapping): return {str(k): _public(v, limit) for k, v in value.items() if not _FORBIDDEN_KEYS.search(str(k))}
     if isinstance(value, (list, tuple)):
-        item_limit = 64
-        items = [
-            _compact_value(item, text_limit=text_limit)
-            for item in value[:item_limit]
-        ]
-        if len(value) > item_limit:
-            return {
-                "kind": "collection_summary",
-                "items": items[:8],
-                "item_count": len(value),
-                "content_digest": _digest(value),
-            }
-        return items
-    if isinstance(value, dict):
-        return {
-            str(key): _compact_value(item, text_limit=text_limit)
-            for key, item in value.items()
-            if not _FORBIDDEN_KEYS.search(str(key))
-        }
+        items = [_public(item, limit) for item in value[:64]]
+        return items if len(value) <= 64 else {"kind": "collection_summary", "items": items[:8], "item_count": len(value), "content_digest": _digest(value)}
     return f"[{type(value).__name__}]"
 
 
-def _compact_text(value: str, limit: int) -> str | dict[str, Any]:
-    if len(value) <= limit:
-        return value
-    return {
-        "kind": "text_summary",
-        "chars": len(value),
-        "content_digest": sha256(value.encode("utf-8")).hexdigest(),
-        "preview": value[: min(256, max(0, limit // 4))],
-    }
+def _text(value: str, limit: int) -> str | dict[str, Any]:
+    if len(value) <= limit: return value
+    return {"kind": "text_summary", "chars": len(value), "content_digest": sha256(value.encode("utf-8")).hexdigest(), "preview": value[: min(512, max(0, limit // 4))]}
 
 
-def _contains_unsafe_content(value: Any) -> bool:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if _FORBIDDEN_KEYS.search(str(key)) or _contains_unsafe_content(item):
-                return True
-        return False
-    if isinstance(value, list):
-        return any(_contains_unsafe_content(item) for item in value)
-    if isinstance(value, str):
-        return bool(
-            _ABSOLUTE_PATH.search(value)
-            or _API_TOKEN_VALUE.search(value)
-            or _AUTHORIZATION_VALUE.search(value)
-            or _TRACEBACK_VALUE.search(value)
-        )
-    return False
-
-
-def _selected_candidate_id(
-    by_name: dict[str, list[dict[str, Any]]],
-) -> str:
-    arbitration = _last(by_name, "candidate_arbitrated")
-    if arbitration is not None and arbitration.get("selected"):
-        return str(arbitration["selected"])
-    final_event = _last(by_name, "final_answer_selected")
-    return str(final_event.get("candidate_id", "")) if final_event else ""
-
-
-def _selected_candidate_method(
-    by_name: dict[str, list[dict[str, Any]]],
-    candidate_id: str,
-) -> str:
-    if not candidate_id:
-        return ""
-    for event in reversed(by_name.get("candidate_generated", [])):
-        if str(event.get("candidate_id", "")) == candidate_id:
-            return str(
-                event.get("method")
-                or event.get("planned_method_family")
-                or ""
-            )
-    return ""
-
-
-def _events_by_name(
-    trace: Iterable[dict[str, Any]],
-) -> dict[str, list[dict[str, Any]]]:
-    result: dict[str, list[dict[str, Any]]] = {}
-    for event in trace:
-        if isinstance(event, dict):
-            result.setdefault(str(event.get("event", "")), []).append(event)
-    return result
-
-
-def _first(
-    by_name: dict[str, list[dict[str, Any]]],
-    name: str,
-) -> dict[str, Any] | None:
-    values = by_name.get(name, [])
-    return values[0] if values else None
-
-
-def _last(
-    by_name: dict[str, list[dict[str, Any]]],
-    name: str,
-) -> dict[str, Any] | None:
-    values = by_name.get(name, [])
-    return values[-1] if values else None
-
-
-def _select(
-    event: Mapping[str, Any] | None,
-    fields: Iterable[str],
-) -> dict[str, Any]:
-    if event is None:
-        return {}
-    return {
-        field: event[field]
-        for field in fields
-        if field in event
-    }
-
-
-def _string_list(
-    event: Mapping[str, Any] | None,
-    key: str,
-) -> list[str]:
-    if event is None:
-        return []
-    return _plain_string_list(event.get(key, []))
-
-
-def _plain_string_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value]
-
-
-def _status_counts(value: Any) -> dict[str, int]:
-    source = value if isinstance(value, dict) else {}
-    return {
-        status: _nonnegative_int(source.get(status, 0))
-        for status in ("pass", "fail", "unknown", "error")
-    }
-
-
-def _safe_mapping(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    return {
-        str(key): item
-        for key, item in value.items()
-        if not _FORBIDDEN_KEYS.search(str(key))
-    }
-
-
-def _judge_event(sequence: int, name: str, **details: Any) -> dict[str, Any]:
-    return {
-        "schema_version": JUDGE_TRACE_SCHEMA_VERSION,
-        "seq": sequence,
-        "elapsed_ms": 0,
-        "event": name,
-        "stage": JUDGE_EVENT_STAGES[name],
-        **details,
-    }
-
-
-def _limits(
-    value: Mapping[str, Any] | JudgeTraceLimits | None,
-) -> JudgeTraceLimits:
-    if isinstance(value, JudgeTraceLimits):
-        value.validate()
-        return value
-    return JudgeTraceLimits.from_mapping(value)
+def _safe(value: Any) -> dict[str, Any]:
+    result = _public(value)
+    return result if isinstance(result, dict) else {}
 
 
 def _digest(value: Any) -> str:
-    serialized = json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return sha256(serialized.encode("utf-8")).hexdigest()
+    return sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
 
 
-def _serialized_chars(value: Any) -> int:
-    return len(
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            allow_nan=False,
-            separators=(",", ":"),
-        )
-    )
+def _chars(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"), default=str))
 
 
-def _nonnegative_int(value: Any) -> int:
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return 0
+def _n(value: Any) -> int:
+    try: return max(0, int(value)) if not isinstance(value, bool) else 0
+    except (TypeError, ValueError): return 0
 
 
-def _nonnegative_float(value: Any) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return round(max(0.0, number), 6) if math.isfinite(number) else 0.0
+def _f(value: Any) -> float:
+    try: return max(0.0, float(value)) if math.isfinite(float(value)) else 0.0
+    except (TypeError, ValueError): return 0.0
 
 
-def _signed_int(value: Any) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
+def _signed(value: Any) -> int:
+    try: return int(value) if not isinstance(value, bool) else 0
+    except (TypeError, ValueError): return 0
+
+
+def _strings(value: Mapping[str, Any] | None, key: str) -> list[str]:
+    raw = value.get(key, []) if value else []
+    return [str(item) for item in raw] if isinstance(raw, list) else []
+
+
+def _counts(value: Any) -> dict[str, int]:
+    source = value if isinstance(value, Mapping) else {}
+    return {name: _n(source.get(name, 0)) for name in ("pass", "fail", "unknown", "error")}
+
+
+def _steps(value: Any, limits: JudgeTraceLimits, *, item_limit: int | None = None) -> list[Any]:
+    if not isinstance(value, list): return []
+    limit = item_limit or min(32, max(1, limits.judge_trace_event_max_chars // 512))
+    result = [_text(str(item), max(96, limits.judge_trace_event_max_chars // 6)) for item in value[:limit]]
+    if len(value) > limit: result.append({"kind": "step_overflow", "item_count": len(value), "content_digest": _digest(value)})
+    return result
+
+
+def _selected_id(grouped: Mapping[str, list[dict[str, Any]]]) -> str:
+    arbitration = _last(grouped, "candidate_arbitrated")
+    if arbitration and arbitration.get("selected"): return str(arbitration["selected"])
+    final = _last(grouped, "final_answer_selected")
+    return str(final.get("candidate_id", "")) if final else ""
+
+
+def _selected_method(grouped: Mapping[str, list[dict[str, Any]]], selected: str) -> str:
+    for item in reversed(grouped.get("candidate_generated", [])):
+        if str(item.get("candidate_id", "")) == selected: return str(item.get("method") or item.get("planned_method_family") or "")
+    return ""
+
+
+def _workflow(grouped: Mapping[str, list[dict[str, Any]]], selected: str) -> dict[str, Any]:
+    problem = _last(grouped, "problem_parsed") or {}; route = _last(grouped, "route_planned") or {}
+    generated = {str(item.get("candidate_id")) for item in grouped.get("candidate_generated", []) if item.get("candidate_id")}; failed = {str(item.get("candidate_id")) for item in grouped.get("candidate_generation_failed", []) if item.get("candidate_id")}; gate = _last(grouped, "hard_evidence_gate") or {}; verifier = _last(grouped, "verifier_completed") or {}; accepted = _strings(gate, "accepted"); rejected = _strings(gate, "rejected")
+    steps = [("problem_understanding", "completed" if problem else "unavailable", f"已解析题目类型 {problem.get('problem_type', 'unknown')}，响应模式为 {problem.get('response_mode', 'answer_only')}。", ["problem_parsed"]), ("planning", "completed" if route else "deterministic_default", f"已选择数学领域 {route.get('primary_subject', problem.get('domain', 'unknown'))} 的推理路线。", ["route_planned", "skills_selected"]), ("candidate_generation", "completed" if generated else "failed", f"生成 {len(generated)} 个候选；{len(failed)} 次候选尝试失败。", ["model_activity", "candidate_summaries"]), ("verification", "accepted" if selected and selected in accepted else ("completed" if gate or verifier else "not_requested"), f"证据门接受 {len(accepted)} 个候选、拒绝 {len(rejected)} 个；验证器状态为 {verifier.get('status', 'not_used')}。", ["evidence_summary", "verifier_completed", "proof_completion_summary"]), ("arbitration", "selected" if selected else "no_selection", f"已选择候选 {selected}。" if selected else "没有候选通过最终仲裁。", ["candidate_arbitrated"])]
+    outcome = str((_last(grouped, "run_completed") or {}).get("outcome", "fallback")); steps.append(("finalization", outcome, "已格式化选中候选。" if selected else "已返回确定性兜底答案。", ["final_answer_selected" if selected else "fallback_used"]))
+    return {"outcome": outcome, "selected_candidate_id": selected, "steps": [{"step_index": i, "phase": a, "outcome": b, "summary": c, "related_events": d} for i, (a, b, c, d) in enumerate(steps, 1)]}
+
+
+def _round_or_tool(value: Mapping[str, Any]) -> dict[str, Any]:
+    fields = ("state_id", "state_version", "round_index", "mode", "added_subgoal_ids", "updated_subgoal_ids", "closed_subgoal_ids", "added_claim_ids", "claim_dependency_refs", "evidence_ids", "opened_obligation_ids", "closed_obligation_ids", "information_gain", "next_step", "stop_reason", "degraded_reason", "state_tokens", "state_counting_mode", "state_compressed", "omitted_rounds", "next_protocol", "constructible_count", "work_item_count", "constructibility_rate", "failure_codes", "strategy_changed")
+    result = _select(value, fields)
+    if value.get("event") == "tool_feedback_completed": result["results"] = [_select(item, ("work_item_id", "claim_id", "tool_name", "status", "strength", "summary", "result_digest", "impact", "reason_code")) for item in value.get("results", []) if isinstance(item, dict)]
+    return result
+
+
+def _skills(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not value: return {}
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in value.get("skills", []):
+        if not isinstance(item, dict): continue
+        key = (str(item.get("name", "")), str(item.get("version", "")), str(item.get("reason", "")))
+        if not key[0]: continue
+        row = grouped.setdefault(key, {"name": key[0], "version": key[1], "reason": key[2], "roles": [], "rank": _n(item.get("rank", 0)), "score": _n(item.get("score", 0))})
+        row["roles"] = sorted(set(row["roles"]) | {str(role) for role in item.get("roles", [item.get("role", "")]) if role}); row["rank"] = min(row["rank"], _n(item.get("rank", 0))); row["score"] = max(row["score"], _n(item.get("score", 0)))
+    return {"skill_fingerprint": str(value.get("skill_fingerprint", "")), "selection_context": str(value.get("selection_context", "")), "skills": list(grouped.values())}
+
+
+def _model_activity(grouped: Mapping[str, list[dict[str, Any]]], budget: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    records = budget.get("model_call_records", []) if budget else []
+    if not isinstance(records, list): return []
+    starts = grouped.get("candidate_generation_started", []); primary = [str(item.get("candidate_id")) for item in starts if item.get("role") == "PrimarySolver" and item.get("candidate_id")]; alternative = [str(item.get("candidate_id")) for item in starts if item.get("role") == "AlternativeSolver" and item.get("candidate_id")]; proposed = [str(item.get("proposed_candidate_id")) for item in grouped.get("repair_proposed", []) if item.get("proposed_candidate_id")]; verifier = _last(grouped, "verifier_completed") or {}; reviewed = _strings(verifier, "reviewed_candidates"); selected = _selected_id(grouped); stage_counts: dict[str, int] = {}; calls: list[dict[str, Any]] = []
+    role_by_stage = {"router": "RouterPlanner", "primary": "PrimarySolver", "alternative": "AlternativeSolver", "lemma": "LemmaCurator", "verifier": "VerifierSkeptic", "repair": "RepairAgent", "finalizer": "LLMFinalizer"}; purpose_by_stage = {"router": "route_planning", "primary": "candidate_reasoning", "alternative": "alternative_candidate_reasoning", "lemma": "lemma_curation", "verifier": "candidate_cross_review", "repair": "claim_local_repair", "finalizer": "verified_exposition_finalization"}
+    fields = ("call_id", "logical_call_index", "logical_call_consumed", "dispatched", "stage", "turn_kind", "agent_id", "task_id", "turn_id", "plan_id", "subgoal_ids", "planned_method_family", "output_artifact_id", "message_id", "agent_mode", "status", "failure_code", "response_validation", "protocol_parse_tier", "protocol_recovery_reason", "protocol_assurance_degradation", "candidate_parse_tier", "transport_attempts", "prompt_tokens", "available_input_tokens", "configured_output_tokens", "requested_max_output_tokens", "effective_output_tokens", "effective_max_output_tokens", "stage_output_cap_tokens", "max_output_tokens", "context_window_tokens", "safety_margin_tokens", "counting_mode", "observed_output_tokens", "output_chars", "queue_elapsed_seconds", "agent_wait_seconds", "scheduler_wait_seconds", "rate_wait_seconds", "stage_p95_seconds", "effective_queue_budget_seconds", "configured_stage_timeout_seconds", "stage_timeout_seconds", "minimum_start_window_seconds", "effective_minimum_start_window_seconds", "client_timeout_seconds", "effective_stage_timeout_seconds", "finish_reason", "truncation_status", "tail_state", "stop_reason", "execution_elapsed_seconds", "total_elapsed_seconds", "transport_attempt_reservation", "transport_attempt_observability")
+    for index, record in enumerate(records, 1):
+        if not isinstance(record, dict): continue
+        stage = str(record.get("stage", "unknown")); offset = stage_counts.get(stage, 0); stage_counts[stage] = offset + 1; ids = primary[:1] if stage == "primary" else alternative[offset:offset + 1] if stage == "alternative" else proposed[offset:offset + 1] if stage == "repair" else reviewed if stage == "verifier" else [selected] if stage == "finalizer" and selected else []
+        row = {key: record.get(key, 0 if key.endswith("tokens") or key.endswith("seconds") else "") for key in fields}; row.update(call_index=index, stage=stage, turn_kind=str(record.get("turn_kind", stage)), role=str(record.get("agent_role", "")) or role_by_stage.get(stage, "UnknownRole"), purpose=purpose_by_stage.get(stage, "model_work"), candidate_ids=ids)
+        for key in fields:
+            if key.endswith("tokens") or key.endswith("seconds") or key in {"logical_call_index", "transport_attempts", "output_chars", "available_input_tokens", "configured_output_tokens", "requested_max_output_tokens", "effective_output_tokens", "effective_max_output_tokens", "stage_output_cap_tokens", "max_output_tokens", "context_window_tokens", "safety_margin_tokens", "transport_attempt_reservation"}: row[key] = _f(row[key]) if key.endswith("seconds") else _n(row[key])
+        calls.append(_public(row))
+    return calls
+
+
+def _protocol(value: Mapping[str, Any]) -> dict[str, Any]:
+    result = _select(value, ("protocol_schema_version", "mode", "selection_authority", "counts", "call_turn_count_match", "communication_integrity"))
+    for name, fields in (("tasks", ("task_id", "task_type", "assigned_agent_id", "status", "input_artifact_ids", "output_artifact_ids")), ("messages", ("message_id", "thread_id", "sender_agent_id", "recipient_agent_id", "message_type", "task_id", "artifact_ids", "reply_to_message_id")), ("message_consumptions", ("receipt_id", "message_id", "consumer_agent_id", "turn_id", "artifact_ids")), ("threads", ("thread_id", "participant_agent_ids", "message_ids", "status")), ("protocol_sequence", ("sequence", "event_type", "agent_id", "task_id", "turn_id", "artifact_id", "message_id", "plan_version"))): result[name] = [_select(item, fields) for item in value.get(name, []) if isinstance(item, dict)]
+    return result
+
+
+def _candidate_summaries(grouped: Mapping[str, list[dict[str, Any]]], summary: Any, selected: str, limits: JudgeTraceLimits) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    generated = {str(item.get("candidate_id")): item for item in grouped.get("candidate_generated", []) if item.get("candidate_id")}; starts = {str(item.get("candidate_id")): item for item in grouped.get("candidate_generation_started", []) if item.get("candidate_id")}; failed = {str(item.get("candidate_id")): item for item in grouped.get("candidate_generation_failed", []) if item.get("candidate_id")}; states = {str(item.get("candidate_id")): item for item in (summary.get("candidates", []) if isinstance(summary, dict) else []) if isinstance(item, dict) and item.get("candidate_id")}; final_states = _last(grouped, "candidate_final_states") or {}; states.update({str(item.get("candidate_id")): item for item in final_states.get("candidates", []) if isinstance(item, dict) and item.get("candidate_id")}); order = list(dict.fromkeys([selected, *starts, *generated, *failed, *states])); rows: list[dict[str, Any]] = []; overflow: list[dict[str, Any]] = []
+    for candidate_id in order:
+        if not candidate_id: continue
+        candidate = generated.get(candidate_id, {}); start = starts.get(candidate_id, {}); failure = failed.get(candidate_id, {}); state = states.get(candidate_id, {}); content = candidate.get("content", {}) if isinstance(candidate.get("content", {}), dict) else {}; chosen = candidate_id == selected; reasons = state.get("reason_codes", []); rejection = str(reasons[0]) if isinstance(reasons, list) and reasons else str(failure.get("reason", "not_selected_by_arbitration")); row = {"candidate_id": candidate_id, "role": str(candidate.get("role") or start.get("role") or state.get("role") or "unknown"), "method_family": str(candidate.get("planned_method_family") or start.get("planned_method_family") or "unavailable"), "status": "selected" if chosen else str(state.get("status") or failure.get("status") or candidate.get("status") or "unknown"), "content_digest": str(candidate.get("content_digest") or _digest({"candidate_id": candidate_id, "status": failure.get("status", "unavailable")})), "rejection_category": "" if chosen else rejection, "evidence_summary": _counts(state.get("evidence", {})), "public_final_answer": "" if chosen else _text(str(content.get("final_answer", "")), max(128, limits.judge_trace_event_max_chars // max(2, limits.candidate_summary_max_count * 2))), "public_solution_steps": [] if chosen else _steps(content.get("public_solution_steps", []), limits, item_limit=4), "proof_status": _candidate_proof_status(state), "selection_reason": "selected_by_arbitration" if chosen else (rejection if state.get("status") == "viable_not_selected" else f"rejected:{rejection}"), "selected": chosen, "solution_process_ref": "trace[0]" if chosen else ""}; (rows if len(rows) < limits.candidate_summary_max_count else overflow).append(row)
+    omitted = {"kind": "candidate_summary_overflow", "count": len(overflow), "content_digest": _digest(overflow)} if overflow else None; return rows, omitted
+
+
+def _candidate_proof_status(state: Mapping[str, Any]) -> str:
+    obligations = state.get("proof_obligations", []); required = [item for item in obligations if isinstance(item, dict) and item.get("required") is True] if isinstance(obligations, list) else []
+    if not required: return "not_available"
+    return "complete_hard" if all(item.get("status") == "satisfied" for item in required) else "incomplete"
+
+
+def _selected_evidence(summary: Any, selected: str) -> dict[str, int]:
+    for item in (summary.get("candidates", []) if isinstance(summary, dict) else []):
+        if isinstance(item, dict) and str(item.get("candidate_id", "")) == selected: return _counts(item.get("evidence", {}))
+    return _counts({})
+
+
+def _rejections(value: Mapping[str, Any]) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    for item in value.get("rejected_candidates", []) if isinstance(value.get("rejected_candidates", []), list) else []:
+        if isinstance(item, dict):
+            candidate_id = str(item.get("candidate_id", "")); reasons = item.get("reason_codes", item.get("reasons", [])); category = str(reasons[0]) if isinstance(reasons, list) and reasons else str(item.get("reason", "rejected"))
+        else: candidate_id, category = str(item), "rejected"
+        if candidate_id: result.append({"candidate_id": candidate_id, "rejection_category": category})
+    return result
+
+
+def _repair_history(grouped: Mapping[str, list[dict[str, Any]]], limits: JudgeTraceLimits) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    completions = grouped.get("repair_completed", []); proposals = {str(item.get("proposed_candidate_id")): item for item in grouped.get("repair_proposed", []) if item.get("proposed_candidate_id")}; attempts: list[dict[str, Any]] = []
+    for item in completions:
+        proposal = proposals.get(str(item.get("proposed_candidate_id", "")), {}); attempt = _select(item, ("repair_id", "candidate_id", "proposed_candidate_id", "status", "accepted", "rolled_back", "reason", "claim_ids", "finding_ids", "reverified", "content_digest")); proposed_id = str(item.get("proposed_candidate_id", "")); rolled_back = bool(item.get("rolled_back", False)); attempt["accepted"] = bool(proposed_id) and not rolled_back; attempt["rolled_back"] = rolled_back; content = proposal.get("proposed_content", {})
+        if isinstance(content, dict): attempt["public_solution_steps"] = _steps(content.get("public_solution_steps", []), limits, item_limit=4)
+        attempts.append(attempt)
+    return (completions[-1], attempts) if attempts else None
+
+
+def _proof_summary(gate: Mapping[str, Any] | None, graph: Mapping[str, Any] | None, selected_candidate_id: str) -> dict[str, Any]:
+    if not selected_candidate_id: return {"selected_candidate_id": "", "status": "not_available", "unresolved_obligation_ids": [], "failed_obligation_ids": [], "failed_claim_ids": [], "hard_satisfied_obligation_ids": [], "model_reviewed_obligation_ids": [], "evidence_tier": "incomplete", "graph_summary": {}, "mode": "", "verifier_reason": ""}
+    decisions = gate.get("decisions", []) if gate else []; decision = next((item for item in decisions if isinstance(item, dict) and str(item.get("candidate_id", "")) == selected_candidate_id), {}) if isinstance(decisions, list) else {}; graph_summary = ((graph or {}).get("graph", {}) or {}).get("summary", {}) if graph else {}
+    def strings(key: str) -> list[str]:
+        raw = decision.get(key, []); return [str(item) for item in raw] if isinstance(raw, list) else []
+    return {"selected_candidate_id": selected_candidate_id, "status": str(decision.get("status", "complete_hard" if _n(graph_summary.get("unresolved_required_obligations", 0)) == 0 else "incomplete")), "unresolved_obligation_ids": strings("unresolved_obligation_ids"), "failed_obligation_ids": strings("failed_obligation_ids"), "failed_claim_ids": strings("failed_claim_ids"), "hard_satisfied_obligation_ids": strings("hard_satisfied_obligation_ids"), "model_reviewed_obligation_ids": strings("model_reviewed_obligation_ids"), "evidence_tier": str(decision.get("evidence_tier", "incomplete")), "graph_summary": _safe(graph_summary), "mode": str(gate.get("mode", "")) if gate else "", "verifier_reason": str(gate.get("verifier_reason", "")) if gate else ""}
+
+
+def _decision(grouped: Mapping[str, list[dict[str, Any]]]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    source = next((_last(grouped, name) for name in ("candidate_conflict_matrix", "adaptive_fanout_decided", "shadow_probe_completed", "frozen_lemma_cache") if _last(grouped, name) is not None), None)
+    if source is None: return None, {}
+    result: dict[str, Any] = {}; cache = _last(grouped, "frozen_lemma_cache")
+    if cache is not None: result["cache"] = {"requested": bool(cache.get("requested")), "enabled": bool(cache.get("enabled")), "disabled_reason": str(cache.get("disabled_reason", "")), "record_count": _n(cache.get("record_count", 0)), "store_hash": str(cache.get("store_hash", "")), "hit_count": len(cache.get("hits", [])) if isinstance(cache.get("hits", []), list) else 0, "runtime_write_count": _n(cache.get("runtime_write_count", 0))}
+    shadow = _last(grouped, "shadow_probe_completed")
+    if shadow is not None: result["shadow"] = _select(shadow, ("enabled", "status", "capability", "normalized_input", "limitations", "elapsed_seconds", "model_calls_added"))
+    fanout = _last(grouped, "adaptive_fanout_decided")
+    if fanout is not None: result["adaptive_fanout"] = _select(fanout, ("requested_candidates", "admitted_candidates", "reason_codes", "budget"))
+    conflict = _last(grouped, "candidate_conflict_matrix")
+    if conflict is not None:
+        matrix = conflict.get("matrix", {}) if isinstance(conflict.get("matrix", {}), dict) else {}; pairs = matrix.get("conflicts", []) if isinstance(matrix.get("conflicts", []), list) else []
+        result["cross_review"] = {"candidate_ids": [str(item) for item in matrix.get("candidate_ids", [])] if isinstance(matrix.get("candidate_ids", []), list) else [], "pair_count": len(pairs), "answer_conflict_count": sum(isinstance(item, dict) and item.get("answer_conflict") is True for item in pairs), "assumption_conflict_count": sum(isinstance(item, dict) and item.get("assumption_conflict") is True for item in pairs), "obligation_conflict_count": sum(isinstance(item, dict) and item.get("obligation_conflict") is True for item in pairs), "critical_claim_conflict_count": sum(isinstance(item, dict) and item.get("critical_claim_conflict") is True for item in pairs)}
+    return source, result
+
+
+def _diagnostics(grouped: Mapping[str, list[dict[str, Any]]], budget: Mapping[str, Any] | None, completed: Mapping[str, Any] | None) -> dict[str, Any]:
+    verdicts = {"complete": 0, "suspect": 0, "truncated": 0}
+    for item in grouped.get("truncation_assessed", []):
+        status = str(item.get("status", "")).upper(); verdicts["complete" if status == "COMPLETE" else "suspect" if status in {"PROBABLE_TRUNCATION", "UNKNOWN", "SUSPECT"} else "truncated"] += 1
+    budget = budget or {}; completed = completed or {}; calls = _n(budget.get("model_calls", budget.get("used_calls", 0))); prompt = _n(budget.get("prompt_tokens", 0)); issues: list[str] = []
+    for item in grouped.get("answer_validation_warning", []):
+        codes = item.get("codes", []); issues.extend(str(code) for code in codes if isinstance(codes, list) and str(code).strip())
+    selected = _last(grouped, "final_answer_selected") or {}; validation = selected.get("answer_validation", {})
+    if isinstance(validation, dict):
+        codes = validation.get("codes", []); issues.extend(str(code) for code in codes if isinstance(codes, list) and str(code).strip())
+    raw = budget.get("answer_source_counts", {}); source_counts = {level: _n(raw.get(level, 0)) for level in ("L1", "L2", "L3", "L4", "L5")} if isinstance(raw, dict) else {level: 0 for level in ("L1", "L2", "L3", "L4", "L5")}
+    return {"truncation_verdicts": verdicts, "deadline_phase": str(budget.get("deadline_phase", "unknown")), "elapsed_seconds": _f(budget.get("elapsed_seconds", 0)), "model_calls": calls, "prompt_tokens_avg": round(prompt / calls, 3) if calls else 0, "circuit_open": str(budget.get("provider_health_state", "")).casefold() == "circuit_open", "salvage_used": bool(grouped.get("candidate_salvaged") or grouped.get("answer_ladder_selected") or str(completed.get("error_code", "")) == "degraded_candidate_salvage"), "answer_source": str(budget.get("answer_source", "L5")), "answer_source_counts": source_counts, "sanitizer_issues": list(dict.fromkeys(issues)), "error_code": str(completed.get("error_code", "")) or None}
+
+
+def _budget(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    fields = ("max_calls", "used_calls", "calls_used", "model_calls", "model_call_policy", "budget_phase", "soft_call_checkpoints", "speculative_exploration_cutoff", "closure_reserve_calls", "calls_remaining", "prompt_tokens", "requested_output_tokens", "observed_output_tokens", "output_chars", "model_queue_budget_seconds", "model_queue_wait_seconds", "model_execution_seconds", "model_call_elapsed_seconds", "model_call_timeout_count", "model_queue_timeout_count", "model_admission_rejection_count", "model_admission_rejection_reasons", "model_call_failure_count", "model_response_rejection_count", "provider_health_state", "provider_active_tails", "provider_peak_tails", "provider_scheduler_peak", "provider_rate_reserved_weight", "provider_rate_peak_weight", "provider_rate_wait_count", "provider_rate_admitted_weight", "provider_circuit_trips", "provider_fast_failures", "used_tool_calls", "used_evidence_records", "elapsed_seconds", "remaining_seconds", "deadline_phase", "outcome", "answer_source", "answer_source_counts")
+    return _select(value, fields)
+
+
+def _bound_event(event: dict[str, Any], limits: JudgeTraceLimits) -> dict[str, Any]:
+    if _chars(event) <= limits.judge_trace_event_max_chars: return event
+    header = {key: event[key] for key in ("schema_version", "seq", "elapsed_ms", "event", "stage") if key in event}
+    for key in ("candidate_id", "selected", "selected_candidate_id", "outcome", "call_count"):
+        if key in event and isinstance(event[key], (str, int, bool)): header[key] = event[key]
+    header["payload_summary"] = {"kind": "event_payload_summary", "fields": sorted(key for key in event if key not in header), "original_chars": _chars(event), "content_digest": _digest(event)}
+    return header
+
+
+def _bound_trace(events: list[dict[str, Any]], limits: JudgeTraceLimits) -> list[dict[str, Any]]:
+    resident = list(events); omitted: list[dict[str, Any]] = []
+    def remove() -> bool:
+        candidates = [(trace_accuracy_priority(item.get("event")), index) for index, item in enumerate(resident) if item.get("event") not in _ESSENTIAL_EVENTS]
+        if not candidates: return False
+        _, index = max(candidates, key=lambda pair: (pair[0], -pair[1])); omitted.append(resident.pop(index)); return True
+    while len(resident) > limits.judge_trace_max_events and remove(): pass
+    while _chars(resident) > limits.judge_trace_max_chars and remove(): pass
+    if omitted and len(resident) < limits.judge_trace_max_events:
+        compact = _bound_event({"schema_version": JUDGE_TRACE_SCHEMA_VERSION, "seq": 0, "elapsed_ms": max((_n(item.get("elapsed_ms")) for item in resident), default=0), "event": "trace_compaction", "stage": JUDGE_EVENT_STAGES["trace_compaction"], "omitted_event_count": len(omitted), "omitted_event_names": sorted(str(item.get("event", "")) for item in omitted), "content_digest": _digest(omitted)}, limits)
+        index = next((i for i, item in enumerate(resident) if item.get("event") == "budget_summary"), max(0, len(resident) - 1)); resident.insert(index, compact)
+    if len(resident) > limits.judge_trace_max_events or _chars(resident) > limits.judge_trace_max_chars: raise JudgeTraceIntegrityError("protected Judge Trace events exceed configured limits")
+    previous = 0
+    for index, item in enumerate(resident, 1): item["seq"] = index; previous = max(previous, _n(item.get("elapsed_ms"))); item["elapsed_ms"] = previous
+    return resident
+
+
+def _unsafe(value: Any) -> bool:
+    if isinstance(value, Mapping): return any(_FORBIDDEN_KEYS.search(str(key)) or _unsafe(item) for key, item in value.items())
+    if isinstance(value, (list, tuple)): return any(_unsafe(item) for item in value)
+    return isinstance(value, str) and bool(_UNSAFE_VALUE.search(value))
+
+
+def _event(sequence: int, name: str, **details: Any) -> dict[str, Any]:
+    return {"schema_version": JUDGE_TRACE_SCHEMA_VERSION, "seq": sequence, "elapsed_ms": 0, "event": name, "stage": JUDGE_EVENT_STAGES[name], **details}
+
+
+def _limits(value: Mapping[str, Any] | JudgeTraceLimits | None) -> JudgeTraceLimits:
+    return value if isinstance(value, JudgeTraceLimits) else JudgeTraceLimits.from_mapping(value)
+
+
+__all__ = ["JUDGE_EVENT_STAGES", "JUDGE_TRACE_SCHEMA_VERSION", "JudgeTraceIntegrityError", "JudgeTraceLimits", "minimal_judge_trace", "project_judge_trace", "validate_judge_trace", "_proof_summary"]
