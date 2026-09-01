@@ -20,6 +20,7 @@ from mathforge.output.official_trace import (
 )
 from mathforge.output.deterministic_formatter import exact_final_answer
 from mathforge.parsing.answer_salvage import salvage_any_answer
+from mathforge.parsing.answer_extraction import sanitize_final_answer
 
 
 PUBLIC_STATUSES = frozenset({"success", "failed", "timeout"})
@@ -48,6 +49,11 @@ def build_public_result(identifier: int | str | None, result: dict) -> dict:
         if isinstance(supplied_response, str) and supplied_response.strip()
         else MINIMAL_FALLBACK_RESPONSE
     )
+    sanitized_response, sanitizer_issues = sanitize_final_answer(final_response)
+    if sanitized_response:
+        final_response = sanitized_response
+    elif "placeholder_leak" in sanitizer_issues:
+        final_response = MINIMAL_FALLBACK_RESPONSE
     final_response = exact_final_answer(
         _sanitize_public_text(final_response),
         "expression",
@@ -66,6 +72,8 @@ def build_public_result(identifier: int | str | None, result: dict) -> dict:
         limits.final_response_max_chars,
     )
     status = _safe_public_status(result, trace)
+    if "placeholder_leak" in sanitizer_issues:
+        status = "failed"
     trace_valid = True
     try:
         if any(

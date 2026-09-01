@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Completed the 2026-09-01 full-review Phase 3 answer-delivery work. Added an
+  auditable L1–L5 answer ladder, retained bounded raw model outputs for salvage,
+  recovered boxed and tail answers from truncated or unclosed-think responses,
+  and introduced explicit degraded candidate validation instead of dropping every
+  imperfect candidate. Final-answer sanitization now trims instruction leakage,
+  rejects placeholders, and forces failed status for placeholder output while
+  falling back through L2/L3. Router truncation metadata and top-level salvage are
+  wired, and answer-source metrics expose all L1–L5 levels. Added Phase 3 invariant
+  coverage; no real-model accuracy or Gate 3/official 112-case claim is made by
+  this change alone.
+
 - Completed the 2026-09-01 full-review Phase 2 prompt slimming and accounting
   work. Model-facing contracts now use field-only compact rendering, each role
   declares a required public-state slice, marked ReasoningState/context JSON is

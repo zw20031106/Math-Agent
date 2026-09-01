@@ -622,8 +622,8 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
             else 0.0
         ),
         "answer_source_counts": {
-            "L1": sum(item.answer_source == "L1" for item in metrics),
-            "L5": sum(item.answer_source == "L5" for item in metrics),
+            level: sum(item.answer_source == level for item in metrics)
+            for level in ("L1", "L2", "L3", "L4", "L5")
         },
         "error_code_counts": _error_code_counts(metrics),
         "duplicate_session_count": duplicate_sessions,

@@ -24,8 +24,10 @@ from mathforge.harness.model_candidate_contract import (
     validate_candidate_profile,
 )
 from mathforge.parsing.answer_extraction import (
+    enforce_answer_form,
     extract_final_answer_text,
     prepare_model_text,
+    sanitize_final_answer,
     unwrap_boxed,
 )
 from mathforge.parsing.structured_output import StructuredOutputRecoveryLayer
@@ -115,6 +117,7 @@ class SolutionParser:
         if not answer:
             answer = self._extract_answer(text)
         answer = unwrap_boxed(answer)
+        answer, answer_issues = sanitize_final_answer(answer)
         if not answer or len(answer) > 4096:
             return None
         check = fields.get("check")
@@ -134,16 +137,11 @@ class SolutionParser:
             contract_deviations=[
                 "protocol_envelope_unusable",
                 "answer_only_salvage",
+                *answer_issues,
             ],
             source=self._candidate_source(candidate_id, role),
             parse_tier=CandidateParseTier.ANSWER_RECOVERED.value,
-            degraded=bool(
-                getattr(response, "output_budget_exceeded", False)
-                or str(getattr(response, "truncation_status", "")).casefold()
-                == "truncated"
-                or str(getattr(response, "finish_reason", "")).casefold()
-                in {"length", "length_inferred"}
-            ),
+            degraded=True,
             assurance="answer_salvaged",
         )
         candidate.validate()
@@ -198,6 +196,8 @@ class SolutionParser:
             if answer and answer != text
             else CandidateParseTier.REJECTED.value
         )
+        answer, answer_issues = sanitize_final_answer(answer)
+        answer, form_issues = enforce_answer_form(answer)
         candidate = CandidateSolution(
             candidate_id=candidate_id,
             role=role,
@@ -209,6 +209,7 @@ class SolutionParser:
             parse_status=parse_status,
             source=self._candidate_source(candidate_id, role),
             parse_tier=parse_tier,
+            contract_deviations=[*answer_issues, *form_issues],
             assurance=(
                 "answer_salvaged"
                 if parse_tier == CandidateParseTier.ANSWER_RECOVERED.value
@@ -734,6 +735,10 @@ class SolutionParser:
             deviations,
         ).strip()
         final_answer = unwrap_boxed(final_answer)
+        final_answer, answer_issues = sanitize_final_answer(final_answer)
+        final_answer, form_issues = enforce_answer_form(final_answer)
+        deviations.extend(answer_issues)
+        deviations.extend(form_issues)
         solution_text = SolutionParser._model_string(
             payload,
             "solution_text",
@@ -743,7 +748,11 @@ class SolutionParser:
         if SolutionParser._is_json_object_text(solution_text):
             deviations.append("solution_text:json_wrapper")
         if not final_answer:
-            final_answer = SolutionParser._extract_answer(solution_text)
+            recovered_answer = SolutionParser._extract_answer(solution_text)
+            final_answer, recovered_issues = sanitize_final_answer(recovered_answer)
+            final_answer, recovered_form_issues = enforce_answer_form(final_answer)
+            deviations.extend(recovered_issues)
+            deviations.extend(recovered_form_issues)
         public_solution_steps = SolutionParser._model_string_list(
             payload,
             "public_solution_steps",
@@ -827,10 +836,18 @@ class SolutionParser:
             method_steps=method_steps,
             source=SolutionParser._candidate_source(candidate_id, role),
             parse_tier=parse_tier,
-            degraded="truncated" in status,
+            degraded=bool(
+                "truncated" in status
+                or any(_material_deviation(item) for item in deviations)
+            ),
             assurance=(
                 "answer_salvaged"
                 if parse_tier == CandidateParseTier.ANSWER_RECOVERED.value
+                else "provisional"
+                if (
+                    "truncated" in status
+                    or any(_material_deviation(item) for item in deviations)
+                )
                 else "standard"
             ),
         )
@@ -944,6 +961,25 @@ class SolutionParser:
         return CandidateParseTier.REJECTED.value
 
 
+def _material_deviation(value: object) -> bool:
+    """Distinguish harmless legacy/alias normalization from real damage."""
+
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if text.startswith("legacy_profile:") and "invalid" not in text:
+        return False
+    if text.endswith(":host_owned") or ":host_owned" in text:
+        return False
+    if text.endswith(":ignored") or ":ignored" in text:
+        return False
+    if text.endswith(":alias_normalized") or ":alias_normalized:" in text:
+        return False
+    if text.endswith(":alias_duplicate") or ":alias_duplicate:" in text:
+        return False
+    return True
+
+
 def candidate_response_integrity(candidate: CandidateSolution) -> str:
     status = str(candidate.parse_status)
     if (
@@ -970,7 +1006,40 @@ def candidate_response_integrity(candidate: CandidateSolution) -> str:
 
 def candidate_response_validation(
     candidate: CandidateSolution,
+    *,
+    allow_degraded: bool = False,
 ) -> tuple[str, bool]:
+    """Classify a candidate response and optionally downgrade usable output.
+
+    The strict default remains available to contract/unit callers.  Production
+    solver paths opt into ``allow_degraded`` so a non-empty, non-placeholder
+    answer survives schema or consistency defects as a provisional candidate;
+    an empty answer is still rejected.
+    """
+
+    if "placeholder_leak" in candidate.contract_deviations:
+        return "placeholder_leak", True
+    if allow_degraded and candidate.final_answer.strip():
+        integrity = candidate_response_integrity(candidate)
+        if integrity not in {"empty", "malformed"}:
+            if (
+                integrity != "complete"
+                or candidate.parse_tier != CandidateParseTier.STRICT.value
+            ):
+                candidate.degraded = True
+                if candidate.assurance == "standard":
+                    candidate.assurance = (
+                        "answer_salvaged"
+                        if candidate.parse_tier
+                        == CandidateParseTier.ANSWER_RECOVERED.value
+                        else "provisional"
+                    )
+            return {
+                "truncated": "candidate_json_incomplete",
+                "natural_language": "candidate_non_json",
+                "schema_violation": "candidate_schema_degraded",
+                "complete": "strict_candidate_json",
+            }.get(integrity, "candidate_response_degraded"), False
     if "solution_text:json_wrapper" in candidate.contract_deviations:
         return "candidate_schema_invalid", True
     integrity = candidate_response_integrity(candidate)

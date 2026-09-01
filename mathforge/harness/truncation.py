@@ -1169,6 +1169,7 @@ class RecoveredAnswerGate:
         compact_fresh_confirmation: bool = False,
         high_risk: bool = False,
         proof_full: bool = False,
+        allow_unverified: bool = False,
     ) -> RecoveryDecision:
         tier = str(_object_attr(candidate, "parse_tier", ""))
         assurance = str(_object_attr(candidate, "assurance", ""))
@@ -1196,11 +1197,14 @@ class RecoveredAnswerGate:
         reasons: list[str] = ["answer_salvage_is_provisional"]
         if not corroboration:
             reasons.append("recovery_corroboration_missing")
-        winner_allowed = bool(corroboration) and not (high_risk or proof_full)
+        winner_allowed = (
+            (bool(corroboration) or allow_unverified)
+            and not (high_risk or proof_full)
+        )
         if high_risk or proof_full:
             reasons.append("high_risk_or_proof_requires_non_salvaged_winner")
         return RecoveryDecision(
-            admitted=bool(corroboration),
+            admitted=bool(corroboration) or allow_unverified,
             provisional=True,
             winner_allowed=winner_allowed,
             corroboration=corroboration,

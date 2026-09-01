@@ -1722,6 +1722,10 @@ class MathSession:
     working_memory: Any = None
     lemma_memory: Any = None
     raw_context_store: Any = None
+    # Raw provider responses are retained for the complete case lifetime so
+    # answer salvage can run after candidate/protocol rejection.  They are
+    # internal state and must never be projected into the public trace.
+    raw_model_outputs: list[str] = field(default_factory=list)
     agent_runtime: Any = None
     agent_plan: Any = None
     lemmas: list[LemmaCard] = field(default_factory=list)
@@ -1818,6 +1822,7 @@ class MathSession:
                 if self.working_memory is not None and hasattr(self.working_memory, "to_dict")
                 else None
             ),
+            "raw_model_outputs": list(self.raw_model_outputs),
             "lemma_memory": (
                 self.lemma_memory.to_dict()
                 if self.lemma_memory is not None and hasattr(self.lemma_memory, "to_dict")

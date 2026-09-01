@@ -115,6 +115,7 @@ from mathforge.harness.terminalizer import (
     NoThrowTerminalizer,
     minimal_fallback_metrics,
 )
+from mathforge.harness.answer_ladder import resolve_answer_ladder
 from mathforge.output.answer_validator import AnswerValidator
 from mathforge.output.deterministic_formatter import (
     DeterministicFormatter,
@@ -128,7 +129,6 @@ from mathforge.output.loop_health import (
 )
 from mathforge.output.gradeability import enforce_scorer_round_trip
 from mathforge.parsing.problem_parser import ProblemParser
-from mathforge.parsing.answer_salvage import salvage_any_answer
 from mathforge.parsing.solution_parser import SolutionParser
 from mathforge.tools.executor import ToolExecutor
 from mathforge.tools.registry import ToolRegistry
@@ -687,6 +687,7 @@ class MathForgeHarness:
         failure: Exception | None = None
         failed_phase = RuntimePhase.CREATED
         selected_candidate_id = ""
+        answer_source = "L5"
         candidate_states: list[dict[str, Any]] = []
         last_safe_candidate: Any | None = None
         last_safe_checkpoint = ""
@@ -1750,6 +1751,7 @@ class MathForgeHarness:
                         independent_candidates=fanout.candidates,
                         high_risk=session.route_plan.risk_level == "high",
                         proof_full=session.problem_ir.response_mode == "proof_full",
+                        allow_unverified=True,
                     )
                     trace.add(
                         "recovery_corroboration",
@@ -1809,6 +1811,7 @@ class MathForgeHarness:
                             independent_candidates=fanout.candidates,
                             high_risk=session.route_plan.risk_level == "high",
                             proof_full=session.problem_ir.response_mode == "proof_full",
+                            allow_unverified=True,
                         )
                         trace.add(
                             "recovery_corroboration",
@@ -3200,7 +3203,21 @@ class MathForgeHarness:
                     for item in viable
                     if item.candidate_id in retained_ids
                 ]
-            if self._config.enable_final_audit and viable:
+            # A standalone final-audit call is meaningful only when at least
+            # one verification/evidence surface is active.  The deliberately
+            # minimal direct-candidate path disables all of those surfaces;
+            # sending an otherwise unnecessary VerifierSkeptic turn there
+            # would defeat its one-solver-call contract and consume the
+            # answer-delivery reserve.
+            if (
+                self._config.enable_final_audit
+                and viable
+                and (
+                    self._config.enable_verification_closure
+                    or self._config.enable_verifier
+                    or self._config.enable_evidence
+                )
+            ):
                 viable = self._run_final_audit_phase(
                     session,
                     blackboard,
@@ -3901,6 +3918,7 @@ class MathForgeHarness:
                 "solve_completed",
             )
             outcome = "primary"
+            answer_source = "L1"
         except Exception as error:  # The public contract requires a result on every path.
             failure = error
             caught_error = error
@@ -3956,6 +3974,7 @@ class MathForgeHarness:
                     last_safe_checkpoint = ""
             if last_safe_candidate is not None:
                 selected_candidate_id = last_safe_candidate.candidate_id
+                answer_source = "L2"
                 error_code = "degraded_candidate_salvage"
                 outcome = "primary"
                 salvage_closure = session.verification_closures.get(
@@ -3984,6 +4003,19 @@ class MathForgeHarness:
                         evidence=session.evidence,
                     )[0],
                     last_safe_candidate.final_answer,
+                )
+                terminalizer.safe(
+                    "answer_ladder_candidate_trace",
+                    lambda: trace.add(
+                        "answer_ladder_selected",
+                        answer=last_safe_candidate.final_answer,
+                        source="L2",
+                        candidate_id=selected_candidate_id,
+                        issues=["downstream_failure_preserved_candidate"],
+                        status="success",
+                        degraded=True,
+                    ),
+                    None,
                 )
                 candidate_states = terminalizer.safe(
                     "salvaged_candidate_states",
@@ -4115,20 +4147,33 @@ class MathForgeHarness:
                         None,
                     )
             else:
-                raw_salvage = terminalizer.safe(
-                    "raw_response_salvage",
-                    lambda: salvage_any_answer(
-                        self.last_raw_responses(session.session_id)
+                ladder = terminalizer.safe(
+                    "answer_ladder_fallback",
+                    lambda: resolve_answer_ladder(
+                        validated_candidates=(),
+                        unverified_candidates=session.candidates,
+                        raw_model_outputs=self.last_raw_responses(session.session_id),
+                        fallback=self._fallback.solve(normalized_problem),
+                        answer_type=session.problem_ir.answer_type,
                     ),
                     None,
                 )
+                answer_source = ladder.source if ladder is not None else "L5"
+                ladder_answer = ladder.answer if ladder is not None else ""
+                if ladder is not None:
+                    terminalizer.safe(
+                        "answer_ladder_trace",
+                        lambda: trace.add(
+                            "answer_ladder_selected",
+                            **ladder.to_dict(),
+                        ),
+                        None,
+                    )
                 final_response = terminalizer.safe(
                     "fallback_response",
                     lambda: canonical_final_response(
                         "",
-                        exact_answer=(
-                            raw_salvage or self._fallback.solve(normalized_problem)
-                        ),
+                        exact_answer=(ladder_answer or MINIMAL_FALLBACK_RESPONSE),
                         answer_type=session.problem_ir.answer_type,
                         response_mode=session.problem_ir.response_mode,
                     ),
@@ -4165,15 +4210,20 @@ class MathForgeHarness:
                     None,
                 )
 
-        # Phase 0 telemetry: collapse the terminal path to the two states
-        # required by the diagnostic gate.  Any retained candidate (including
-        # a degraded salvage candidate) is L1; only the no-candidate path is
-        # L5.  Record before budget/trace finalization so every artifact sees
-        # the same value.
+        # Keep the complete raw response set in the per-session object until
+        # terminalization.  A rejected candidate must remain salvageable even
+        # when the normal candidate pool is empty.
+        session.raw_model_outputs = terminalizer.safe(
+            "raw_model_outputs_retain",
+            lambda: self.last_raw_responses(session.session_id),
+            [],
+        )
+        # Phase 3 telemetry records the actual answer ladder level rather than
+        # collapsing every retained answer into the old L1/L5 pair.
         terminalizer.safe(
             "answer_source_record",
             lambda: session.budget.record_answer_source(
-                "L1" if selected_candidate_id else "L5"
+                answer_source
             ),
             None,
         )
@@ -4505,6 +4555,22 @@ class MathForgeHarness:
             outcome=outcome,
             final_phase=session.phase.value,
             error_code=error_code,
+            raw_model_outputs=session.raw_model_outputs,
+            validated_candidates=(
+                [
+                    item
+                    for item in session.candidates
+                    if answer_source == "L1"
+                    and item.candidate_id == selected_candidate_id
+                ]
+            ),
+            unverified_candidates=session.candidates,
+            fallback_answer=self._fallback.solve(normalized_problem),
+            answer_type=(
+                session.problem_ir.answer_type
+                if session.problem_ir is not None
+                else ""
+            ),
         )
         result = PublicContractGuard.normalize(
             result,

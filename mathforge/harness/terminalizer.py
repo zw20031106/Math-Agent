@@ -7,6 +7,7 @@ from mathforge.output.loop_health import minimal_closed_loop_health
 
 
 MINIMAL_FALLBACK_RESPONSE = "0"
+ANSWER_SOURCE_LEVELS = ("L1", "L2", "L3", "L4", "L5")
 _T = TypeVar("_T")
 
 
@@ -38,7 +39,39 @@ class NoThrowTerminalizer:
         outcome: str = "fallback",
         final_phase: str = "fallback_completed",
         error_code: str = "",
+        raw_model_outputs=(),
+        validated_candidates=(),
+        unverified_candidates=(),
+        fallback_answer: str = MINIMAL_FALLBACK_RESPONSE,
+        answer_type: str = "",
     ) -> dict[str, Any]:
+        ladder = None
+        sanitized_response, response_issues = _sanitize_answer(final_response)
+        if sanitized_response:
+            final_response = sanitized_response
+        if (
+            not isinstance(final_response, str)
+            or not final_response.strip()
+            or "placeholder_leak" in response_issues
+        ):
+            ladder = self.safe(
+                "answer_ladder",
+                lambda: _resolve_ladder(
+                    raw_model_outputs=raw_model_outputs,
+                    validated_candidates=validated_candidates,
+                    unverified_candidates=unverified_candidates,
+                    fallback=fallback_answer,
+                    answer_type=answer_type,
+                ),
+                None,
+            )
+            if ladder is not None and ladder.answer.strip():
+                final_response = ladder.answer
+                if ladder.source == "L5":
+                    outcome = "fallback"
+                    error_code = error_code or "all_candidates_failed"
+                elif outcome == "primary":
+                    outcome = "fallback"
         response = (
             final_response
             if isinstance(final_response, str) and final_response.strip()
@@ -79,11 +112,13 @@ class NoThrowTerminalizer:
         )
         metrics.setdefault(
             "answer_source_counts",
-            {
-                "L1": int(metrics["answer_source"] == "L1"),
-                "L5": int(metrics["answer_source"] == "L5"),
-            },
+            {level: int(metrics["answer_source"] == level) for level in ANSWER_SOURCE_LEVELS},
         )
+        if ladder is not None:
+            metrics["answer_source"] = ladder.source
+            metrics["answer_source_counts"] = {
+                level: int(ladder.source == level) for level in ANSWER_SOURCE_LEVELS
+            }
         metrics["terminalizer_failed_steps"] = list(self.failed_steps)
         return {
             "final_response": response,
@@ -108,7 +143,7 @@ def minimal_fallback_metrics() -> dict[str, Any]:
         "error_class": "EXPECTED_DEGRADATION",
         "fallback_used": True,
         "answer_source": "L5",
-        "answer_source_counts": {"L1": 0, "L5": 1},
+        "answer_source_counts": {level: int(level == "L5") for level in ANSWER_SOURCE_LEVELS},
     }
 
 
@@ -154,3 +189,15 @@ def minimal_fallback_trace() -> list[dict[str, Any]]:
         }
         for index, (event, details) in enumerate(events, start=1)
     ]
+
+
+def _resolve_ladder(**kwargs):
+    from mathforge.harness.answer_ladder import resolve_answer_ladder
+
+    return resolve_answer_ladder(**kwargs)
+
+
+def _sanitize_answer(value: object) -> tuple[str, list[str]]:
+    from mathforge.parsing.answer_extraction import sanitize_final_answer
+
+    return sanitize_final_answer(value)

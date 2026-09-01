@@ -65,9 +65,12 @@ class CandidateAdmissionGate:
             and answer_shape_status is not None
             and answer_shape_status != "pass"
         ):
-            rejection_codes.append("answer_recovery_evidence_gate_failed")
+            if candidate.degraded:
+                warning_codes.append("answer_recovery_evidence_gate_degraded")
+            else:
+                rejection_codes.append("answer_recovery_evidence_gate_failed")
         answer_errors = self._answer_validator.validate(candidate, problem)
-        if answer_type_is_hard:
+        if answer_type_is_hard and not candidate.degraded:
             rejection_codes.extend(answer_errors)
         else:
             for error in answer_errors:
@@ -76,7 +79,10 @@ class CandidateAdmissionGate:
                     "final_answer_too_long",
                     "recovered_answer_too_long",
                 }:
-                    rejection_codes.append(error)
+                    if error == "empty_answer" or not candidate.degraded:
+                        rejection_codes.append(error)
+                    else:
+                        warning_codes.append(f"degraded_{error}")
                 else:
                     warning_codes.append(
                         f"soft_{error}"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from mathforge.harness.schemas import CandidateSolution, ProblemIR, ResponseMode
-from mathforge.parsing.answer_extraction import unwrap_boxed
+from mathforge.parsing.answer_extraction import sanitize_final_answer, unwrap_boxed
 
 
 _ANSWER_BLOCK = re.compile(
@@ -129,7 +129,10 @@ def exact_final_answer(answer: str, answer_type: str) -> str:
     """Return the public answer without labels or outer math delimiters."""
 
     del answer_type
-    normalized = unwrap_boxed(answer).strip()
+    sanitized, issues = sanitize_final_answer(answer)
+    normalized = unwrap_boxed(
+        sanitized if sanitized or "placeholder_leak" not in issues else ""
+    ).strip()
     prefix = re.fullmatch(
         r"(?:(?:final\s*)?answer|\u6700\u7ec8\u7b54\u6848|\u7b54\u6848)\s*[:\uff1a]\s*(.+)",
         normalized,
@@ -144,7 +147,15 @@ def exact_final_answer(answer: str, answer_type: str) -> str:
     elif normalized.startswith(r"\[") and normalized.endswith(r"\]"):
         normalized = normalized[2:-2].strip()
     wrapper = re.fullmatch(r"\\(?:mathrm|text)\{([^{}]*)\}", normalized)
-    return wrapper.group(1).strip() if wrapper else normalized
+    normalized = wrapper.group(1).strip() if wrapper else normalized
+    # Sentence punctuation is noise for scalar/math answers, but a proof's
+    # natural-language conclusion may intentionally end with a period.  Keep
+    # the latter intact while canonicalizing expression-like answers.
+    from mathforge.parsing.answer_extraction import _looks_math_expression
+
+    if _looks_math_expression(normalized):
+        normalized = normalized.rstrip(".。；;").strip()
+    return normalized
 
 
 def _escape_latex_text(value: str) -> str:

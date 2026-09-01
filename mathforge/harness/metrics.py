@@ -21,6 +21,7 @@ _ERROR_CODES = frozenset(
         "config",
         "per_case_wall_clock_exceeded",
         "case_execution_failed",
+        "placeholder_leak",
     }
 )
 _ERROR_CLASSES = frozenset({"", *(item.value for item in InternalErrorClass)})
@@ -88,11 +89,17 @@ class RunMetrics:
     error_code: str = ""
     error_class: str = ""
     fallback_used: bool = False
-    # Stable two-state answer-path telemetry for Phase 0.  ``L1`` means a
-    # candidate was retained; ``L5`` means the no-candidate fallback was used.
+    # Stable five-level answer-path telemetry for Phase 3.  The two-level
+    # mapping emitted by older artifacts remains accepted by ``from_dict``.
     answer_source: str = "L5"
     answer_source_counts: dict[str, int] = field(
-        default_factory=lambda: {"L1": 0, "L5": 1}
+        default_factory=lambda: {
+            "L1": 0,
+            "L2": 0,
+            "L3": 0,
+            "L4": 0,
+            "L5": 1,
+        }
     )
     terminalizer_failed_steps: list[str] = field(default_factory=list)
     context_view_attempts: int = 0
@@ -219,9 +226,13 @@ class RunMetrics:
         ):
             if not isinstance(getattr(self, name), str):
                 raise ValueError(f"RunMetrics.{name} must be a string")
-        if self.answer_source not in {"L1", "L5"}:
-            raise ValueError("RunMetrics.answer_source must be L1 or L5")
-        if set(self.answer_source_counts) != {"L1", "L5"}:
+        answer_levels = {"L1", "L2", "L3", "L4", "L5"}
+        if self.answer_source not in answer_levels:
+            raise ValueError("RunMetrics.answer_source must be one of L1-L5")
+        if not set(self.answer_source_counts) <= answer_levels or not {
+            "L1",
+            "L5",
+        } <= set(self.answer_source_counts):
             raise ValueError("RunMetrics answer source counts are invalid")
         if any(
             type(value) is not int or value < 0

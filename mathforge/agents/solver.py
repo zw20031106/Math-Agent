@@ -442,6 +442,9 @@ class SolverExecutor:
                     details=retry_details,
                 )
                 continue
+            # The legacy bounded Solver turn keeps its contract-retry loop;
+            # long-horizon autonomous turns below opt into degradation after
+            # this strict path has had a chance to repair the response.
             validation_code, rejected = candidate_response_validation(candidate)
             budget.record_model_protocol_telemetry(
                 getattr(response, "model_call_index", None),
@@ -908,7 +911,10 @@ class SolverExecutor:
                 rejected=True,
             )
             raise ModelResponseError("candidate_schema_invalid") from error
-        validation_code, rejected = candidate_response_validation(candidate)
+        validation_code, rejected = candidate_response_validation(
+            candidate,
+            allow_degraded=True,
+        )
         budget.record_model_protocol_telemetry(
             getattr(response, "model_call_index", None),
             parsed.parse_tier,

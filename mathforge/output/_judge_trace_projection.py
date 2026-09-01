@@ -87,6 +87,7 @@ JUDGE_EVENT_STAGES = {
     "repair_committed": "repair",
     "repair_rolled_back": "repair",
     "final_answer_selected": "finalization",
+    "answer_ladder_selected": "finalization",
     "fallback_used": "fallback",
     "deadline_finalize": "deadline",
     "per_case_wall_clock_timeout": "deadline",
@@ -125,6 +126,7 @@ _PROTECTED_EVENTS = frozenset(
         "candidate_salvaged",
         "repair_history",
         "final_answer_selected",
+        "answer_ladder_selected",
         "fallback_used",
         "deadline_finalize",
         "per_case_wall_clock_timeout",
@@ -2439,6 +2441,15 @@ def _diagnostics_summary(
         codes = validation.get("codes", [])
         if isinstance(codes, list):
             issues.extend(str(code) for code in codes if str(code).strip())
+    raw_source_counts = budget.get("answer_source_counts", {})
+    source_counts = (
+        {
+            level: _nonnegative_int(raw_source_counts.get(level, 0))
+            for level in ("L1", "L2", "L3", "L4", "L5")
+        }
+        if isinstance(raw_source_counts, dict)
+        else {level: 0 for level in ("L1", "L2", "L3", "L4", "L5")}
+    )
     return {
         "truncation_verdicts": verdicts,
         "deadline_phase": str(budget.get("deadline_phase", "unknown")),
@@ -2453,8 +2464,11 @@ def _diagnostics_summary(
         == "circuit_open",
         "salvage_used": bool(
             by_name.get("candidate_salvaged")
+            or by_name.get("answer_ladder_selected")
             or str(completed.get("error_code", "")) == "degraded_candidate_salvage"
         ),
+        "answer_source": str(budget.get("answer_source", "L5")),
+        "answer_source_counts": source_counts,
         "sanitizer_issues": list(dict.fromkeys(issues)),
         "error_code": str(completed.get("error_code", "")) or None,
     }

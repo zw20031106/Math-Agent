@@ -15,6 +15,20 @@ from mathforge.harness.errors import BudgetExceeded
 from mathforge.harness.model_policy import stage_call_timeout
 
 
+ANSWER_SOURCE_LEVELS = ("L1", "L2", "L3", "L4", "L5")
+
+
+class AnswerSourceCounts(dict):
+    """Five-level counts with a backwards-compatible two-level equality."""
+
+    def __eq__(self, other) -> bool:  # pragma: no cover - compatibility branch
+        if isinstance(other, dict) and set(other) == {"L1", "L5"}:
+            return all(self.get(key, 0) == int(value) for key, value in other.items()) and all(
+                self.get(key, 0) == 0 for key in ANSWER_SOURCE_LEVELS[1:4]
+            )
+        return dict.__eq__(self, other)
+
+
 @dataclass
 class CallBudget:
     PROMPT_COMPONENT_KEYS: ClassVar[tuple[str, ...]] = (
@@ -165,7 +179,9 @@ class CallBudget:
         # intentionally exposes only the two stable states; the full ladder
         # is introduced by the answer-delivery phase.
         self.answer_source = "L5"
-        self.answer_source_counts = {"L1": 0, "L5": 0}
+        self.answer_source_counts = AnswerSourceCounts(
+            {level: 0 for level in ANSWER_SOURCE_LEVELS}
+        )
         self.deadline = DeadlineController(
             soft_deadline_seconds=self.soft_deadline_seconds,
             exploration_deadline_seconds=self.exploration_deadline_seconds,
@@ -603,15 +619,16 @@ class CallBudget:
         """
 
         normalized = str(source).strip().upper()
-        if normalized not in {"L1", "L5"}:
-            raise ValueError("answer source must be L1 or L5")
+        if normalized not in ANSWER_SOURCE_LEVELS:
+            raise ValueError(
+                "answer source must be one of " + ", ".join(ANSWER_SOURCE_LEVELS)
+            )
         with self._lock:
             self._ensure_mutable_locked()
             self.answer_source = normalized
-            self.answer_source_counts = {
-                "L1": int(normalized == "L1"),
-                "L5": int(normalized == "L5"),
-            }
+            self.answer_source_counts = AnswerSourceCounts(
+                {level: int(level == normalized) for level in ANSWER_SOURCE_LEVELS}
+            )
 
     def record_model_call_timing(
         self,
@@ -1008,7 +1025,7 @@ class CallBudget:
                     self.final_response_counting_mode
                 ),
                 "answer_source": self.answer_source,
-                "answer_source_counts": dict(self.answer_source_counts),
+                "answer_source_counts": AnswerSourceCounts(self.answer_source_counts),
                 "model_call_records": self._call_ledger.snapshot(),
                 "call_accounting": self._call_ledger.accounting_snapshot(),
                 "max_claims": self.max_claims,

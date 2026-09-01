@@ -7,7 +7,10 @@ import re
 from typing import Any
 
 from mathforge.harness.schemas import MethodFamily, ProblemIR, RoutePlan
-from mathforge.parsing.structured_output import StructuredOutputRecoveryLayer
+from mathforge.parsing.structured_output import (
+    StructuredObjectResult,
+    StructuredOutputRecoveryLayer,
+)
 
 
 ROUTER_PROTOCOL_VERSION = "1.0"
@@ -96,10 +99,32 @@ def parse_router_intent(
     *,
     allowed_domains: set[str],
 ) -> tuple[RouterIntent, str, str, str]:
-    recovered = StructuredOutputRecoveryLayer().parse_object(
-        response,
-        required_fields=ROUTER_INTENT_FIELDS,
+    truncated = bool(
+        getattr(response, "output_budget_exceeded", False)
+        or str(getattr(response, "truncation_status", "")).casefold()
+        == "truncated"
+        or str(getattr(response, "finish_reason", "")).casefold()
+        in {"length", "length_inferred"}
     )
+    recovery_layer = StructuredOutputRecoveryLayer()
+    try:
+        recovered = recovery_layer.parse_object(
+            response,
+            truncated=truncated,
+            required_fields=ROUTER_INTENT_FIELDS,
+        )
+    except ValueError:
+        # A provider length marker can leave a useful top-level intent even
+        # when the complete JSON envelope is unavailable.  Salvage only the
+        # bounded intent fields and fill deterministic defaults; an ordinary
+        # malformed response remains fail-closed for legacy callers.
+        fields = recovery_layer.salvage_top_level_fields(
+            response,
+            ROUTER_INTENT_FIELDS,
+        )
+        if not truncated and not fields:
+            raise
+        recovered = _salvaged_router_result(fields)
     payload = recovered.value
     if set(payload) != ROUTER_INTENT_FIELDS:
         raise ValueError("Router response schema is invalid")
@@ -131,6 +156,30 @@ def parse_router_intent(
         recovered.parse_tier,
         recovered.recovery_reason,
         recovered.assurance_degradation,
+    )
+
+
+def _salvaged_router_result(fields: dict[str, Any]):
+    defaults: dict[str, Any] = {
+        "primary_domain": "general-math",
+        "secondary_domain": None,
+        "risk": "medium",
+        "patterns": [],
+        "preferred_methods": [MethodFamily.DIRECT_DEDUCTION.value],
+        "alternative_methods": [],
+        "needs_long_horizon": False,
+    }
+    payload = {**defaults}
+    for name, value in fields.items():
+        if name in ROUTER_INTENT_FIELDS:
+            payload[name] = value
+    missing = sorted(ROUTER_INTENT_FIELDS - set(fields))
+    return StructuredObjectResult(
+        payload,
+        "salvaged_top_level_fields",
+        "salvage_top_level_fields"
+        + (":" + ",".join(missing) if missing else ""),
+        "high",
     )
 
 
