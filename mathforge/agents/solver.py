@@ -103,12 +103,8 @@ class PrimarySolver:
             route=request.route,
             user_content=user,
             runtime_instructions=(
-                "Public protocol mode is synthesize. Produce a rigorous "
-                "independently verifiable solution. "
-                "State the method concisely; the Host treats its wording as a "
-                "diversity signal. When a public ReasoningState is supplied, "
-                "synthesize from it, preserve its ProblemFrame and Claim "
-                "dependencies, and list any still-open obligation."
+                "Public protocol mode is synthesize。严谨求解并保持可独立验证；方法简述仅作 diversity signal。"
+                "若提供 ReasoningState，保留 ProblemFrame、Claim 依赖并列出未闭义务。"
             ),
             autonomous=autonomous,
             compact=compact,
@@ -198,10 +194,7 @@ class AlternativeSolver:
             route=request.route,
             user_content=user,
             runtime_instructions=(
-                "Public protocol mode is synthesize. Solve independently using "
-                "only the assigned core method family. "
-                "State the method concisely; the Host treats its wording as a "
-                "diversity signal."
+                "Public protocol mode is synthesize。仅用分配的核心方法独立求解；方法简述仅作 diversity signal。"
             ),
             autonomous=autonomous,
             compact=compact,
@@ -238,8 +231,7 @@ class AlternativeSolver:
             user_content=user,
             mode=mode,
             runtime_instructions=(
-                "Advance only the isolated Alternative state. Do not infer or "
-                "request the Primary candidate before publishing your own."
+                "只推进隔离的 Alternative 状态；发布自己的候选前不得推断或请求 Primary 候选。"
             ),
             autonomous=autonomous,
             protocol_variant=protocol_variant,

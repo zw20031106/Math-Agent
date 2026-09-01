@@ -48,6 +48,7 @@ class RunMetrics:
     })
     official_prompt_tokens: int = 0
     fallback_prompt_tokens: int = 0
+    tokenizer_fallback_count: int = 0
     requested_output_tokens: int = 0
     observed_output_tokens: int = 0
     output_chars: int = 0
@@ -132,6 +133,7 @@ class RunMetrics:
             "prompt_tokens",
             "official_prompt_tokens",
             "fallback_prompt_tokens",
+            "tokenizer_fallback_count",
             "requested_output_tokens",
             "observed_output_tokens",
             "output_chars",
@@ -380,6 +382,7 @@ def collect_run_metrics(
         ),
         official_prompt_tokens=budget.official_prompt_tokens,
         fallback_prompt_tokens=budget.fallback_prompt_tokens,
+        tokenizer_fallback_count=getattr(budget, "tokenizer_fallback_count", 0),
         requested_output_tokens=budget.requested_output_tokens,
         observed_output_tokens=budget.observed_output_tokens,
         output_chars=budget.output_chars,

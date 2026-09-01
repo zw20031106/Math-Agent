@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Completed the 2026-09-01 full-review Phase 2 prompt slimming and accounting
+  work. Model-facing contracts now use field-only compact rendering, each role
+  declares a required public-state slice, marked ReasoningState/context JSON is
+  filtered before dispatch, and schema description prose is removed (evidence
+  and obligation descriptions are retained as compact statements). Runtime
+  protocols are concise Chinese system instructions with one protocol envelope;
+  prompt telemetry separates problem/state/skill/schema components and applies
+  a 45% problem-share gate by trimming state before dispatch. Observed model
+  output is recorded through `record_model_call_finished` (the old completion
+  method remains a compatibility alias). Tokenizer fallback now emits a
+  warning, exposes a fallback counter, and strict production preflight fails
+  closed unless the pinned Intern-S2 tokenizer is available. Added Phase 2
+  invariant coverage and refreshed prompt snapshots; no real-model accuracy or
+  official 112-case gate is claimed by this change alone.
+
 - Completed the 2026-09-01 full-review Phase 1 time-budget and truncation
   controls. Stage admission now reasons about the concrete stage timeout and
   keeps a deterministic-finalization reserve, while Provider execution clips

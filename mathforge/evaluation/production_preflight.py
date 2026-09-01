@@ -10,6 +10,10 @@ from mathforge.agents.router_planner import RouterPlanner
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.agents.verifier import VerifierSkepticAgent
 from mathforge.harness.budget import CallBudget
+from mathforge.harness.context_budget import (
+    InternS2TokenCounter,
+    OfficialTokenizerUnavailable,
+)
 from mathforge.harness.errors import ModelResponseError, ModelTransportError
 from mathforge.harness.provider import ModelCallGate, OfficialClientProvider
 from mathforge.harness.schemas import ProofObligation
@@ -40,6 +44,7 @@ def run_production_preflight(
     *,
     requested_model: str = EXACT_INTERN_MODEL,
     include_optional_verification: bool = True,
+    require_official_tokenizer: bool = False,
 ) -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema_version": PRODUCTION_PREFLIGHT_SCHEMA_VERSION,
@@ -55,6 +60,20 @@ def run_production_preflight(
     if l0_error:
         _append_level(report, "L0", "failed", l0_error, 0.0, 0, 0)
         return _fail(report, "L0")
+    if require_official_tokenizer:
+        try:
+            InternS2TokenCounter().require_official_tokenizer()
+        except OfficialTokenizerUnavailable:
+            _append_level(
+                report,
+                "L0",
+                "failed",
+                "official_tokenizer_unavailable",
+                0.0,
+                0,
+                0,
+            )
+            return _fail(report, "L0")
     _append_level(report, "L0", "passed", "", 0.0, 0, 0)
 
     l1_started = perf_counter()

@@ -259,6 +259,27 @@ class PromptContract:
             contract_lines.append(runtime_instructions.strip())
         return "\n".join(contract_lines)
 
+    def render_compact_system(self, runtime_instructions: str = "") -> str:
+        """Render only contract fields and essential format constraints."""
+
+        role = self.fields["role"]
+        lines = [
+            f"You are {role}. 你是 {role}，合同版本 {self.fields['version']}。",
+            f"目标：{self.fields['objective']}。",
+            f"输入字段：{self.fields['input_schema']}；输出字段：{self.fields['output_schema']}。",
+            f"可见状态：{self.fields['visible_memory']}。",
+            f"禁止状态：{self.fields['forbidden_context']}。",
+            f"工具：{self.fields['allowed_tools']}；失败：{self.fields['failure_policy']}；停止：{self.fields['stop_condition']}。",
+            "自然语言必须中文；公式、JSON 字段名、协议标识和技能名保持原样。使用 standard LaTeX，JSON 反斜杠按 JSON 转义。",
+            # The contract body remains part of the authoritative system
+            # message.  Compact rendering removes duplicated field prose but
+            # must not silently discard role-specific mathematical rules.
+            self.body,
+        ]
+        if runtime_instructions.strip():
+            lines.append(runtime_instructions.strip())
+        return "\n".join(lines)
+
 
 class PromptContractLoader:
     def __init__(self, root: Path | None = None) -> None:

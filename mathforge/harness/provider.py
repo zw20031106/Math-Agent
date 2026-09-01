@@ -1034,6 +1034,8 @@ class OfficialClientProvider:
             messages,
             configured_max_output_tokens=effective_max_tokens,
         )
+        if budget is not None and allocation.counting_mode != "official_tokenizer":
+            budget.record_tokenizer_fallback()
         context_limited_output_tokens = effective_output_tokens(
             active_turn_kind,
             effective_max_tokens,
@@ -1374,6 +1376,8 @@ class OfficialClientProvider:
                 self._gate.health_snapshot(active_case_id)
             )
         output = self._context_budget.count_text(response)
+        if budget is not None and output.counting_mode != "official_tokenizer":
+            budget.record_tokenizer_fallback()
         observed_finish_reason = str(
             getattr(response, "finish_reason", "")
         ).casefold()
@@ -1401,7 +1405,7 @@ class OfficialClientProvider:
             else "stop_inferred"
         )
         if budget is not None and call_index is not None:
-            budget.record_model_call_completed(
+            budget.record_model_call_finished(
                 call_index,
                 observed_output_tokens=output.tokens,
                 output_counting_mode=output.counting_mode,

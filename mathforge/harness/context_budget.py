@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
 from math import ceil
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,11 @@ _UTF8_FALLBACK_SPEC = (
     "CJK characters as 1.0, and other Unicode characters as 1.5."
 )
 UTF8_FALLBACK_SHA256 = sha256(_UTF8_FALLBACK_SPEC.encode("utf-8")).hexdigest()
+_LOGGER = logging.getLogger(__name__)
+
+
+class OfficialTokenizerUnavailable(RuntimeError):
+    """Raised when a production preflight requires the pinned tokenizer."""
 
 
 @dataclass(frozen=True)
@@ -89,10 +95,24 @@ class InternS2TokenCounter:
 
     def __init__(self, tokenizer: Any | None = None) -> None:
         self._tokenizer = tokenizer if tokenizer is not None else _load_local_tokenizer()
+        self._fallback_warned = False
+        self._fallback_invocations = 0
 
     @property
     def exact_available(self) -> bool:
         return self._tokenizer is not None
+
+    @property
+    def fallback_invocations(self) -> int:
+        return self._fallback_invocations
+
+    def require_official_tokenizer(self) -> None:
+        """Fail closed for official preflight when exact counts are unavailable."""
+
+        if self._tokenizer is None:
+            raise OfficialTokenizerUnavailable(
+                "pinned Intern-S2 tokenizer is unavailable"
+            )
 
     def count_messages(self, messages: list[dict[str, str]]) -> TokenCount:
         if self._tokenizer is not None:
@@ -104,7 +124,9 @@ class InternS2TokenCounter:
                 )
                 return self._official_count(_encoded_length(encoded))
             except Exception:
-                pass
+                self._warn_fallback("chat_template_failed")
+        else:
+            self._warn_fallback("tokenizer_unavailable")
         return self._fallback_count(_fallback_chat_envelope(messages))
 
     def count_text(self, text: str) -> TokenCount:
@@ -116,8 +138,20 @@ class InternS2TokenCounter:
                 )
                 return self._official_count(_encoded_length(encoded))
             except Exception:
-                pass
+                self._warn_fallback("encode_failed")
+        else:
+            self._warn_fallback("tokenizer_unavailable")
         return self._fallback_count(text)
+
+    def _warn_fallback(self, reason: str) -> None:
+        self._fallback_invocations += 1
+        if self._fallback_warned:
+            return
+        self._fallback_warned = True
+        _LOGGER.warning(
+            "Intern-S2 tokenizer 回落为多语言估算（原因=%s）；正式预检必须使用固定 tokenizer。",
+            reason,
+        )
 
     @staticmethod
     def _official_count(tokens: int) -> TokenCount:

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from hashlib import sha256
 import json
+from math import floor
+from typing import Mapping
 
 from mathforge.agent_runtime.action_registry import ActionRegistry
 from mathforge.agent_runtime.protocol import (
@@ -29,7 +31,105 @@ from mathforge.harness.model_candidate_contract import (
     MODEL_SEMANTIC_REQUIRED_FIELDS,
 )
 from mathforge.harness.model_policy import stage_output_cap
-from mathforge.harness.schemas import ProblemIR, RoutePlan
+from mathforge.harness.schemas import (
+    ProblemIR,
+    RoutePlan,
+    strip_prompt_descriptions,
+)
+
+
+# Stage-owned state slices.  The names are the public JSON keys emitted by
+# RoleContextView/ReasoningState; keeping this table immutable makes the
+# compiler the single authority for what a role may see.  A stage can still
+# receive the problem and its declared protocol fields, but never an
+# accidental full session snapshot.
+REQUIRED_STATE_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "router_planner": (
+        "context_snapshot_id",
+        "conditions",
+        "final_answer",
+        "metadata",
+    ),
+    "primary_solver": (
+        "context_snapshot_id",
+        "conditions",
+        "final_answer",
+        "candidates",
+        "evidence",
+        "obligations",
+        "claim_graph",
+        "metadata",
+    ),
+    "alternative_solver": (
+        "context_snapshot_id",
+        "conditions",
+        "final_answer",
+        "candidates",
+        "evidence",
+        "obligations",
+        "claim_graph",
+        "metadata",
+    ),
+    "lemma_curator": (
+        "context_snapshot_id",
+        "conditions",
+        "evidence",
+        "obligations",
+        "claim_graph",
+        "metadata",
+    ),
+    "verifier_skeptic": (
+        "context_snapshot_id",
+        "conditions",
+        "final_answer",
+        "candidates",
+        "evidence",
+        "obligations",
+        "claim_graph",
+        "metadata",
+    ),
+    "repair": (
+        "context_snapshot_id",
+        "conditions",
+        "candidates",
+        "evidence",
+        "obligations",
+        "claim_graph",
+        "metadata",
+    ),
+    "finalizer": (
+        "context_snapshot_id",
+        "final_answer",
+        "candidates",
+        "evidence",
+        "obligations",
+        "claim_graph",
+        "metadata",
+    ),
+}
+
+# A ReasoningState has more lifecycle metadata than a model needs.  These
+# fields preserve the ProblemFrame, current public frontier, obligations and
+# hard-evidence/backbone links required for a sound continuation.
+REQUIRED_REASONING_FIELDS: tuple[str, ...] = (
+    "state_id",
+    "version",
+    "problem_frame",
+    "subgoal_ledger",
+    "claim_ledger",
+    "open_obligations",
+    "evidence_refs",
+    "contradictions",
+    "strategy",
+    "verified_fact_bank",
+    "proof_backbone",
+)
+_STATE_SECTION_MARKERS = (
+    "Authorized context view:",
+    "Authorized finalizer context:",
+    "Authorized repair context:",
+    "Public ReasoningState JSON:",
+)
 _ROLE_DIRECTORY_TO_STAGE = {
     "router_planner": "router",
     "primary_solver": "primary",
@@ -49,9 +149,7 @@ _ROLE_DIRECTORY_TO_ROLE = {
     "finalizer": "LLMFinalizer",
 }
 _CHINESE_LANGUAGE_DIRECTIVE = (
-    "强制语言要求：所有自然语言字段、数学推导步骤、公开理由和最终说明必须使用中文。"
-    "数学表达式、LaTeX、JSON 字段名、协议版本、角色名和工具标识保持原样。"
-    "只返回当前模式要求的 JSON，不要输出额外英文说明。"
+    "自然语言用中文；公式、LaTeX、JSON 字段名和协议标识保持原样；只返回指定 JSON。"
 )
 _ACTION_REGISTRY = ActionRegistry()
 _SOLVER_OUTPUT_TOKENS = {
@@ -73,19 +171,15 @@ _SOLVER_OUTPUT_TOKENS = {
     },
 }
 _AGENT_TURN_ENVELOPE_PROTOCOL = (
-    "Return one AgentTurnPayload 1.0 object with exactly these outer fields "
-    "in this order: protocol_version, task_result_type, action, "
-    "public_state_delta, result_payload, outbound_intents, progress_summary, "
-    "stop_reason. protocol_version is \"1.0\". Never generate agent_id, "
-    "task_id, turn_id, artifact_id, message_id, thread_id, token limits, or "
-    "timeouts; the Host owns them. Return one bare JSON object only. "
+    "AgentTurnPayload 1.0（公共协议模式）。仅返回一个裸 JSON 对象，外层字段按序为 "
+    "protocol_version, task_result_type, action, public_state_delta, result_payload, "
+    "outbound_intents, progress_summary, stop_reason；protocol_version=\"1.0\"。"
+    "Host 负责所有 ID、版本、状态、限额和超时，模型不得生成。"
 )
 _AGENT_TURN_LITE_ENVELOPE_PROTOCOL = (
-    "Return one AgentTurnPayload 1.1-lite object with exactly these outer fields: "
-    "action, payload, outbound, stop_reason. The Host assigns protocol_version, "
-    "task_result_type, all identifiers, versions, statuses, priorities, token "
-    "limits, timeouts, progress summaries, and other workflow metadata. Never "
-    "generate those Host-owned fields. Return one bare JSON object only. "
+    "AgentTurnPayload 1.1-lite（精简公共协议）。仅返回裸 JSON，字段为 action, payload, "
+    "outbound, stop_reason。Host 负责协议版本、类型、ID、版本、状态、优先级、限额、"
+    "超时和摘要，模型不得生成。"
 )
 
 
@@ -155,16 +249,13 @@ def _candidate_profile_protocol(
     )
     profile_instruction = {
         "answer_only": (
-            "result_payload has final_answer and one semantic check containing "
-            "only statement and claim_kind."
+            "result_payload 仅含 final_answer 和一个含 statement、claim_kind 的检查。"
         ),
         "worked_solution": (
-            "result_payload has final_answer, method, semantic steps, and "
-            "uncertainties."
+            "result_payload 含 final_answer、method、语义 steps 和 uncertainties。"
         ),
         "proof_full": (
-            "result_payload has final_answer, method, at least two complete "
-            "semantic proof_steps, and open_conditions."
+            "result_payload 含 final_answer、method、至少两步完整 proof_steps 和 open_conditions。"
         ),
     }[normalized]
     envelope = (
@@ -172,37 +263,29 @@ def _candidate_profile_protocol(
         if lite
         else _AGENT_TURN_ENVELOPE_PROTOCOL
         if autonomous
-        else "Return one bare Candidate response object only. "
+        else "Return one bare Candidate response object only（仅返回 Candidate JSON）。"
     )
     if use_semantic:
         profile_instruction = {
             "answer_only": (
-                "payload has only final_answer and solution_text; solution_text is "
-                "one short public check."
+                "payload 仅含 final_answer、solution_text；solution_text 是简短公共检查。"
             ),
             "worked_solution": (
-                "payload has final_answer and solution_text; add method or "
-                "structured claims only when verification needs them."
+                "payload 含 final_answer、solution_text；仅在验证需要时加入 method 或结构化 Claims。"
             ),
             "proof_full": (
-                "payload has final_answer, solution_text, ordered proof_steps, "
-                "critical_claims when needed, and open_conditions."
+                "payload 含 final_answer、solution_text、有序 proof_steps，必要时含 critical_claims 和 open_conditions。"
             ),
         }[normalized]
     return (
         envelope
-        + f"Candidate response mode is {normalized}; {profile_instruction} "
+        + f"Candidate response mode is {normalized}；{profile_instruction} "
         + (
-            "The model supplies only mathematical semantic fields; keep the "
-            "payload minimal and do not repeat a full Candidate/ClaimGraph. "
+            "只给数学语义字段，payload 保持最小。"
             if use_semantic
-            else "Every semantic step contains exactly statement, claim_kind, and "
-            "depends_on, where depends_on uses zero-based indices of prior steps. "
+            else "语义步骤只含 statement、claim_kind、depends_on（此前步骤的零基索引）。"
         )
-        + "The model supplies mathematics and claim_kind only; the Host assigns "
-        "Candidate, Claim, MethodStep, version, status, and Artifact identifiers. "
-        "Use plain exact final_answer text without labels or presentation "
-        "delimiters. JSON-escape LaTeX backslashes. Return no prose outside JSON. "
+        + "Host 分配生命周期 ID；final_answer 无标签，LaTeX 反斜杠按 JSON 转义。"
         f"Exact JSON schema example: {shape}."
     )
 
@@ -299,22 +382,13 @@ def _progress_delta_protocol(
         else f"these fields and no others: {fields}"
     )
     return (
-    f"Public protocol mode is {mode}. Construct one semantic ProgressDelta with "
-    f"{field_clause}. This is a public, auditable ProgressDelta, not a "
-    "final Candidate response. public_summary, strategy, "
-    "next_step, and stop_reason are strings. subgoals is an array of objects "
-    "with exactly statement, depends_on, and exit_condition. claims contains "
-    "exactly statement, claim_kind, depends_on, subgoal_refs, and importance. "
-    "Local dependencies and subgoal_refs are zero-based prior-item indices; "
-    "supplied existing public IDs may only be referenced, never created. "
-    "open_obligations contains only statement and depends_on. The Host assigns "
-    "all new IDs, status, versions, provenance, branches, and check specifications. "
-    "closed_obligation_ids may reference existing supplied obligations. Add only "
-    "atomic, publicly checkable mathematics. "
-    "Do not emit a final answer, CandidateSolution, tool call, raw model "
-    "response, or Host-owned lifecycle fields. "
+    f"Public protocol mode is {mode}。构造一个可审计 ProgressDelta，字段为 {field_clause}。"
+    "这是公共进展，不是最终 Candidate；字符串字段保持字符串，subgoals/claims 使用约定结构。"
+    "依赖和 subgoal_refs 使用此前项目的零基索引；已有 ID 只能引用。Host 分配新 ID、状态、版本、"
+    "来源、分支和检查规范；closed_obligation_ids 只能引用已有义务。只写原子、可公开检查的数学。"
+    "不得输出最终答案、CandidateSolution、工具调用、原始回复或 Host 生命周期字段。"
     + (
-        f"Canonical ActionRegistry actions for this Turn: {action_enum}. "
+        f"本回合允许的 ActionRegistry 动作为：{action_enum}。"
         if autonomous
         else ""
     )
@@ -325,122 +399,250 @@ def _progress_delta_protocol(
     )
 _PEER_REVIEW_PROTOCOL = (
     _AGENT_TURN_ENVELOPE_PROTOCOL
-    + "Public protocol mode is peer_review. Use task_result_type "
-    "PeerReviewArtifact and action challenge_candidate. Put exactly these "
-    "fields in result_payload: finding_items, answer_assessment, "
-    "method_overlap_assessment, missing_conditions, counterexample_attempts, "
-    "unresolved_obligations, recommended_action, stop_reason. finding_items "
-    "must be a non-empty array. Every item must contain exactly finding_id, "
-    "candidate_id, claim_id, method_step_id, obligation_ids, status, "
-    "public_rationale, missing_condition, counterexample_summary, severity. "
-    "Cite the exact supplied candidate_id and a real supplied claim_id. status "
-    "is pass, fail, or unknown; severity is info, warning, error, or critical. "
-    "Use public_state_delta {} and outbound_intents []. Review the Candidate; "
-    "do not rewrite it or generate a replacement answer."
+    + "Public protocol mode is peer_review。使用 task_result_type=PeerReviewArtifact、"
+    "action=challenge_candidate；result_payload 只含 finding_items、answer_assessment、"
+    "method_overlap_assessment、missing_conditions、counterexample_attempts、"
+    "unresolved_obligations、recommended_action、stop_reason。每个 finding_item 必须引用"
+    "真实 candidate_id/claim_id，status 为 pass/fail/unknown，severity 为 info/warning/error/critical。"
+    "public_state_delta={}、outbound_intents=[]；只评审，不重写 Candidate。"
 )
 _REBUTTAL_PROTOCOL = (
     _AGENT_TURN_ENVELOPE_PROTOCOL
-    + "Public protocol mode is respond_to_review. Use task_result_type "
-    "RebuttalArtifact and action publish_rebuttal. Put exactly responses and "
-    "stop_reason in result_payload. responses is non-empty; each item contains "
-    "exactly finding_id, response, action, supporting_claim_ids, evidence_refs, "
-    "requested_followup. Cite only supplied Finding and Claim ids. action is "
-    "defend, clarify, or concede. A concession must be explicit; do not silently "
-    "repair or rewrite the Candidate in F5. Use public_state_delta {} and "
-    "outbound_intents []. Add only public content that responds to the Finding "
-    "without repeating the debate."
+    + "Public protocol mode is respond_to_review。使用 RebuttalArtifact/publish_rebuttal；"
+    "result_payload 只含非空 responses 和 stop_reason。每项含 finding_id、response、action、"
+    "supporting_claim_ids、evidence_refs、requested_followup；仅引用已提供的 Finding/Claim。"
+    "action 为 defend/clarify/concede，concede 必须明确；不得静默修复 Candidate。"
 )
 _CROSS_EXAM_PROTOCOL = (
     _AGENT_TURN_ENVELOPE_PROTOCOL
-    + "Public protocol mode is cross_exam. Use task_result_type "
-    "CritiqueArtifact and action challenge_candidate. Put exactly findings, "
-    "peer_review_assessments, uncovered_goal_ids, recommended_action, and "
-    "stop_reason in result_payload. Every Finding contains exactly finding_id, "
-    "candidate_id, claim_id, obligation_ids, peer_finding_ids, status, scope, "
-    "actionability, public_rationale, missing_condition, and "
-    "counterexample_summary. status is pass, fail, or unknown; scope is local, "
-    "global, or review; actionability is retain, local_repair, new_branch, "
-    "replan, reject, or continue_review. A local failure must cite a supplied "
-    "Claim. A global method failure must never be presented as local_repair. "
-    "peer_review_assessments must assess every supplied Peer Finding using "
-    "exactly finding_id, status, and public_rationale; finding_id must equal "
-    "the supplied finding_ref (which is qualified when raw Finding ids collide). "
-    "Use peer_finding_ids to cite those same supplied finding_ref values. "
-    "Use public_state_delta {} and outbound_intents []. Do not repair, solve, "
-    "or arbitrate."
+    + "Public protocol mode is cross_exam。使用 CritiqueArtifact/challenge_candidate；"
+    "result_payload 只含 findings、peer_review_assessments、uncovered_goal_ids、"
+    "recommended_action、stop_reason。Finding 必须引用真实 Claim/义务，标明 status、scope、"
+    "actionability 和公共理由；逐项评估已提供的 Peer Finding。局部失败不得改报全局修复；"
+    "不修复、不求解、不仲裁。"
 )
 _FINAL_AUDIT_PROTOCOL = (
     _AGENT_TURN_ENVELOPE_PROTOCOL
-    + "Public protocol mode is final_audit. Use task_result_type AuditArtifact "
-    "and action complete. Put exactly candidate_id, candidate_version, status, "
-    "open_finding_ids, open_obligation_ids, reviewed_artifact_ids, "
-    "reviewed_finding_ids, reviewed_obligation_ids, "
-    "requested_action, public_rationale, and stop_reason in result_payload. "
-    "status is complete_hard, complete_audited, incomplete, or failed. "
-    "requested_action is retain, local_repair, new_branch, replan, reject, or "
-    "continue_review. Cite only supplied IDs and only the supplied final active "
-    "Candidate version. Copy every supplied audit_requirements required id into "
-    "the matching reviewed list after checking it. A complete status has no "
-    "open Finding or obligation and covers every required item. "
-    "Use public_state_delta {} and outbound_intents []. Audit only: do not "
-    "rewrite, polish, repair, or generate an answer and do not expose private "
-    "reasoning."
+    + "Public protocol mode is final_audit。使用 AuditArtifact/complete；result_payload 只含 "
+    "candidate_id、candidate_version、status、open_finding_ids、open_obligation_ids、"
+    "reviewed_artifact_ids、reviewed_finding_ids、reviewed_obligation_ids、requested_action、"
+    "public_rationale、stop_reason。仅引用已提供的最终 Candidate 版本；完成状态必须覆盖全部审计项且"
+    "无未闭 Finding/义务。只审计，不改写、润色、修复或生成答案。"
 )
 _REPAIR_PATCH_PROTOCOL = (
-    "Return exactly one bare JSON object containing replacement_claims, "
-    "final_answer, public_solution_steps, and unresolved_obligations. "
-    "replacement_claims contains only affected Claim replacements, each with "
-    "exactly claim_id, statement, depends_on, check_type, and importance. "
-    "Do not return method, method_steps, solution_text, unrelated Claims, or "
-    "Host-owned fields. The Host applies the patch to the prior Candidate, "
-    "re-verifies the affected dependency closure, and rolls back regressions. "
-    "Use this exact structural shape: "
-    f"{MODEL_CANDIDATE_PATCH_STRUCTURAL_SHAPE}. Delimit formulas in public "
-    "steps and Claim statements with $...$; keep final_answer free of $ "
-    "delimiters."
+    "仅返回一个裸 JSON，含 replacement_claims、final_answer、public_solution_steps、"
+    "unresolved_obligations。replacement_claims 只替换受影响 Claim，字段为 claim_id、statement、"
+    "depends_on、check_type、importance；不得返回无关 Claim、method 或 Host 字段。Host 应用补丁后"
+    "重验证依赖闭包并回滚退化。结构："
+    f"{MODEL_CANDIDATE_PATCH_STRUCTURAL_SHAPE}。公式使用 $...$，final_answer 不加 $。"
 )
 _ROLE_PROTOCOLS = {
     "router_planner": (
-        "Return only RouterIntent JSON. The Host owns subgoals, the task DAG, "
-        "Agent assignment, Candidate count, priorities, resources, and plan "
-        f"versions. Use exactly this shape: {ROUTER_INTENT_STRUCTURAL_SHAPE}."
+        "仅返回 RouterIntent JSON。主机负责 subgoals（Host owns subgoals）、任务 DAG、角色分配、候选数、优先级、资源和版本。"
+        f"严格使用该结构：{ROUTER_INTENT_STRUCTURAL_SHAPE}。"
     ),
     "lemma_curator": (
         _AGENT_TURN_ENVELOPE_PROTOCOL
-        + "Use task_result_type LemmaArtifact and action complete. Put exactly "
-        "one object in result_payload with field lemmas. lemmas is an array; "
-        "each item contains exactly statement, conditions, dependencies, "
-        "proof_sketch, and target_obligation_ids. Proposed lemmas are public "
-        "targets, not verified facts. Use public_state_delta as {} and a "
-        "non-empty progress_summary and stop_reason. outbound_intents must "
-        "contain exactly the public "
-        "recipient_role supplied by the Host and no IDs. Do not solve or "
-        "arbitrate the final answer."
+        + "使用 task_result_type=LemmaArtifact、action=complete；result_payload 只有 lemmas。每个 lemma 含 "
+        "statement、conditions、dependencies、proof_sketch、target_obligation_ids。Lemma 只是待验证目标，"
+        "public_state_delta={}，progress_summary/stop_reason 非空，outbound_intents 只含 Host 指定的公开 recipient_role。"
+        "不得求解或仲裁最终答案。"
     ),
     "verifier_skeptic": (
-        "Return only one JSON object with findings. Each finding contains "
-        "candidate_id, claim_id, obligation_ids, review_target_ids, "
-        "review_level, status, public_rationale, missing_condition, and "
-        "counterexample_summary. Status is pass, fail, or unknown. An "
-        "obligation pass must cite a real Claim and supported obligation. An "
-        "answer- or claim-level pass must cite a real Claim and supplied review "
-        "target. Review only supplied Claim-linked public segments; unknown is "
-            "not pass. Do not reconstruct full solutions."
+        "仅返回含 findings 的 JSON。每个 finding 含 candidate_id、claim_id、obligation_ids、review_target_ids、"
+        "review_level、status、public_rationale、missing_condition、counterexample_summary；status 为 pass/fail/unknown。"
+        "pass 必须引用真实 Claim 及已提供目标；只评审已提供的公开片段，不重构完整解答。"
     ),
     "repair": (
         f"{_REPAIR_PATCH_PROTOCOL} Change only the supplied failed Claim "
-        "dependency closure. Preserve the exact final answer unless the affected "
-        "terminal Claim proves it must change."
+        "dependency closure；仅修复受影响闭包。除非终端 Claim 证明必须改变，否则保持 final_answer 不变。"
     ),
     "finalizer": (
-        "Return exactly one bare JSON object containing final_answer and "
-        "solution_text, both strings, with no other fields. Use plain exact "
-        "final_answer text without labels or outer delimiters. Normalize "
-        "presentation only. Preserve the "
-        "method, public exposition, verified Claims, assumptions, theorems, open "
-        "obligations, and exact final answer; introduce no new mathematical content."
+        "仅返回含 final_answer、solution_text 两个字符串字段的裸 JSON，不得有其他字段。final_answer 使用无标签精确文本；"
+        "只规范格式，保留 method、公开说明、已验证 Claims、假设、定理、未闭义务和原答案，不引入新数学内容。"
     ),
 }
+
+
+def _compact_json_object(raw: str, fields: tuple[str, ...]) -> tuple[str, bool]:
+    """Slice the first JSON object in *raw* to the declared public fields."""
+
+    leading = raw.lstrip()
+    if not leading.startswith("{"):
+        return raw, False
+    try:
+        payload, end = json.JSONDecoder().raw_decode(leading)
+    except (TypeError, ValueError):
+        return raw, False
+    if not isinstance(payload, dict):
+        return raw, False
+    selected: dict[str, object] = {}
+    for key in fields:
+        if key not in payload:
+            continue
+        value = payload[key]
+        if key == "metadata" and isinstance(value, dict):
+            # Metadata is a declared transport channel, not permission to
+            # expose compressor internals or authorized memory.  Preserve
+            # only public benchmark/case metadata and the immutable problem
+            # condition envelope used for interpretation.
+            public_metadata = value.get("public_metadata")
+            condition_envelope = value.get("problem_condition_envelope")
+            value = {
+                name: item
+                for name, item in (
+                    ("public_metadata", public_metadata),
+                    ("problem_condition_envelope", condition_envelope),
+                )
+                if item not in (None, {}, [])
+            }
+        selected[key] = strip_prompt_descriptions(value)
+    # Keep an explicitly empty object as a valid public state slice.  Do not
+    # append arbitrary unknown keys: that would reintroduce full-state leaks.
+    rendered = json.dumps(
+        selected,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    prefix = raw[: len(raw) - len(leading)]
+    suffix = leading[end:]
+    return prefix + rendered + suffix, True
+
+
+def _slice_marked_json(
+    user_content: str,
+    marker: str,
+    fields: tuple[str, ...],
+) -> tuple[str, bool]:
+    """Replace the JSON payload immediately following a section marker."""
+
+    start = user_content.find(marker)
+    if start < 0:
+        return user_content, False
+    payload_start = start + len(marker)
+    prefix = user_content[:payload_start]
+    suffix = user_content[payload_start:]
+    compacted, changed = _compact_json_object(suffix, fields)
+    return prefix + compacted, changed
+
+
+def _declared_state_slice(user_content: str, role_directory: str) -> tuple[str, bool]:
+    """Apply role-specific context and ReasoningState field declarations."""
+
+    context_fields = tuple(REQUIRED_STATE_FIELDS.get(role_directory, ()))
+    result = user_content
+    changed = False
+    if context_fields:
+        for marker in _STATE_SECTION_MARKERS[:3]:
+            result, did_change = _slice_marked_json(result, marker, context_fields)
+            changed = changed or did_change
+    result, did_change = _slice_marked_json(
+        result,
+        _STATE_SECTION_MARKERS[3],
+        REQUIRED_REASONING_FIELDS,
+    )
+    return result, changed or did_change
+
+
+def _state_sections(user_content: str) -> str:
+    """Return only marked state sections for component accounting."""
+
+    starts = sorted(
+        (user_content.find(marker), marker)
+        for marker in _STATE_SECTION_MARKERS
+        if user_content.find(marker) >= 0
+    )
+    if not starts:
+        return ""
+    parts: list[str] = []
+    for index, (position, _marker) in enumerate(starts):
+        end = starts[index + 1][0] if index + 1 < len(starts) else len(user_content)
+        parts.append(user_content[position:end])
+    return "\n".join(parts)
+
+
+def _problem_section(user_content: str) -> str:
+    """Extract the problem-bearing prefix, excluding skills and state."""
+
+    text = user_content
+    problem_index = text.find("Problem:")
+    if problem_index >= 0:
+        text = text[problem_index:]
+    cut_markers = [
+        position
+        for marker in _STATE_SECTION_MARKERS
+        for position in [text.find(marker)]
+        if position >= 0
+    ]
+    skill_positions = [position for position in (text.find("# Skill:"),) if position >= 0]
+    cuts = [*cut_markers, *skill_positions]
+    if cuts:
+        text = text[: min(cuts)]
+    return text.strip()
+
+
+def _trim_marked_state(user_content: str, max_tokens: int, counter: InternS2TokenCounter) -> str:
+    """Deterministically trim state sections to a token allowance."""
+
+    if max_tokens <= 0:
+        starts = sorted(
+            (user_content.find(marker), marker)
+            for marker in _STATE_SECTION_MARKERS
+            if user_content.find(marker) >= 0
+        )
+        if not starts:
+            return user_content
+        first = starts[0][0]
+        return user_content[:first].rstrip()
+    state = _state_sections(user_content)
+    if not state or counter.count_text(state).tokens <= max_tokens:
+        return user_content
+    # Preserve only auditable identity metadata outside the dynamic state
+    # sections.  This keeps context/benchmark correlation available to the
+    # model and pollution probes while making the mathematical state share
+    # gate independent of bookkeeping fields.
+    starts = sorted(
+        (user_content.find(marker), marker)
+        for marker in _STATE_SECTION_MARKERS
+        if user_content.find(marker) >= 0
+    )
+    first = starts[0][0]
+    head = user_content[:first].rstrip()
+    identity: dict[str, object] = {}
+    for _position, marker in starts:
+        suffix = user_content[_position + len(marker) :]
+        leading = suffix.lstrip()
+        if not leading.startswith("{"):
+            continue
+        try:
+            payload, _end = json.JSONDecoder().raw_decode(leading)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        snapshot_id = payload.get("snapshot_id") or payload.get("context_snapshot_id")
+        if snapshot_id and "context_snapshot_id" not in identity:
+            identity["context_snapshot_id"] = str(snapshot_id)
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            public_metadata = metadata.get("public_metadata")
+            if isinstance(public_metadata, dict):
+                for key in ("benchmark_nonce", "case_id", "id", "idx"):
+                    value = public_metadata.get(key)
+                    if value is not None and key not in identity:
+                        identity[key] = value
+    identity_text = (
+        "\n公开上下文标识：" + json.dumps(identity, ensure_ascii=False, separators=(",", ":"))
+        if identity
+        else ""
+    )
+    return (
+        head
+        + identity_text
+        + "\n状态已按阶段字段裁剪；仅保留问题与可验证结论。"
+    )
 
 
 @dataclass(frozen=True)
@@ -468,6 +670,9 @@ class PromptCompilation:
     problem_tokens: int = 0
     schema_tokens: int = 0
     prompt_component_tokens: dict[str, int] = field(default_factory=dict)
+    required_state_fields: tuple[str, ...] = ()
+    state_slice_applied: bool = False
+    state_trimmed: bool = False
 
     def snapshot(self) -> "CompiledPromptSnapshot":
         return CompiledPromptSnapshot.from_compilation(self)
@@ -501,6 +706,9 @@ class CompiledPromptSnapshot:
     max_output_cap: int
     prompt_tokens: int
     prompt_component_tokens: dict[str, int]
+    required_state_fields: tuple[str, ...] = ()
+    state_slice_applied: bool = False
+    state_trimmed: bool = False
 
     @property
     def prompt_contract_version(self) -> str:
@@ -540,6 +748,9 @@ class CompiledPromptSnapshot:
             max_output_cap=compilation.max_output_tokens,
             prompt_tokens=compilation.prompt_tokens,
             prompt_component_tokens=components,
+            required_state_fields=tuple(compilation.required_state_fields),
+            state_slice_applied=compilation.state_slice_applied,
+            state_trimmed=compilation.state_trimmed,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -562,6 +773,9 @@ class CompiledPromptSnapshot:
             "max_output_cap": self.max_output_cap,
             "prompt_tokens": self.prompt_tokens,
             "prompt_component_tokens": dict(self.prompt_component_tokens),
+            "required_state_fields": list(self.required_state_fields),
+            "state_slice_applied": self.state_slice_applied,
+            "state_trimmed": self.state_trimmed,
         }
 
     @classmethod
@@ -604,6 +818,11 @@ class CompiledPromptSnapshot:
             max_output_cap=int(payload.get("max_output_cap", 0)),
             prompt_tokens=int(payload.get("prompt_tokens", 0)),
             prompt_component_tokens={str(k): int(v) for k, v in components.items()},
+            required_state_fields=tuple(
+                str(item) for item in payload.get("required_state_fields", [])
+            ),
+            state_slice_applied=bool(payload.get("state_slice_applied", False)),
+            state_trimmed=bool(payload.get("state_trimmed", False)),
         )
 
     @staticmethod
@@ -629,8 +848,11 @@ class PromptSpec:
     runtime_protocol: str
     output_schema_fields: tuple[str, ...] = ()
     output_schema_name: str = ""
+    compact_contract: bool = True
 
     def system_prompt(self) -> str:
+        if self.compact_contract:
+            return self.contract.render_compact_system(self.runtime_protocol)
         return self.contract.render_system(self.runtime_protocol)
 
 
@@ -643,6 +865,12 @@ class PromptCompiler:
     ) -> None:
         self._contracts = contracts or PromptContractLoader()
         self._token_counter = InternS2TokenCounter()
+
+    @staticmethod
+    def required_state_fields(role_directory: str) -> tuple[str, ...]:
+        """Expose the immutable state declaration used by a stage."""
+
+        return tuple(REQUIRED_STATE_FIELDS.get(str(role_directory), ()))
 
     def compile_solver(
         self,
@@ -673,21 +901,15 @@ class PromptCompiler:
         ]
         if protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION:
             instructions.append(
-                "Use AgentTurnPayload 1.1-lite. For a complete solution choose "
-                "action publish_candidate and put the minimal model semantic "
-                "Candidate payload in payload; use outbound [] and stop_reason "
-                "candidate_complete. If no sound candidate can be produced, "
-                "choose abstain with a non-empty stop_reason."
+                "使用 AgentTurnPayload 1.1-lite：完整解答用 action=publish_candidate，"
+                "语义 Candidate 放入 payload，outbound=[]、stop_reason=candidate_complete；"
+                "无法保证正确时用 abstain 并给出非空 stop_reason。"
             )
         elif autonomous:
             instructions.append(
-                "For a complete solution use task_result_type "
-                "CandidateArtifact and action publish_candidate; place the "
-                f"entire {output_profile} Candidate object inside result_payload, set "
-                "public_state_delta to {}, and use outbound_intents []. If no "
-                "sound candidate can be produced, use action abstain, "
-                "task_result_type CheckpointArtifact, empty result_payload, "
-                "and explain the public reason in stop_reason."
+                "完整解答用 task_result_type=CandidateArtifact、action=publish_candidate，"
+                f"将完整 {output_profile} Candidate 放入 result_payload，public_state_delta={{}}、"
+                "outbound_intents=[]；无法保证正确时用 abstain/CheckpointArtifact 并说明原因。"
             )
             instructions.append(
                 "Canonical ActionRegistry actions for this Candidate Turn: "
@@ -701,30 +923,26 @@ class PromptCompiler:
             )
         if compact:
             instructions.append(
-                "This is compact_synthesis recovery. Consume only the supplied "
-                "verified public Artifact summaries. Return the smallest complete "
-                "Candidate object; do not repeat the discarded long response."
+                "这是 compact_synthesis 恢复回合：只消费已验证公共 Artifact 摘要，"
+                "返回最小完整 Candidate，不重复已丢弃的长回复。"
             )
         if role_directory == "alternative_solver":
             instructions.append(
-                "Solve independently from the forbidden method families; do not "
-                "reconstruct or imitate a Primary solution."
+                "避开 forbidden method families 独立求解，不重构或模仿 Primary 解答。"
             )
         if profile == "tool":
             tools = self._prioritized_tools(route.selected_tools)
             if tools:
                 instructions.append(
-                    "Make the public steps explicit enough for the Host to derive "
-                    "safe deterministic checks for these authorized tools: "
+                    "为 Host 的确定性检查明确写出表达式、域、假设或有限情形；授权工具为："
                     + ", ".join(tools[:3])
-                    + ". Do not emit tool arguments or calls."
+                    + "。Do not emit tool arguments or calls（不得输出工具参数或调用）。"
                 )
         if runtime_instructions.strip():
             instructions.append(runtime_instructions.strip())
         output_tokens = _SOLVER_OUTPUT_TOKENS[profile][role_directory]
         instructions.append(
-            f"This Candidate Turn has a {output_tokens:,}-token output ceiling; "
-            "this is a per-Turn ceiling, not a per-problem reasoning budget."
+            f"本 Candidate Turn 输出上限为 {output_tokens:,} tokens；这是单回合上限，不是单题推理预算。"
         )
         return self._compile(
             role_directory,
@@ -787,38 +1005,21 @@ class PromptCompiler:
         ]
         if protocol_variant == LITE_PROTOCOL_SCHEMA_VERSION:
             instructions.append(
-                "Use AgentTurnPayload 1.1-lite. Put the public ProgressDelta in "
-                "payload for continue_reasoning or a bounded progress action; "
-                "the Host supplies result type, IDs, status, and progress summary."
+                "使用 AgentTurnPayload 1.1-lite：将公共 ProgressDelta 放入 payload；Host 提供类型、ID、状态和摘要。"
             )
         elif autonomous:
             instructions.append(
-                "Use task_result_type ProgressArtifact. Put the exact "
-                "ProgressDelta object inside public_state_delta and use empty "
-                "result_payload. Choose one action from the canonical "
-                f"ActionRegistry enum: {', '.join(_ACTION_REGISTRY.prompt_actions(role, phase='progress'))}. "
-                "Use complete with a non-empty stop_reason when the "
-                "public exploration is ready for a separate Candidate synthesis "
-                "Turn. "
-                "For a request action include one matching outbound_intent with "
-                "only public request details and Artifact-independent Claim or "
-                "obligation references. For continue_reasoning use [] intents. "
-                "A continuation must add a Claim, Subgoal, obligation transition, "
-                "or concrete request; wording-only changes are invalid. Use "
-                "task_result_type ToolRequestArtifact for request_tool_check, "
-                "CheckpointArtifact for abstain, and ProgressArtifact otherwise."
+                "使用 task_result_type=ProgressArtifact；ProgressDelta 放入 public_state_delta，result_payload={}。"
+                f"允许动作：{', '.join(_ACTION_REGISTRY.prompt_actions(role, phase='progress'))}；"
+                "complete 时 stop_reason 非空。继续必须新增 Claim/Subgoal/义务转移/具体请求，禁止只改措辞。"
             )
         if mode == "explore":
             instructions.append(
-                "Decompose the exact target and establish the first useful "
-                "public Claims. Preserve every stated condition, definition, "
-                "quantifier, and target from ProblemFrame."
+                "拆解精确目标并建立首批公共 Claims；保留 ProblemFrame 的条件、定义、量词和目标。"
             )
         else:
             instructions.append(
-                "Consume only the supplied public ReasoningState. Advance one "
-                "or a small number of open Subgoals; explicitly close or retain "
-                "obligations and do not repeat unchanged state."
+                "只消费提供的公共 ReasoningState；推进少量开放 Subgoal，明确关闭或保留义务，不重复未变状态。"
             )
         if runtime_instructions.strip():
             instructions.append(runtime_instructions.strip())
@@ -1016,42 +1217,32 @@ class PromptCompiler:
     @staticmethod
     def _solver_profile_protocol(profile: str) -> str:
         if profile == "minimal":
-            return (
-                "Use one direct public check and finish the compact JSON object."
-            )
+            return "只做一次直接公共检查并结束紧凑 JSON。"
         if profile == "proof":
             return (
-                "Give a complete ordered proof, state theorem conditions, cover "
-                "necessity and sufficiency when applicable, and list every genuinely "
-                "open condition explicitly."
+                "给出完整有序证明，写明定理条件、必要性/充分性（适用时）和全部未闭条件。"
             )
         if profile == "tool":
             return (
-                "Make each step explicit about expressions, domains, assumptions, "
-                "matrix data, intervals, or finite cases so Host checks are safe."
+                "明确表达式、定义域、假设、矩阵、区间或有限情形，便于 Host 安全检查。"
             )
-        return (
-            "Provide one concise public derivation with explicit conditions; avoid "
-            "repeating the problem or protocol."
-        )
+        return "给出含明确条件的简洁公共推导，不重复题目或协议。"
 
     @staticmethod
     def _response_mode_protocol(problem: ProblemIR) -> str:
         if problem.response_mode == "proof_full":
             return (
                 "Host response mode is proof_full. proof_steps must contain the "
-                "complete public proof, including essential inferences, theorem "
-                "hypotheses, boundary cases, and the conclusion. Compress wording, "
-                "not mathematics."
+                "complete public proof, including essential inferences, theorem hypotheses, boundary cases, and the conclusion。"
             )
         if problem.response_mode == "worked_solution":
             return (
                 "Host response mode is worked_solution. steps must be an ordered, "
-                "independently checkable complete derivation with semantic claim_kind."
+                "independently checkable complete derivation with semantic claim_kind。"
             )
         return (
             "Host response mode is answer_only. Give the exact canonical answer and "
-            "the shortest independently checkable public semantic check."
+            "the shortest independently checkable public semantic check。"
         )
 
     def _compile(
@@ -1071,6 +1262,10 @@ class PromptCompiler:
         if protocol_version not in {PROTOCOL_SCHEMA_VERSION, LITE_PROTOCOL_SCHEMA_VERSION}:
             raise ValueError("unsupported AgentTurnPayload protocol version")
         contract = self._contracts.load(role_directory)
+        user_content, state_slice_applied = _declared_state_slice(
+            str(user_content),
+            role_directory,
+        )
         instructions = _CHINESE_LANGUAGE_DIRECTIVE + "\n" + str(instructions).strip()
         spec = PromptSpec(
             role_directory=role_directory,
@@ -1082,11 +1277,6 @@ class PromptCompiler:
         )
         system = spec.system_prompt()
         prompt_chars = len(system) + len(user_content)
-        if prompt_chars > contract.max_context_chars:
-            raise ContextBudgetExceeded(
-                f"{contract.fields['role']} messages require {prompt_chars} chars, "
-                f"budget is {contract.max_context_chars}"
-            )
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user_content},
@@ -1114,6 +1304,77 @@ class PromptCompiler:
             name: self._token_counter.count_text(text).tokens
             for name, text in component_sources.items()
         }
+        # The problem is the highest-value context.  If state/skills/schema
+        # crowd it out, trim only the marked state section until the dynamic
+        # prompt share is at least 45%.  Fixed contract and protocol text is
+        # reported separately and is not silently deleted.
+        state_trimmed = False
+        dynamic_total = sum(
+            component_counts[name]
+            for name in ("problem_tokens", "state_tokens", "skill_tokens")
+        )
+        problem_share = (
+            component_counts["problem_tokens"] / dynamic_total
+            if dynamic_total
+            else 1.0
+        )
+        if problem_share < 0.45 and component_counts["state_tokens"] > 0:
+            non_state = sum(
+                component_counts[name]
+                for name in ("problem_tokens", "skill_tokens")
+            )
+            state_allowance = max(
+                0,
+                floor(component_counts["problem_tokens"] / 0.45 - non_state),
+            )
+            trimmed_user = _trim_marked_state(
+                user_content,
+                state_allowance,
+                self._token_counter,
+            )
+            if trimmed_user != user_content:
+                user_content = trimmed_user
+                state_trimmed = True
+                prompt_chars = len(system) + len(user_content)
+                messages = [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_content},
+                ]
+                counted_prompt = self._token_counter.count_messages(messages)
+                component_sources = self._prompt_component_sources(
+                    contract=contract,
+                    instructions=instructions,
+                    user_content=user_content,
+                    schema_text=schema_text,
+                    selected_skill_summary=selected_skill_summary,
+                    explicit=component_texts,
+                )
+                component_counts = {
+                    name: self._token_counter.count_text(text).tokens
+                    for name, text in component_sources.items()
+                }
+        if prompt_chars > contract.max_context_chars:
+            raise ContextBudgetExceeded(
+                f"{contract.fields['role']} messages require {prompt_chars} chars, "
+                f"budget is {contract.max_context_chars}"
+            )
+        dynamic_total = sum(
+            component_counts[name]
+            for name in ("problem_tokens", "state_tokens", "skill_tokens")
+        )
+        problem_share = (
+            component_counts["problem_tokens"] / dynamic_total
+            if dynamic_total
+            else 1.0
+        )
+        if component_counts["state_tokens"] and problem_share < 0.45:
+            # This is intentionally an assertion rather than a warning: a
+            # state-bearing prompt that still fails the share gate is unsafe
+            # to dispatch.  A short problem with no state remains valid.
+            raise AssertionError(
+                "problem_tokens/total dynamic prompt tokens must be >= 0.45 "
+                "after state trimming"
+            )
         skill_summary = selected_skill_summary.strip() or self._skill_summary(user_content)
         prompt_digest = sha256(
             json.dumps(
@@ -1147,6 +1408,11 @@ class PromptCompiler:
             problem_tokens=component_counts["problem_tokens"],
             schema_tokens=component_counts["schema_tokens"],
             prompt_component_tokens=component_counts,
+            required_state_fields=tuple(
+                REQUIRED_STATE_FIELDS.get(role_directory, ())
+            ),
+            state_slice_applied=state_slice_applied,
+            state_trimmed=state_trimmed,
         )
 
     @staticmethod
@@ -1188,22 +1454,18 @@ class PromptCompiler:
             skill_text = "\n".join(
                 line for line in user_content.splitlines() if "# Skill:" in line
             )
-        state_markers = ("Authorized context view:", "Public ReasoningState JSON:")
-        state_parts = [
-            user_content[user_content.find(marker) :]
-            for marker in state_markers
-            if marker in user_content
-        ]
-        problem_text = user_content
-        if "Required core method family:" in problem_text:
-            problem_text = problem_text.split(
-                "Required core method family:", 1
-            )[0]
+        state_text = _state_sections(user_content)
+        problem_text = _problem_section(user_content)
+        # Generic role payloads do not always carry a Problem: prefix.  They
+        # are still useful prompt content; count them as the problem-bearing
+        # portion rather than dropping telemetry to zero.
+        if not problem_text:
+            problem_text = user_content
         return {
-            "contract_tokens": contract.render_system(""),
+            "contract_tokens": contract.render_compact_system(""),
             "runtime_protocol_tokens": instructions,
             "skill_tokens": skill_text,
-            "state_tokens": "\n".join(state_parts),
+            "state_tokens": state_text,
             "problem_tokens": problem_text,
             "schema_tokens": schema_text,
         }

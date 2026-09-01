@@ -108,6 +108,7 @@ class CallBudget:
         }
         self.official_prompt_tokens = 0
         self.fallback_prompt_tokens = 0
+        self.tokenizer_fallback_count = 0
         self.requested_output_tokens = 0
         self.observed_output_tokens = 0
         self._observed_output_window: deque[int] = deque(maxlen=8)
@@ -289,6 +290,13 @@ class CallBudget:
                 raise BudgetExceeded("model token budget exhausted")
             self.used_tokens = proposed
 
+    def record_tokenizer_fallback(self, count: int = 1) -> None:
+        """Record an in-process tokenizer fallback for run diagnostics."""
+
+        with self._lock:
+            self._ensure_mutable_locked()
+            self.tokenizer_fallback_count += max(0, int(count))
+
     def record_model_call_started(self, stage: str, allocation: dict) -> int:
         with self._lock:
             self._ensure_mutable_locked()
@@ -372,7 +380,7 @@ class CallBudget:
             self._ensure_mutable_locked()
             self._call_ledger.update(index, dict(lineage))
 
-    def record_model_call_completed(
+    def record_model_call_finished(
         self,
         index: int,
         *,
@@ -418,6 +426,33 @@ class CallBudget:
                     "stop_reason": "response_received",
                 }
             )
+
+    def record_model_call_completed(
+        self,
+        index: int,
+        *,
+        observed_output_tokens: int,
+        output_counting_mode: str,
+        output_chars: int,
+        elapsed_seconds: float,
+        transport_attempts: int = 1,
+        output_budget_exceeded: bool = False,
+        finish_reason: str = "",
+        truncation_status: str = "complete",
+    ) -> None:
+        """Backward-compatible alias for the observed-use accounting API."""
+
+        self.record_model_call_finished(
+            index,
+            observed_output_tokens=observed_output_tokens,
+            output_counting_mode=output_counting_mode,
+            output_chars=output_chars,
+            elapsed_seconds=elapsed_seconds,
+            transport_attempts=transport_attempts,
+            output_budget_exceeded=output_budget_exceeded,
+            finish_reason=finish_reason,
+            truncation_status=truncation_status,
+        )
 
     def record_model_call_timeout(
         self,
@@ -892,6 +927,7 @@ class CallBudget:
                 "prompt_component_tokens": dict(self.prompt_component_tokens),
                 "official_prompt_tokens": self.official_prompt_tokens,
                 "fallback_prompt_tokens": self.fallback_prompt_tokens,
+                "tokenizer_fallback_count": self.tokenizer_fallback_count,
                 "requested_output_tokens": self.requested_output_tokens,
                 "observed_output_tokens": self.observed_output_tokens,
                 "observed_output_tokens_mean": round(

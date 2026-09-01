@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 import re
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Mapping
 
 from mathforge.harness.budget import CallBudget
 from mathforge.harness.state import (
@@ -26,6 +26,35 @@ MAX_METHOD_STEPS = 64
 MAX_CLAIM_STATEMENT_CHARS = 4000
 MAX_TOTAL_CLAIM_CHARS = 24000
 _CLAIM_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+
+
+def strip_prompt_descriptions(value: Any) -> Any:
+    """Return a compact prompt view without schema-description prose.
+
+    Runtime schemas use ``description`` for human-readable metadata in a few
+    public records.  Sending that prose on every turn wastes context and can
+    drown out the actual problem.  For evidence and obligations the value is
+    mathematical content rather than metadata, so it is retained under the
+    neutral ``statement`` key before the description key is removed.  The
+    original dataclass serializers remain unchanged; this helper is only for
+    model-facing prompt rendering.
+    """
+
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key)
+            if name == "description":
+                if ("obligation_id" in value or "evidence_id" in value) and "statement" not in result:
+                    result["statement"] = strip_prompt_descriptions(item)
+                continue
+            result[name] = strip_prompt_descriptions(item)
+        return result
+    if isinstance(value, list):
+        return [strip_prompt_descriptions(item) for item in value]
+    if isinstance(value, tuple):
+        return [strip_prompt_descriptions(item) for item in value]
+    return value
 
 
 class SchemaValidationError(ValueError):

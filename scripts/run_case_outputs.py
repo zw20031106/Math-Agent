@@ -1014,6 +1014,7 @@ def main(argv: list[str] | None = None) -> int:
         preflight_report = run_model_preflight(
             client,
             requested_model=model_identity.requested_model,
+            require_official_tokenizer=True,
         )
         manifest.record_preflight(preflight_report)
         if stop_controller.requested:
@@ -1255,16 +1256,25 @@ def run_model_preflight(
     *,
     requested_model: str = EXACT_INTERN_MODEL,
     include_optional_verification: bool = True,
+    require_official_tokenizer: bool = False,
 ) -> dict[str, Any]:
     return run_production_preflight(
         client,
         requested_model=requested_model,
         include_optional_verification=include_optional_verification,
+        require_official_tokenizer=require_official_tokenizer,
     )
 
 
-def verify_model_availability(client: Any) -> dict[str, Any]:
-    report = run_model_preflight(client)
+def verify_model_availability(
+    client: Any,
+    *,
+    require_official_tokenizer: bool = False,
+) -> dict[str, Any]:
+    report = run_model_preflight(
+        client,
+        require_official_tokenizer=require_official_tokenizer,
+    )
     if report["status"] != "passed":
         raise RuntimeError(f"model preflight failed at {report['failed_level']}")
     return report

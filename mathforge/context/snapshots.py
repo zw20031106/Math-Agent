@@ -5,6 +5,8 @@ from typing import Any
 import json
 from copy import deepcopy
 
+from mathforge.harness.schemas import strip_prompt_descriptions
+
 
 @dataclass
 class ContextSnapshot:
@@ -63,6 +65,7 @@ class RoleContextView:
         payload.pop("original_problem", None)
         payload.pop("raw_context_ref", None)
         payload["context_snapshot_id"] = self.snapshot_id
+        payload = strip_prompt_descriptions(payload)
         return json.dumps(
             payload,
             ensure_ascii=False,

@@ -83,7 +83,7 @@
       "version": "e4-stateful-recovery-20260827",
       "engineering_reviewer": "codex-e4-stateful-recovery-audit",
       "review_date": "2026-08-27",
-      "sha256": "762ff9628551677630ca84b033bf033e065e72c2bec25180aff353f6c2f643ef"
+      "sha256": "6d23196a235acbd6618969d91c9f89788acb37d4c0562c2494d047766ac2bdf4"
     },
     {
       "id": "phase-e5-authoritative-task-graph",
@@ -112,7 +112,7 @@
       "version": "e5-authoritative-task-graph-20260827",
       "engineering_reviewer": "codex-e5-authoritative-task-graph-audit",
       "review_date": "2026-08-27",
-      "sha256": "be9b92ca5b5a76d335c4192b5ff6e86a8e0f2196ffba12cda2278388da46e448"
+      "sha256": "0d1e66096ab19f645c33a3abfe481b551c097654ee01a3938e55e476055e399a"
     },
     {
       "id": "phase5-effective-agent-governance",
@@ -152,7 +152,33 @@
       "version": "prompt-compiler-17-0824-phase2",
       "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
       "review_date": "2026-08-24",
-      "sha256": "02b90455a58bfa9aef43e8a6b047817fa867b8514fb78aa4d0f63df358aacc77"
+      "sha256": "cd3deac7d6355b8674fa82c88bef13710789b4e98120785e7e18c1082db321ca"
+    },
+    {
+      "id": "phase2-prompt-slimming-accounting",
+      "kind": "file_set",
+      "paths": [
+        "CHANGELOG.md",
+        "docs/PHASE_2_PROMPT_SLIMMING_ACCOUNTING_EXECUTION_REPORT_2026-09-01.md",
+        "mathforge/agents/prompt_compiler.py",
+        "mathforge/agents/registry.py",
+        "mathforge/agents/solver.py",
+        "mathforge/context/snapshots.py",
+        "mathforge/evaluation/production_preflight.py",
+        "mathforge/harness/budget.py",
+        "mathforge/harness/context_budget.py",
+        "mathforge/harness/metrics.py",
+        "mathforge/harness/provider.py",
+        "mathforge/harness/schemas.py",
+        "scripts/run_case_outputs.py",
+        "tests/fixtures/e2_compiled_prompt_snapshots.json",
+        "tests/test_phase2_prompt_slimming_0901.py"
+      ],
+      "expected_count": 15,
+      "version": "phase2-prompt-slimming-20260901",
+      "engineering_reviewer": "codex-phase2-prompt-slimming-accounting",
+      "review_date": "2026-09-01",
+      "sha256": "5f69819921ab3a4670cc61bf47b1e49baf58d989dfe3383f873830796112ba66"
     },
     {
       "id": "model-candidate-boundary",
@@ -170,7 +196,7 @@
       "version": "model-candidate-boundary-4.0-0824-phase2",
       "engineering_reviewer": "codex-0824-phase2-turn-contract-audit",
       "review_date": "2026-08-24",
-      "sha256": "95af8aa0a31b8f05631af4eb682a421ac752794eb0be76ea05df0993e8c4a9f7"
+      "sha256": "f446cb2050e9d116478ddb4403f5c4378c37d6c065dd969cfe2b13c85784f6ae"
     },
     {
       "id": "reasoning-state",
@@ -248,7 +274,7 @@
       "version": "typed-lemma-feedback-2-0824-phase1",
       "engineering_reviewer": "codex-0824-phase1-problem-ir-audit",
         "review_date": "2026-08-24",
-      "sha256": "ff95a56b7fdf9636ee8714e3b77b9e7193ac10ed5fbb0e0a0cae3cc34f64a85a"
+      "sha256": "078cf4cc7db5d132e4f60a2d432bbe61f5f6c3fd3171ea2301c2fb4171aa674e"
     },
     {
       "id": "verification-closure",
@@ -310,7 +336,7 @@
       "version": "phase-f6-agent-protocol-11-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "2fa10f91120b567c33dcf2d032167b13901313bf97938e40a1b26634014c1a4c"
+      "sha256": "46116b13e6b2d3589f7a7c783a7a2c5419d466f7871cdb3276260b0eecad1b62"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -334,7 +360,7 @@
       "version": "phase-f7-runtime-9-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "3e73ad5efea2b22ce253b18dc6d0249e903c7a0ff42cf60bab99482779ca6359"
+      "sha256": "d3f55fad20f99dde34186af7611d2782b109945b0f76caec44bab7597c65f671"
     },
     {
       "id": "reviewed-method-cards",
@@ -406,7 +432,7 @@
       "version": "provider-controls-6-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "23ccd05422546d2a2224e070583fd56c85de646b508c9035bcf46d02f491265b"
+      "sha256": "f8777c7a7e6f8ed1cc4b223046c0f9a6b662f7f1dccc57ed2b42462d6bdc4dae"
     },
     {
       "id": "phase7-live-calibration",
@@ -421,7 +447,7 @@
       "version": "phase7-live-calibration-4-0812-p4",
       "engineering_reviewer": "codex-0812-p4-audit",
       "review_date": "2026-08-12",
-      "sha256": "17fc6512d77aea125a6f0b28b138641236a1c822a79f7d0815da767805fcc90e"
+      "sha256": "17e552e64147dbc13aaed1c3c3f3b8135969b4ff649e6ea1f88e114780ac877e"
     },
     {
       "id": "router-calibration",
@@ -457,7 +483,7 @@
       "version": "review-repair-communication-audit-2.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "b4a572493297d13bd45608d456b0878088e33f24d53eb1b471105f1e02559fe0"
+      "sha256": "994f67c59a264fb745d7fed2a3fe65f252396466347ac543afca02a5d9820513"
     },
     {
       "id": "phase8-skill-context-memory",
@@ -484,7 +510,7 @@
       "version": "skill-context-memory-1-0825-phase8",
       "engineering_reviewer": "codex-0825-phase8-skill-context-memory",
       "review_date": "2026-08-25",
-      "sha256": "a6b3a624e136550a217d006debe0524e3d85b27808b2b2f3c35ed44e7d7c13f4"
+      "sha256": "59509df6c5f9bee77c0930b759e4f65ac510ba7268a3037575a8b391c0c6f305"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -505,7 +531,7 @@
       "version": "scheduler-runtime-2.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "b6ac228180866ab7c103e3e5a37e79725da1e862817a3d0d3a7a876295c6bcd0"
+      "sha256": "e5108dad3ae0bd424fd592e861d0b543430972848eb3476ba58556005b0732f5"
     },
     {
       "id": "phase9-provider-resource-governance",
@@ -532,7 +558,7 @@
       "version": "provider-resource-governance-1-0825-phase9",
       "engineering_reviewer": "codex-0825-phase9-provider-resource-governance",
       "review_date": "2026-08-25",
-      "sha256": "7a77c5f0057301c2f19cfa71aeb739158725cdb8a7f0e685b4f08a39def185c3"
+      "sha256": "3fb9d67ab05d99c510375a681a71e83e646b7ba39ec409ef9b351a3505971050"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -557,7 +583,7 @@
       "version": "production-preflight-release-governance-1.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "98e40de0d5eda7f13560a270c97972e7ebb605b49b99f3a263a987e4bc428a83"
+      "sha256": "661eba46877313d9e70afd89318a0582ff649b3ad25635d45386c753895e64be"
     },
     {
       "id": "router-e5-gold",
