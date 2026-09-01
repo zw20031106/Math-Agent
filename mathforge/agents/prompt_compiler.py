@@ -48,6 +48,11 @@ _ROLE_DIRECTORY_TO_ROLE = {
     "repair": "RepairAgent",
     "finalizer": "LLMFinalizer",
 }
+_CHINESE_LANGUAGE_DIRECTIVE = (
+    "强制语言要求：所有自然语言字段、数学推导步骤、公开理由和最终说明必须使用中文。"
+    "数学表达式、LaTeX、JSON 字段名、协议版本、角色名和工具标识保持原样。"
+    "只返回当前模式要求的 JSON，不要输出额外英文说明。"
+)
 _ACTION_REGISTRY = ActionRegistry()
 _SOLVER_OUTPUT_TOKENS = {
     "minimal": {
@@ -1066,6 +1071,7 @@ class PromptCompiler:
         if protocol_version not in {PROTOCOL_SCHEMA_VERSION, LITE_PROTOCOL_SCHEMA_VERSION}:
             raise ValueError("unsupported AgentTurnPayload protocol version")
         contract = self._contracts.load(role_directory)
+        instructions = _CHINESE_LANGUAGE_DIRECTIVE + "\n" + str(instructions).strip()
         spec = PromptSpec(
             role_directory=role_directory,
             profile=profile,

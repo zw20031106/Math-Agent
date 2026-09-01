@@ -151,6 +151,12 @@ class CallBudget:
         )
         self.final_response_tokens = 0
         self.final_response_counting_mode = ""
+        # Phase 0 observability: retain the terminal answer path even when a
+        # candidate is rejected later in the workflow.  The initial profile
+        # intentionally exposes only the two stable states; the full ladder
+        # is introduced by the answer-delivery phase.
+        self.answer_source = "L5"
+        self.answer_source_counts = {"L1": 0, "L5": 0}
         self.deadline = DeadlineController(
             soft_deadline_seconds=self.soft_deadline_seconds,
             exploration_deadline_seconds=self.exploration_deadline_seconds,
@@ -501,6 +507,25 @@ class CallBudget:
             self.final_response_tokens = max(0, int(tokens))
             self.final_response_counting_mode = str(counting_mode)
 
+    def record_answer_source(self, source: str) -> None:
+        """Record the final answer path for this case exactly once.
+
+        Phase 0 deliberately distinguishes only a retained candidate (L1)
+        from the no-candidate fallback (L5).  Re-recording replaces the prior
+        value so a defensive caller cannot inflate the per-case count.
+        """
+
+        normalized = str(source).strip().upper()
+        if normalized not in {"L1", "L5"}:
+            raise ValueError("answer source must be L1 or L5")
+        with self._lock:
+            self._ensure_mutable_locked()
+            self.answer_source = normalized
+            self.answer_source_counts = {
+                "L1": int(normalized == "L1"),
+                "L5": int(normalized == "L5"),
+            }
+
     def record_model_call_timing(
         self,
         index: int,
@@ -843,6 +868,8 @@ class CallBudget:
                 "final_response_counting_mode": (
                     self.final_response_counting_mode
                 ),
+                "answer_source": self.answer_source,
+                "answer_source_counts": dict(self.answer_source_counts),
                 "model_call_records": self._call_ledger.snapshot(),
                 "call_accounting": self._call_ledger.accounting_snapshot(),
                 "max_claims": self.max_claims,

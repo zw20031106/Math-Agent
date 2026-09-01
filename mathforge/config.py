@@ -325,10 +325,10 @@ class HarnessConfig:
             raise ValueError(
                 "hard_deadline_seconds must be below outer_platform_limit_seconds"
             )
-        if self.max_background_model_tails < self.model_max_concurrency:
-            raise ValueError(
-                "max_background_model_tails must cover model_max_concurrency"
-            )
+        # Background provider tails are a separate safety budget.  They may
+        # be smaller than the foreground model concurrency so late responses
+        # cannot occupy every provider slot (competition profile uses 2 tails
+        # for 6 foreground calls).
         if self.transport_attempt_reservation > self.model_requests_per_minute:
             raise ValueError(
                 "transport_attempt_reservation must not exceed the RPM limit"

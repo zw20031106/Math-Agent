@@ -621,6 +621,10 @@ def summarize(records: list[BenchmarkRecord]) -> dict:
             if records
             else 0.0
         ),
+        "answer_source_counts": {
+            "L1": sum(item.answer_source == "L1" for item in metrics),
+            "L5": sum(item.answer_source == "L5" for item in metrics),
+        },
         "error_code_counts": _error_code_counts(metrics),
         "duplicate_session_count": duplicate_sessions,
         "fingerprint_missing_count": fingerprint_missing,
@@ -933,6 +937,13 @@ def _metrics_from_payload(
         error_code=str(legacy.get("error_code", "")),
         fallback_used=bool(
             legacy.get("fallback_used", outcome == "fallback")
+        ),
+        answer_source=str(legacy.get("answer_source", "L5")),
+        answer_source_counts=dict(
+            legacy.get(
+                "answer_source_counts",
+                {"L1": 0, "L5": 1},
+            )
         ),
         context_view_attempts=_nonnegative_int(
             legacy.get(

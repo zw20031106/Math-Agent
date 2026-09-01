@@ -83,8 +83,8 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
 
     for role in ("primary_solver", "alternative_solver"):
         body = loader.load(role).body
-        assert "The compiler supplies exactly one" in body
-        assert "Host owns" in body
+        assert "编译器会为当前回合提供唯一" in body
+        assert "由主机负责" in body
         assert "hidden chain-of-thought" not in body
         assert "optional exposition" not in body
         assert "\\boxed" not in body
@@ -92,8 +92,8 @@ def test_prompt_contract_versions_and_solver_contract_are_unambiguous():
         assert "public_solution_steps" not in body
 
     repair = loader.load("repair").body
-    assert "rewrite unrelated Claims" in repair
-    assert "patch schema compiled" in repair
+    assert "重写无关 Claim" in repair
+    assert "编译的补丁模式" in repair
     assert "local-patch output example" not in repair
 
 

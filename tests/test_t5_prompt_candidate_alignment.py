@@ -67,7 +67,7 @@ def test_solver_prompt_explicitly_aligns_public_exposition_to_response_mode(
     assert f"- Response mode: {response_mode}" in user
     assert "- Answer type:" in user
     assert "standard LaTeX" in system
-    assert "JSON-escaped" in system
+    assert "JSON 转义" in system
     assert "hidden chain-of-thought" not in system
     assert system.count("Exact JSON schema example:") == 1
     assert "\\boxed" not in system

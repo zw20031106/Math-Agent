@@ -71,6 +71,19 @@ class NoThrowTerminalizer:
         metrics["final_phase"] = str(final_phase)
         metrics["error_code"] = str(error_code)
         metrics["fallback_used"] = str(outcome) == "fallback"
+        # Keep the terminalizer's fail-safe result observable even when the
+        # normal budget object was unavailable.
+        metrics.setdefault(
+            "answer_source",
+            "L1" if str(outcome) == "primary" else "L5",
+        )
+        metrics.setdefault(
+            "answer_source_counts",
+            {
+                "L1": int(metrics["answer_source"] == "L1"),
+                "L5": int(metrics["answer_source"] == "L5"),
+            },
+        )
         metrics["terminalizer_failed_steps"] = list(self.failed_steps)
         return {
             "final_response": response,
@@ -94,6 +107,8 @@ def minimal_fallback_metrics() -> dict[str, Any]:
         "error_code": "all_candidates_failed",
         "error_class": "EXPECTED_DEGRADATION",
         "fallback_used": True,
+        "answer_source": "L5",
+        "answer_source_counts": {"L1": 0, "L5": 1},
     }
 
 

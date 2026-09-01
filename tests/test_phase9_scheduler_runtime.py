@@ -204,7 +204,7 @@ def test_competition_resource_boundaries_remain_frozen_for_phase9():
     assert config.model_requests_per_minute == 200
     assert config.max_inflight_calls_per_agent == 1
     assert config.transport_attempt_reservation == 3
-    assert config.max_background_model_tails == 6
+    assert config.max_background_model_tails == 2
     assert config.provider_tail_grace_seconds == pytest.approx(0.1)
     assert config.stage_execution_policy["solver_candidate_standard"][
         "max_tokens"

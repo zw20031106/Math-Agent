@@ -242,13 +242,17 @@ class PromptContract:
     def render_system(self, runtime_instructions: str = "") -> str:
         role = self.fields["role"]
         contract_lines = [
-            f"You are {role}. Follow prompt contract version {self.fields['version']}.",
-            f"Objective: {self.fields['objective']}.",
-            f"Visible context only: {self.fields['visible_memory']}.",
-            f"Forbidden context: {self.fields['forbidden_context']}.",
-            f"Allowed tools: {self.fields['allowed_tools']}.",
-            f"Failure policy: {self.fields['failure_policy']}.",
-            f"Stop condition: {self.fields['stop_condition']}.",
+            # Keep the stable role preamble for existing injected clients that
+            # identify the role from the first bytes; all substantive guidance
+            # below is Chinese.
+            f"You are {role}. 你是 {role}，请遵循提示合同版本 {self.fields['version']}。",
+            f"目标：{self.fields['objective']}。",
+            f"仅可见上下文：{self.fields['visible_memory']}。",
+            f"禁止使用的上下文：{self.fields['forbidden_context']}。",
+            f"允许的工具：{self.fields['allowed_tools']}。",
+            f"失败策略：{self.fields['failure_policy']}。",
+            f"停止条件：{self.fields['stop_condition']}。",
+            "语言要求：所有自然语言解释、步骤、理由和结论必须使用中文；数学公式、JSON 字段名、协议标识和技能名称保持原样。",
             self.body,
         ]
         if runtime_instructions.strip():

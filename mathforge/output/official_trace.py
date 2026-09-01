@@ -239,6 +239,31 @@ def project_official_trace(
             ),
         )
 
+    diagnostics = _last(by_name, "diagnostics") or {}
+    if diagnostics:
+        diagnostic_fields = {
+            key: diagnostics.get(key)
+            for key in (
+                "truncation_verdicts",
+                "deadline_phase",
+                "elapsed_seconds",
+                "model_calls",
+                "prompt_tokens_avg",
+                "circuit_open",
+                "salvage_used",
+                "sanitizer_issues",
+                "error_code",
+            )
+        }
+        add(
+            "diagnostics",
+            json.dumps(
+                diagnostic_fields,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+
     response_mode = str(process.get("response_mode", "answer_only"))
     terminal = _last(by_name, "run_completed") or {}
     outcome = str(terminal.get("outcome", "unknown"))
@@ -299,13 +324,35 @@ def minimal_official_trace(
     return [
         {
             "step": "plan",
-            "content": "A complete public reasoning plan was not available.",
+            "content": "当前没有可用的完整公开推理计划。",
+        },
+        {
+            "step": "diagnostics",
+            "content": json.dumps(
+                {
+                    "truncation_verdicts": {
+                        "complete": 0,
+                        "suspect": 0,
+                        "truncated": 0,
+                    },
+                    "deadline_phase": "unknown",
+                    "elapsed_seconds": 0.0,
+                    "model_calls": 0,
+                    "prompt_tokens_avg": 0,
+                    "circuit_open": False,
+                    "salvage_used": False,
+                    "sanitizer_issues": ["public_trace_unavailable"],
+                    "error_code": error_code,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
         },
         {
             "step": "finalize",
             "content": (
-                "Returned the safest available fallback output; "
-                f"outcome: {outcome}; reason: {error_code}."
+                "已返回当前可用的最安全兜底答案；"
+                f"结果：{outcome}；原因：{error_code}。"
             ),
         },
     ]

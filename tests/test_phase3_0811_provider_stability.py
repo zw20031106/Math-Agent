@@ -27,7 +27,7 @@ def _deadline(seconds: float) -> DeadlineController:
 def test_competition_stability_policy_matches_phase3_contract() -> None:
     config = load_competition_config()
 
-    assert config.max_background_model_tails == 6
+    assert config.max_background_model_tails == 2
     assert {
         spec["minimum_start_window_seconds"]
         for spec in config.stage_execution_policy.values()

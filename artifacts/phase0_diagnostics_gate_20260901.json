@@ -1,0 +1,27 @@
+{
+  "schema_version": "phase0-diagnostics-gate-1",
+  "phase": "Phase 0",
+  "status": "passed",
+  "execution_mode": "deterministic_local_smoke",
+  "case_count": 20,
+  "diagnostics_step_cases": 20,
+  "diagnostics_fields_complete_cases": 20,
+  "answer_source_counts": {
+    "L1": 10,
+    "L5": 10
+  },
+  "answer_source_total": 20,
+  "required_diagnostics_fields": [
+    "truncation_verdicts",
+    "deadline_phase",
+    "elapsed_seconds",
+    "model_calls",
+    "prompt_tokens_avg",
+    "circuit_open",
+    "salvage_used",
+    "sanitizer_issues",
+    "error_code"
+  ],
+  "real_model_evidence": "not_run",
+  "note": "该门禁验证投影、预算和终结器闭环，不替代官方真实模型评测。"
+}

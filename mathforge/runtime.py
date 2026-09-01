@@ -4147,6 +4147,18 @@ class MathForgeHarness:
                     None,
                 )
 
+        # Phase 0 telemetry: collapse the terminal path to the two states
+        # required by the diagnostic gate.  Any retained candidate (including
+        # a degraded salvage candidate) is L1; only the no-candidate path is
+        # L5.  Record before budget/trace finalization so every artifact sees
+        # the same value.
+        terminalizer.safe(
+            "answer_source_record",
+            lambda: session.budget.record_answer_source(
+                "L1" if selected_candidate_id else "L5"
+            ),
+            None,
+        )
         problem_memo.clear()
         protocol_snapshot: dict[str, Any] = terminalizer.safe(
             "agent_protocol_finalize",

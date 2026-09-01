@@ -174,10 +174,9 @@ class ModelCallGate:
             if max_background_tails is None
             else int(max_background_tails)
         )
-        if tail_limit < max_concurrency:
-            raise ValueError(
-                "max_background_tails must cover admitted model concurrency"
-            )
+        # A tail limit is deliberately independent from foreground model
+        # concurrency.  Keeping it smaller is what prevents timed-out calls
+        # from occupying every provider slot.
         if late_registry_limit < 1:
             raise ValueError("late_registry_limit must be positive")
         if tail_grace_seconds < 0:

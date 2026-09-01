@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Started the 2026-09-01 full-review Phase 0 diagnostic recovery. Competition
+  traces now retain a bounded 4000-character window, judge/public traces expose
+  a fixed diagnostics step, per-case metrics record the two-state answer source
+  (L1 candidate versus L5 fallback), and aggregate summaries report
+  `answer_source_counts`. Background provider tails are decoupled from
+  foreground model concurrency and capped at two. Model-facing contract and
+  Skill headings now carry an explicit Chinese-language contract; public
+  protocol identifiers remain unchanged.
 - Changed the active case-concurrency policy to 2 across the competition,
   named profiles, Harness defaults, and production runners. Physical model-call
   concurrency remains 6; historical reports and snapshots retain their original

@@ -22,6 +22,7 @@ JUDGE_TRACE_SCHEMA_VERSION = "4.0"
 JUDGE_EVENT_STAGES = {
     "solution_process": "solution",
     "workflow_overview": "workflow",
+    "diagnostics": "diagnostics",
     "session_started": "session",
     "effective_config_snapshot": "session",
     "problem_parsed": "parsing",
@@ -100,6 +101,7 @@ _PROTECTED_EVENTS = frozenset(
     {
         "solution_process",
         "workflow_overview",
+        "diagnostics",
         "session_started",
         "candidate_pool_initialized",
         "truncation_assessed",
@@ -1089,6 +1091,11 @@ def project_judge_trace(
         "closed_loop_health",
         health or completed or budget,
         health_details,
+    )
+    append(
+        "diagnostics",
+        budget or completed or health or session,
+        _diagnostics_summary(by_name, budget, completed),
     )
     append(
         "budget_summary",
@@ -2393,6 +2400,62 @@ def _repair_history(
     return source, attempts
 
 
+def _diagnostics_summary(
+    by_name: dict[str, list[dict[str, Any]]],
+    budget: dict[str, Any] | None,
+    completed: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build the fixed, bounded diagnostic payload required by Phase 0."""
+
+    verdicts = {"complete": 0, "suspect": 0, "truncated": 0}
+    for event in by_name.get("truncation_assessed", []):
+        status = str(event.get("status", "")).upper()
+        if status == "COMPLETE":
+            key = "complete"
+        elif status in {"PROBABLE_TRUNCATION", "UNKNOWN", "SUSPECT"}:
+            key = "suspect"
+        else:
+            key = "truncated"
+        verdicts[key] += 1
+
+    budget = budget if isinstance(budget, dict) else {}
+    completed = completed if isinstance(completed, dict) else {}
+    model_calls = _nonnegative_int(
+        budget.get("model_calls", budget.get("used_calls", 0))
+    )
+    prompt_tokens = _nonnegative_int(budget.get("prompt_tokens", 0))
+    issues: list[str] = []
+    for event in by_name.get("answer_validation_warning", []):
+        codes = event.get("codes", [])
+        if isinstance(codes, list):
+            issues.extend(str(code) for code in codes if str(code).strip())
+    selected = _last(by_name, "final_answer_selected") or {}
+    validation = selected.get("answer_validation", {})
+    if isinstance(validation, dict):
+        codes = validation.get("codes", [])
+        if isinstance(codes, list):
+            issues.extend(str(code) for code in codes if str(code).strip())
+    return {
+        "truncation_verdicts": verdicts,
+        "deadline_phase": str(budget.get("deadline_phase", "unknown")),
+        "elapsed_seconds": _nonnegative_float(budget.get("elapsed_seconds", 0)),
+        "model_calls": model_calls,
+        "prompt_tokens_avg": round(prompt_tokens / model_calls, 3)
+        if model_calls
+        else 0,
+        "circuit_open": str(
+            budget.get("provider_health_state", "")
+        ).casefold()
+        == "circuit_open",
+        "salvage_used": bool(
+            by_name.get("candidate_salvaged")
+            or str(completed.get("error_code", "")) == "degraded_candidate_salvage"
+        ),
+        "sanitizer_issues": list(dict.fromkeys(issues)),
+        "error_code": str(completed.get("error_code", "")) or None,
+    }
+
+
 def _budget_summary(event: dict[str, Any] | None) -> dict[str, Any]:
     fields = (
         "max_calls",
@@ -2435,6 +2498,8 @@ def _budget_summary(event: dict[str, Any] | None) -> dict[str, Any]:
         "remaining_seconds",
         "deadline_phase",
         "outcome",
+        "answer_source",
+        "answer_source_counts",
     )
     return _select(event, fields)
 

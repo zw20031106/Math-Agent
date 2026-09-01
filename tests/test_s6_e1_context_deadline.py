@@ -98,7 +98,7 @@ def test_competition_config_uses_reliable_completion_cap_and_e1_deadlines():
     assert config.max_model_tokens == 0
     assert config.model_context_window_tokens == 262144
     assert config.context_safety_margin_tokens == 8192
-    assert config.trace_max_chars == 0
+    assert config.trace_max_chars == 4000
     assert config.trace_max_events == 0
     assert (
         config.soft_deadline_seconds,

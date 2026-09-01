@@ -13,6 +13,40 @@ from mathforge.skills.quality import SkillQualityGate, SkillQualityReport
 from mathforge.skills.schema import SkillPackage
 
 
+_SKILL_SECTION_ZH = {
+    "recognition": "识别",
+    "do not use when": "不适用情形",
+    "core theorem": "核心定理",
+    "exact preconditions": "精确前提",
+    "procedure": "步骤",
+    "branch conditions": "分支条件",
+    "failure modes": "失败模式",
+    "counterexample patterns": "反例模式",
+    "verification recipe": "验证方法",
+    "mini example": "简短示例",
+    "alternative strategy": "替代策略",
+    "stop / escalate conditions": "停止或升级条件",
+    "triggers": "触发条件",
+    "roles": "适用角色",
+}
+
+
+def _chinese_skill_block(name: str, body: str) -> str:
+    """Render a model-facing Skill block with an explicit Chinese contract."""
+
+    lines = [
+        f"# Skill: {name}",
+        "语言要求：用中文理解并输出以下数学方法；公式、LaTeX、字段名和技能标识保持原样。",
+    ]
+    for line in str(body).splitlines():
+        if line.startswith("## "):
+            title = line[3:].strip().casefold()
+            lines.append(f"## {_SKILL_SECTION_ZH.get(title, line[3:].strip())}")
+        else:
+            lines.append(line)
+    return "\n".join(lines).strip()
+
+
 class SkillRegistry:
     """One read-only catalog spanning V3 packages and validated V2 Skills."""
 
@@ -91,7 +125,7 @@ class SkillRegistry:
                 continue
             if role is not None and role not in skill.roles:
                 continue
-            block = f"# Skill: {name}\n{skill.body}".strip()
+            block = _chinese_skill_block(name, skill.body)
             extra = len(block) + (2 if blocks else 0)
             if used + extra > max_chars:
                 omitted.append(name)

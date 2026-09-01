@@ -87,6 +87,12 @@ class RunMetrics:
     error_code: str = ""
     error_class: str = ""
     fallback_used: bool = False
+    # Stable two-state answer-path telemetry for Phase 0.  ``L1`` means a
+    # candidate was retained; ``L5`` means the no-candidate fallback was used.
+    answer_source: str = "L5"
+    answer_source_counts: dict[str, int] = field(
+        default_factory=lambda: {"L1": 0, "L5": 1}
+    )
     terminalizer_failed_steps: list[str] = field(default_factory=list)
     context_view_attempts: int = 0
     context_view_failures: int = 0
@@ -211,6 +217,21 @@ class RunMetrics:
         ):
             if not isinstance(getattr(self, name), str):
                 raise ValueError(f"RunMetrics.{name} must be a string")
+        if self.answer_source not in {"L1", "L5"}:
+            raise ValueError("RunMetrics.answer_source must be L1 or L5")
+        if set(self.answer_source_counts) != {"L1", "L5"}:
+            raise ValueError("RunMetrics answer source counts are invalid")
+        if any(
+            type(value) is not int or value < 0
+            for value in self.answer_source_counts.values()
+        ):
+            raise ValueError("RunMetrics answer source counts must be nonnegative integers")
+        if sum(self.answer_source_counts.values()) not in {0, 1}:
+            raise ValueError("RunMetrics answer source counts must describe one case")
+        if sum(self.answer_source_counts.values()) == 1 and not self.answer_source_counts.get(
+            self.answer_source, 0
+        ):
+            raise ValueError("RunMetrics answer source does not match its counts")
         if not isinstance(self.fallback_used, bool):
             raise ValueError("RunMetrics.fallback_used must be a boolean")
         if (
@@ -408,6 +429,14 @@ def collect_run_metrics(
         error_code=error_code,
         error_class=error_class,
         fallback_used=outcome == "fallback",
+        answer_source=str(getattr(budget, "answer_source", "L5")),
+        answer_source_counts=dict(
+            getattr(
+                budget,
+                "answer_source_counts",
+                {"L1": 0, "L5": 1},
+            )
+        ),
         context_view_attempts=context_successes + context_failures,
         context_view_failures=context_failures,
         tool_checks=len(checks),
