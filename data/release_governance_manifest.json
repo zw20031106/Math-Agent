@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0",
   "status": "candidate-unvalidated",
-  "competition_config_sha256": "91af6343a68f5ead4f0d9e45726daf28b592158432494191276cce5730761a0e",
+  "competition_config_sha256": "58428d5704cc0e62cf2edecb17336a089bc6cc93e40ed5d3a1825b3e42de422a",
   "prompt_tree_sha256": "9b9045645d1ad209804872d8a6b4c01a1412223a917b40aa2edfdb6b68293594",
   "skill_tree_sha256": "03b54aeaa1cad14412b329a7029b57df244774c40a67068df074956c48dc0224",
   "evidence_registry_sha256": "e9f489edab138de32c95777a5fd7b389e25f9d7c297fc7d48399e747563ef360",
-  "content_review_manifest_sha256": "00043348892692748c7a020e1855845491a24dbc6bee83e43bff915478a36476",
+  "content_review_manifest_sha256": "b1957656505f910ca3264444750dccc62f76524a10f80fab4369bbc4bcc9691f",
   "test_attestation": {
     "status": "pending-phase11",
     "source_sha256": ""

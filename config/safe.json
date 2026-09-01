@@ -2,7 +2,7 @@
   "schema_version": "2.0",
   "profile": "safe",
   "status": "candidate-unvalidated",
-  "case_max_concurrency": 3,
+  "case_max_concurrency": 2,
   "model_max_concurrency": 1,
   "model_requests_per_minute": 200,
   "rate_limit_window_seconds": 60.0,

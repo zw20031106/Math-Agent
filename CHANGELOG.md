@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Changed the active case-concurrency policy to 2 across the competition,
+  named profiles, Harness defaults, and production runners. Physical model-call
+  concurrency remains 6; historical reports and snapshots retain their original
+  values as diagnostic-only evidence.
 - Aligned the R0 evidence registration and task report with the authoritative
   v3 Accuracy/Context/Truncation/Provider plan; historical aggregate evidence
   remains ineligible and the missing three-run current-HEAD baseline remains

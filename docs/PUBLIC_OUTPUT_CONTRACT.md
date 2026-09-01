@@ -229,7 +229,7 @@ provider background tail，达到上限后 circuit-open，后续调用快速失�
 `interrupted`。未知文件、损坏文件、哈希变化或不兼容清单会在题目模型调用前
 失败。
 
-Runner 默认并最多允许 `concurrency=3`，滚动调度只为实际启动的题目创建
+Runner 默认并最多允许 `concurrency=2`，滚动调度只为实际启动的题目创建
 执行期限。Manifest 依次进入 `created`、`preflight_passed`、
 `running`，并以 `completed`、`degraded`、`aborted` 或 `failed` 结束。
 SIGINT/SIGTERM 会等待当前题安全写盘、阻止启动下一题并记录 `aborted`。

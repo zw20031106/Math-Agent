@@ -12,7 +12,7 @@ user_agent.ReasoningAgent
 the single source of truth for competition behavior. There are no environment
 overrides for Harness features, MCP, candidate concurrency, budgets, or
 deadlines. The frozen outer runner has its own immutable dispatch setting, but
-`ReasoningAgent` enforces the effective maximum of four active cases.
+`ReasoningAgent` enforces the effective maximum of two active cases.
 
 `HarnessConfig()` retains conservative programmatic defaults for unit tests and
 custom embedding. Those defaults are intentionally not presented as competition
@@ -31,7 +31,7 @@ cross-case state during `solve()`.
 Local runner inputs outside Harness configuration are explicit CLI arguments:
 
 - `--model intern-s2-preview-397b` selects and validates the exact local model.
-- `--concurrency 3` selects one to three active cases and defaults to three.
+- `--concurrency 2` selects one to two active cases and defaults to two.
 
 The only optional environment input documented outside the official client is:
 

@@ -83,7 +83,7 @@
       "version": "e4-stateful-recovery-20260827",
       "engineering_reviewer": "codex-e4-stateful-recovery-audit",
       "review_date": "2026-08-27",
-      "sha256": "a4c8ea3cf3cb3ea0a1e98ebdac3a21ef4cd4ce469f33af98bb9bfd7292c0c1be"
+      "sha256": "c396af5f3c595a7b0d30a70c1d20a6d66d2e0f2ce507965439bb7294f7d973f0"
     },
     {
       "id": "phase-e5-authoritative-task-graph",
@@ -112,7 +112,7 @@
       "version": "e5-authoritative-task-graph-20260827",
       "engineering_reviewer": "codex-e5-authoritative-task-graph-audit",
       "review_date": "2026-08-27",
-      "sha256": "6642f6d51073c1a9d47be17e7f3c06d164a94f6c2241c8e82345285df2d7ea7f"
+      "sha256": "ce434cf7c8fd9f0fcd340d5ac9f0020fce2deed83030345fe04944c5206b4cae"
     },
     {
       "id": "phase5-effective-agent-governance",
@@ -310,7 +310,7 @@
       "version": "phase-f6-agent-protocol-11-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "2f8657a95a9ab1e950f6d410df3a7d36912bec712f36e2c0a93b6e02e5e0d033"
+    "sha256": "5291349e752c16e4253a867e07dc5e0eeaf6be70eae01c8cd69e3f4cecf5c1d2"
     },
     {
       "id": "phase-f7-runtime-proof-trace-cleanup",
@@ -406,7 +406,7 @@
       "version": "provider-controls-6-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-    "sha256": "a940e14d808f10fef0c18a833f0178350c66d5d2c202be3f15c1dbda1d43e4de"
+      "sha256": "05e31c247ce1b90786f94133cf2ff0ee108dda0c1f41e17294724aefe3dcdace"
     },
     {
       "id": "phase7-live-calibration",
@@ -421,7 +421,7 @@
       "version": "phase7-live-calibration-4-0812-p4",
       "engineering_reviewer": "codex-0812-p4-audit",
       "review_date": "2026-08-12",
-    "sha256": "d07216af749886095eed47b784b96fbcb97aece1e6913005d5428f7d025994c6"
+      "sha256": "b15b152c62f2749bd859df3925dd87c7ef5e2042eb5573d2f6dcb7bcd49d3d18"
     },
     {
       "id": "router-calibration",
@@ -484,7 +484,7 @@
       "version": "skill-context-memory-1-0825-phase8",
       "engineering_reviewer": "codex-0825-phase8-skill-context-memory",
       "review_date": "2026-08-25",
-      "sha256": "a2eaa3ed89d9002041de6b2df0e7a28740436588c0ffc1b8039477a5a99f7909"
+      "sha256": "e8bdd852716732c8d94939ae34552a9c4b04c53d57df2a1688040928126ed93c"
     },
     {
       "id": "phase9-scheduler-runtime",
@@ -505,7 +505,7 @@
       "version": "scheduler-runtime-2.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "123aacdc8a820d95a9f9387ed94cdbe59058e7b290798a79efa5ff8be6a58dd8"
+      "sha256": "ba1cfa671a1fb53585a7cfb3990992ac32b687a427b347839568dcea42380e21"
     },
     {
       "id": "phase9-provider-resource-governance",
@@ -532,7 +532,7 @@
       "version": "provider-resource-governance-1-0825-phase9",
       "engineering_reviewer": "codex-0825-phase9-provider-resource-governance",
       "review_date": "2026-08-25",
-      "sha256": "a800e076149f561d285d1deb425f4ef8f4e3e0cabdffcd319bf4a0700167d5ce"
+      "sha256": "e6289bf0b7f9a7eb9c640e5391aa8b8c1e3032cedd4fbb931a06548017319902"
     },
     {
       "id": "phase10-production-preflight-release-governance",
@@ -557,7 +557,7 @@
       "version": "production-preflight-release-governance-1.3-0824-phase3",
       "engineering_reviewer": "codex-0824-phase3-agent-communication-audit",
       "review_date": "2026-08-24",
-      "sha256": "22ae958cf6f230181b5c03bf5691c1377407c8a6b6901574c6e0710d13c26d1d"
+      "sha256": "114f6d4615342d22dd3e3befb90034933318ecb9c59bb5506db415263965500c"
     },
     {
       "id": "router-e5-gold",

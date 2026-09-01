@@ -27,7 +27,7 @@ The injected official client is the only model interface. No API keys, alternate
 model clients, native function calling, or network retrieval are used.
 
 The frozen official entry defaults to eight submitted cases. `ReasoningAgent`
-owns the effective case-admission boundary and permits at most three active
+owns the effective case-admission boundary and permits at most two active
 solves; the Competition model-call gate permits six physical calls under a
 weighted global 200 RPM admission controller. Candidate generation
 dispatches Primary before optional alternatives, so outer-runner settings are
@@ -89,7 +89,7 @@ For one atomic JSON file per input case, written immediately when that case
 finishes, use:
 
 ```bash
-python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --model intern-s2-preview-397b --concurrency 3
+python scripts/run_case_outputs.py --input cases.jsonl --output-dir case-outputs --config config/competition.json --model intern-s2-preview-397b --concurrency 2
 ```
 
 Files are named `<id>.json` and contain exactly `id`, `status`,
@@ -237,7 +237,7 @@ wheelhouse; installation and the smoke test are offline.
 
 - `--model intern-s2-preview-397b`: explicit local-runner model selection;
   aliases fail closed. This is not an environment-variable requirement.
-- `--concurrency 3`: local runner case concurrency; three is the default and
+- `--concurrency 2`: local runner case concurrency; two is the default and
   maximum.
 - `MATHFORGE_INTERN_S2_TOKENIZER_DIR`: optional pinned local tokenizer snapshot;
   a mismatch activates the recorded multilingual estimator instead of loading it.
@@ -276,7 +276,7 @@ repeated A0–A10 evidence are still required before S6 can freeze the profile.
 ### True multi-Agent remediation status
 
 Phase F0 froze governance and the pre-remediation baseline. Phase F1 now
-implements the resource layer: case concurrency 3, weighted global 200 RPM
+implements the resource layer: case concurrency 2, weighted global 200 RPM
 admission, the 48-call adaptive budget, Turn-specific execution policy,
 CallLedger observability, and background-tail/same-Agent in-flight control. The
 authoritative phased design is

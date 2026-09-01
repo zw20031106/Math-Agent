@@ -56,7 +56,7 @@ Implement phases in order, add tests for each phase's invariants, update `CHANGE
 
 The following rules supplement the earlier repository rules and are mandatory for the current competition profile:
 
-- Active problem concurrency is exactly 3.
+- Active problem concurrency is exactly 2.
 - Physical model-call concurrency is currently 6.
 - The model request budget is 200 requests per minute.
 - Standard Solver output keeps a 32K-scale upper cap.

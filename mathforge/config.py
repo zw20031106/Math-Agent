@@ -49,7 +49,7 @@ class HarnessConfig:
     schema_version: str = CONFIG_SCHEMA_VERSION
     profile: str = "custom"
     status: str = "custom"
-    case_max_concurrency: int = 3
+    case_max_concurrency: int = 2
     model_max_concurrency: int = 16
     model_requests_per_minute: int = 200
     rate_limit_window_seconds: float = 60.0
@@ -235,7 +235,7 @@ class HarnessConfig:
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be a boolean")
         integer_ranges = {
-            "case_max_concurrency": (1, 3),
+            "case_max_concurrency": (1, 2),
             "model_max_concurrency": (1, 64),
             "model_requests_per_minute": (1, 200),
             "transport_attempt_reservation": (1, 200),

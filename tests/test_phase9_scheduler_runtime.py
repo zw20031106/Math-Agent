@@ -199,7 +199,7 @@ def test_call_ledger_accounts_every_record_by_role_action_and_task():
 def test_competition_resource_boundaries_remain_frozen_for_phase9():
     config = load_competition_config()
 
-    assert config.case_max_concurrency == 3
+    assert config.case_max_concurrency == 2
     assert config.model_max_concurrency == 6
     assert config.model_requests_per_minute == 200
     assert config.max_inflight_calls_per_agent == 1

@@ -171,7 +171,7 @@ def test_case_runner_default_and_manifest_record_competition_identity(tmp_path):
         config_path=config,
         output_dir=output,
         seed=0,
-        concurrency=3,
+        concurrency=2,
         resume=False,
     )
     identity = manifest.payload["run_contract"]["run_identity"]

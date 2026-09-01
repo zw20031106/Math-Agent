@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from threading import Barrier, Lock
 
+import pytest
+
 from mathforge.agents.router_planner import RouterRuleEngine
 from mathforge.agents.solver import PrimarySolver, SolverExecutor, SolverRequest
 from mathforge.harness.budget import CallBudget
@@ -115,7 +117,7 @@ def test_primary_transport_failure_uses_the_reserved_recovery_call():
     assert candidate.final_answer == "-1/4"
 
 
-def test_case_runner_accepts_and_defaults_to_concurrency_three():
+def test_case_runner_accepts_and_defaults_to_concurrency_two():
     parser = build_argument_parser()
     default_args = parser.parse_args(
         ["--input", "cases.jsonl", "--output-dir", "out"]
@@ -127,12 +129,24 @@ def test_case_runner_accepts_and_defaults_to_concurrency_three():
             "--output-dir",
             "out",
             "--concurrency",
-            "3",
+            "2",
         ]
     )
 
-    assert default_args.concurrency == 3
-    assert explicit_args.concurrency == 3
+    assert default_args.concurrency == 2
+    assert explicit_args.concurrency == 2
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "--input",
+                "cases.jsonl",
+                "--output-dir",
+                "out",
+                "--concurrency",
+                "3",
+            ]
+        )
 
 
 def test_local_retry_wrapper_does_not_serialize_independent_model_calls():

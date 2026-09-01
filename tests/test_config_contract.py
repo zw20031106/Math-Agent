@@ -57,6 +57,12 @@ def test_config_rejects_unknown_keys_string_booleans_and_ranges():
         HarnessConfig.from_dict({**valid, "max_tool_seconds": 0})
 
 
+def test_case_concurrency_defaults_to_two_and_rejects_three():
+    assert HarnessConfig().case_max_concurrency == 2
+    with pytest.raises(ValueError, match="case_max_concurrency"):
+        HarnessConfig(case_max_concurrency=3)
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -104,6 +110,7 @@ def test_named_profiles_are_versioned_and_fully_expanded():
         )
         assert payload["schema_version"] == HarnessConfig.SCHEMA_VERSION
         assert payload["profile"] == name
+        assert payload["case_max_concurrency"] == 2
         assert expected_settings <= set(payload)
         assert HarnessConfig.from_dict(payload).profile == name
 

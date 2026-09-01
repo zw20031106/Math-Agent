@@ -108,7 +108,7 @@ def main() -> int:
     parser.add_argument("--input", type=Path, required=True, help="JSONL benchmark cases")
     parser.add_argument("--config", type=Path, default=ROOT / "config" / "competition.json")
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--concurrency", type=int, choices=range(1, 4), default=3)
+    parser.add_argument("--concurrency", type=int, choices=range(1, 3), default=2)
     parser.add_argument("--model", default=EXACT_INTERN_MODEL)
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)

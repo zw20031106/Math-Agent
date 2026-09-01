@@ -1,5 +1,5 @@
 {
-  "case_max_concurrency": 3,
+  "case_max_concurrency": 2,
   "model_max_concurrency": 6,
   "model_requests_per_minute": 200,
   "max_model_calls": 48,
