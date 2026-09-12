@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Completed the 2026-09-12 Prompt contract reform (Phase P1). Expanded the
+  seven fixed-role contracts with explicit mathematical boundaries for routing,
+  theorem-precondition checks, independent alternatives, local lemma curation,
+  dependency-ordered verification, claim-local repair, and presentation-only
+  finalization. Frontmatter schemas, RouterIntentV1 fields, parser behavior,
+  and contract versions remain unchanged; this is a prompt-only change and
+  carries no real-model accuracy claim.
+
 - Started the 2026-09-01 full-review Phase 4 complexity-governance work. Replaced
   the oversized judge-trace projection with a bounded declaration-driven public
   projection, added a fixed local88 30-case ground-truth accuracy regression gate

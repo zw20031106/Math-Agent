@@ -4,8 +4,8 @@
     "profile": "router",
     "protocol_version": "1.0",
     "contract_version": "5",
-    "contract_sha256": "a331469b741c8222b64bf2c6b18f462f3d5906d3449c13a0b924d475cad73b99",
-    "prompt_sha256": "1a6f5cc82e1296a1e1b45748767e0b344a22e5b4cdce13a92107b397bbe0e216",
+    "contract_sha256": "e81550ce08d8067e66366edbe29b54df3abe95b8fc321c65e61faac8c1925a0e",
+    "prompt_sha256": "8458de16b79feecf514778d357c47621a4222b90e7bbba5a518abcfac2894ea7",
     "output_schema_name": "role:router_planner:router",
     "output_schema_fields": [
       "alternative_methods",
@@ -24,8 +24,8 @@
     "profile": "lemma",
     "protocol_version": "1.0",
     "contract_version": "5",
-    "contract_sha256": "25266857ee5beb203851719cbd966f13ccc761b9f043116e4b17c2fbdd91df46",
-    "prompt_sha256": "f65713fef188660a96e8b2ab16f176205be288dd8639be376aa702b41ee756c8",
+    "contract_sha256": "60cc6fc26a8fa60214522118bed3f95e997c3b8aa8054f272c7decf3fa9b844c",
+    "prompt_sha256": "2f6029a5fa8cdeeccdcf5b8d7ae2b27936eff68a0df63f4964fd1cf58b3d3bd0",
     "output_schema_name": "role:lemma_curator:lemma",
     "output_schema_fields": [
       "action",
@@ -45,10 +45,12 @@
     "profile": "verifier",
     "protocol_version": "1.0",
     "contract_version": "8",
-    "contract_sha256": "b5bcc2570c1bd213d11d68165d0faa9f0ec2e9ed571c5c478fe84bededf6d15c",
-    "prompt_sha256": "cb77bddf5161376bcb996bf47d8eff0cf06408719ce0ceb6de1b8a07acca7093",
+    "contract_sha256": "1f3ad1bf3eaf80a0bf919a9c5da1b8231a9eebaf7aa7590e8e48137c3d6e0de9",
+    "prompt_sha256": "0e46896267e9e57dd46e4afb2a8baeaf559f20222fe5be2586486f780dcb6953",
     "output_schema_name": "role:verifier_skeptic:verifier",
-    "output_schema_fields": ["findings"],
+    "output_schema_fields": [
+      "findings"
+    ],
     "selected_skill_summary": "general-math",
     "max_output_cap": 16384
   },
@@ -57,8 +59,8 @@
     "profile": "repair",
     "protocol_version": "1.0",
     "contract_version": "7",
-    "contract_sha256": "571bf565bbf00bd76607a901dc9b900be00e1f37e652e92f0ea37b29dcd2b994",
-    "prompt_sha256": "b706c11d1324be91a23889f248cc682f834313d5f801f003461004646c34c6f0",
+    "contract_sha256": "62c823a3ed1aea851366b339333e853477e275db0d9c2e7eae9e44840e1675b1",
+    "prompt_sha256": "1da372fe6c25d09d8110047a29a7a7d31f48a64d21084728c053bb71bcff0b4f",
     "output_schema_name": "role:repair:repair",
     "output_schema_fields": [
       "final_answer",
@@ -74,10 +76,13 @@
     "profile": "finalizer",
     "protocol_version": "1.0",
     "contract_version": "6",
-    "contract_sha256": "36d2d22ea3200994d7db7c60757bf0890cbbeb0d5aff2931241fddb9cdb03bff",
-    "prompt_sha256": "8175fff983f63e6381055397f4d442c2e10d54d76dffe4b1e2bbdf7f47dcdc2e",
+    "contract_sha256": "8f2a04dff8e6615fdcfb0c43740f5b65ad7bccd5bb8c353bbf4058b2355791db",
+    "prompt_sha256": "9324e92f1d5b603dac9d7e3f15b650e43bb8400eab4570e2afe8ef98cce55ca3",
     "output_schema_name": "role:finalizer:finalizer",
-    "output_schema_fields": ["final_answer", "solution_text"],
+    "output_schema_fields": [
+      "final_answer",
+      "solution_text"
+    ],
     "selected_skill_summary": "general-math",
     "max_output_cap": 8192
   },
@@ -86,10 +91,15 @@
     "profile": "minimal",
     "protocol_version": "1.1-lite",
     "contract_version": "12",
-    "contract_sha256": "3731f4ecab29b4d619f6d14e062eafee665b07fcca073485579fb46f79db8632",
-    "prompt_sha256": "fc9133407a2a4811ace517a276f78a12f20be979b5813a049df09c05551301d6",
+    "contract_sha256": "c5b4eaf5d74094469c66b8510e11e00ac382db4a23eaab2e7c31e40bc0cca94d",
+    "prompt_sha256": "fa95fbef77e9a3cf855f9616508a36746fa90cfc2e6cbf7c4eeb4d8da973ef6e",
     "output_schema_name": "agent_turn:1.1-lite:candidate:answer_only",
-    "output_schema_fields": ["action", "outbound", "payload", "stop_reason"],
+    "output_schema_fields": [
+      "action",
+      "outbound",
+      "payload",
+      "stop_reason"
+    ],
     "selected_skill_summary": "general-math",
     "max_output_cap": 2048
   },
@@ -98,10 +108,15 @@
     "profile": "minimal:explore",
     "protocol_version": "1.1-lite",
     "contract_version": "12",
-    "contract_sha256": "3731f4ecab29b4d619f6d14e062eafee665b07fcca073485579fb46f79db8632",
-    "prompt_sha256": "25ead831884b54f3077082522c30076e57e4065e19d3023925796642b1431d37",
+    "contract_sha256": "c5b4eaf5d74094469c66b8510e11e00ac382db4a23eaab2e7c31e40bc0cca94d",
+    "prompt_sha256": "18910e733e99003a6c328220de16b5c46774a0b4f9712ddaf9df74bae8218f05",
     "output_schema_name": "agent_turn:1.1-lite:progress:explore",
-    "output_schema_fields": ["action", "outbound", "payload", "stop_reason"],
+    "output_schema_fields": [
+      "action",
+      "outbound",
+      "payload",
+      "stop_reason"
+    ],
     "selected_skill_summary": "general-math",
     "max_output_cap": 12288
   },
@@ -110,10 +125,15 @@
     "profile": "minimal",
     "protocol_version": "1.1-lite",
     "contract_version": "11",
-    "contract_sha256": "2bc2ead46dd0fb1237a86fe161efb06a5b8f8404181f87fcc6c7bfa55609897b",
-    "prompt_sha256": "0cd4a1f20dd7fa6256ce69ce5bdb447e6dab577b425a4c5df903fcd028e9685e",
+    "contract_sha256": "2782cc24884d61b0d162206969224a2d70f0da39aa2dbfa809dc391612889640",
+    "prompt_sha256": "3bb242ee8c2f51057e03b25d2dee3409d62c4e3851d99ebae6e903235983b45f",
     "output_schema_name": "agent_turn:1.1-lite:candidate:answer_only",
-    "output_schema_fields": ["action", "outbound", "payload", "stop_reason"],
+    "output_schema_fields": [
+      "action",
+      "outbound",
+      "payload",
+      "stop_reason"
+    ],
     "selected_skill_summary": "general-math",
     "max_output_cap": 2048
   },
@@ -122,10 +142,15 @@
     "profile": "minimal:explore",
     "protocol_version": "1.1-lite",
     "contract_version": "11",
-    "contract_sha256": "2bc2ead46dd0fb1237a86fe161efb06a5b8f8404181f87fcc6c7bfa55609897b",
-    "prompt_sha256": "43fcf62999bdbabb4f067149f265a5a6388f0af9855c5630ac22d4d7a8c269f9",
+    "contract_sha256": "2782cc24884d61b0d162206969224a2d70f0da39aa2dbfa809dc391612889640",
+    "prompt_sha256": "0563d6cfc0a98d18ed6a9ec4098cf7896e63d9beff27497a055691a79d7f99f0",
     "output_schema_name": "agent_turn:1.1-lite:progress:explore",
-    "output_schema_fields": ["action", "outbound", "payload", "stop_reason"],
+    "output_schema_fields": [
+      "action",
+      "outbound",
+      "payload",
+      "stop_reason"
+    ],
     "selected_skill_summary": "general-math",
     "max_output_cap": 12288
   }
