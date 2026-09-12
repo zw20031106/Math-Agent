@@ -21,6 +21,19 @@ from mathforge.skills.hook_audit import (
     audit_skill_hooks,
     hook_policy,
 )
+from mathforge.skills.s5_benchmark import (
+    S5_CASE_TYPES,
+    S5_DEFAULT_CASE_PATH,
+    S5_SCHEMA_VERSION,
+    S5_SKILL_NAMES,
+    SelectionBenchmarkReport,
+    SelectionObservation,
+    evaluate_s5_ablation,
+    load_s5_cases,
+    run_s5_benchmark,
+    run_selection_benchmark,
+    s5_case_fingerprint,
+)
 
 __all__ = [
     "DynamicSkillSelector",
@@ -40,6 +53,17 @@ __all__ = [
     "audit_skill_hooks",
     "expected_accuracy_gain",
     "hook_policy",
+    "S5_CASE_TYPES",
+    "S5_DEFAULT_CASE_PATH",
+    "S5_SCHEMA_VERSION",
+    "S5_SKILL_NAMES",
+    "SelectionBenchmarkReport",
+    "SelectionObservation",
+    "evaluate_s5_ablation",
+    "load_s5_cases",
+    "run_s5_benchmark",
+    "run_selection_benchmark",
+    "s5_case_fingerprint",
     "load_legacy_v2_skill",
     "load_v3_package",
     "skill_utility",

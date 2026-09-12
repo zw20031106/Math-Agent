@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Completed the 2026-09-12 Phase S5 Skill benchmark implementation. Added a
+  versioned 110-case corpus covering all 22 newly/majorly modified Skills with
+  positive, negative, adversarial, selection, and ablation rows; added a
+  deterministic production-selector audit and a fail-closed paired ON/OFF
+  evaluator/CLI. The offline selector audit intentionally reports its current
+  top-k gap (78/110 cases passed; positive recall 0.5152) instead of treating
+  a synthetic run as accuracy evidence. Without observed real-model ON/OFF
+  rows, ablation status remains `pending_real_runs`; no real-model accuracy or
+  token-efficiency claim is made.
+
 - Completed the 2026-09-12 external Skill MathForge rewrite (Phase S4).
   Added nine V3 method packages: `strategy-progress-assessment`,
   `root-finding`, five proof-technique splits, `proof-theory`, and
