@@ -332,13 +332,18 @@ class DynamicSkillSelector:
         historical_precision: float,
         token_cost: int,
     ) -> SkillExecutionPlan:
+        # Metadata penalties may make a candidate score negative.  The
+        # public execution-plan contract uses a nonnegative admission score;
+        # retain the raw score in SkillFragmentDecision but clamp only this
+        # downstream accounting field.
+        plan_score = max(0, int(score))
         if self._runtime is not None:
             builder = getattr(self._runtime, "execution_plan", None)
             if callable(builder):
                 return builder(
                     definition.name,
                     role=role,
-                    selection_score=score,
+                    selection_score=plan_score,
                     selection_reasons=reasons,
                     expected_gain=expected_gain,
                     historical_precision=historical_precision,
@@ -348,7 +353,7 @@ class DynamicSkillSelector:
         return SkillExecutionPlan.from_definition(
             definition,
             role=role,
-            selection_score=score,
+            selection_score=plan_score,
             selection_reasons=reasons,
             expected_gain=expected_gain,
             historical_precision=historical_precision,

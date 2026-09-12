@@ -59,11 +59,7 @@ def test_real_v3_catalog_has_no_tool_mapping_errors_and_surfaces_weak_recipes():
     assert report.passed
     assert not report.errors
     assert report.warnings
-    assert any(
-        item.skill_name == "dominated-convergence"
-        and item.code == "recipe_strength_undeclared"
-        for item in report.warnings
-    )
+    assert any(item.code == "recipe_strength_undeclared" for item in report.warnings)
     policy = hook_policy("numerical_residual")
     assert policy is not None
     assert policy.claim_scope == "finite_samples_only"
@@ -80,7 +76,7 @@ def test_runtime_exposes_audit_scope_without_turning_weak_hook_into_proof():
 
     assert plan.admitted
     assert plan.audit_errors == ()
-    assert any(code.startswith("recipe_strength_undeclared:") for code in plan.audit_warnings)
+    assert plan.audit_warnings == ()
     assert dict(plan.hook_assurance)["numerical_residual"] == "finite_samples_only"
     assert plan.to_dict()["hook_assurance"] == {
         "numerical_residual": "finite_samples_only"
@@ -133,4 +129,3 @@ def test_hook_can_be_a_verification_tool_without_being_a_required_solver_tool():
 
     assert report.passed
     assert any(item.code == "hook_not_listed_as_requirement" for item in report.warnings)
-

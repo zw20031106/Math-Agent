@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Completed the 2026-09-12 high-risk P0 Skill rewrite (Phase S3). Rewrote
+  convergence/limit, complex-analysis, linear-algebra, and conditional-
+  expectation packages with explicit theorem quantifiers, domains, branch and
+  boundary cases, counterexamples, failure modes, and hook-specific evidence
+  limits. Added optional retrieval metadata to each P0 package; no numerical,
+  shape, normalization, or symbolic hook is described as a universal proof.
+  The P0 packages pass the V3 quality and hook-capability gates; no real-model
+  accuracy claim is made by this change.
+
 - Completed the 2026-09-12 verification-hook audit (Phase S2). Added an
   explicit hook-to-capability/claim-state policy table and a full V3 catalog
   audit. Unknown tools, capability mismatches, claim-state mismatches, and
