@@ -55,7 +55,8 @@ class _Tools:
 def test_real_v3_catalog_has_no_tool_mapping_errors_and_surfaces_weak_recipes():
     report = audit_skill_hooks(SkillRegistry(), ToolRegistry())
 
-    assert report.checked_count == 51
+    # Phase S4 adds nine externally sourced but fully rewritten V3 packages.
+    assert report.checked_count == 60
     assert report.passed
     assert not report.errors
     assert report.warnings

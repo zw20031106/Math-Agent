@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Completed the 2026-09-12 external Skill MathForge rewrite (Phase S4).
+  Added nine V3 method packages: `strategy-progress-assessment`,
+  `root-finding`, five proof-technique splits, `proof-theory`, and
+  `lean-proof-workflow`. Each package has explicit recognition, negative
+  boundaries, theorem preconditions, branch/failure/counterexample guidance,
+  and a verification recipe scoped to a current ToolRegistry capability.
+  External Claude/Bash/Read/SciPy/Z3/runtime instructions were not imported;
+  the Lean workflow explicitly reports unsupported status when no Lean Host
+  capability is configured. Added a source revision/license audit and S4
+  positive/negative/adversarial/selection invariants. No real-model accuracy
+  claim is made by this change.
+
 - Completed the 2026-09-12 high-risk P0 Skill rewrite (Phase S3). Rewrote
   convergence/limit, complex-analysis, linear-algebra, and conditional-
   expectation packages with explicit theorem quantifiers, domains, branch and
