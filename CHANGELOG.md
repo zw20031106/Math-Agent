@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Completed the 2026-09-12 verification-hook audit (Phase S2). Added an
+  explicit hook-to-capability/claim-state policy table and a full V3 catalog
+  audit. Unknown tools, capability mismatches, claim-state mismatches, and
+  incomplete tool contracts now block Skill admission; weak hooks such as
+  numerical sampling, matrix-shape checks, and finite enumeration expose
+  bounded assurance scopes instead of being treated as universal proofs.
+  Existing packages with underspecified Verification Recipes remain admitted
+  with auditable warnings for the planned S3 content rewrite. No real-model
+  accuracy claim is made by this change.
+
 - Completed the 2026-09-12 Skill V3 optional-metadata reform (Phase S1).
   `description`, `negative_triggers`, and `required_observables` are now
   parsed with backward-compatible defaults, carried through selection traces,

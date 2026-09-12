@@ -13,6 +13,14 @@ from mathforge.skills.execution_plan import (
     skill_utility,
 )
 from mathforge.skills.quality import SkillQualityGate, SkillQualityReport
+from mathforge.skills.hook_audit import (
+    HOOK_POLICIES,
+    HookAuditFinding,
+    HookAuditReport,
+    HookPolicy,
+    audit_skill_hooks,
+    hook_policy,
+)
 
 __all__ = [
     "DynamicSkillSelector",
@@ -25,7 +33,13 @@ __all__ = [
     "SkillQualityGate",
     "SkillQualityReport",
     "SkillRuntime",
+    "HOOK_POLICIES",
+    "HookAuditFinding",
+    "HookAuditReport",
+    "HookPolicy",
+    "audit_skill_hooks",
     "expected_accuracy_gain",
+    "hook_policy",
     "load_legacy_v2_skill",
     "load_v3_package",
     "skill_utility",

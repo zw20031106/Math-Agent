@@ -10,6 +10,11 @@ from mathforge.skills.execution_plan import (
     SkillExecutionPlan,
     SkillOutcome,
 )
+from mathforge.skills.hook_audit import (
+    HookAuditReport,
+    audit_skill_hooks,
+    hook_policy,
+)
 from mathforge.tools.registry import ToolRegistry
 
 
@@ -34,6 +39,11 @@ class SkillCheckPlan:
     unavailable_hooks: tuple[str, ...]
     selected_tools: tuple[str, ...]
     status: str
+    # Hook audit output is intentionally additive.  Warnings keep a Skill
+    # usable while making weak evidence explicit; errors block admission.
+    audit_warnings: tuple[str, ...] = ()
+    audit_errors: tuple[str, ...] = ()
+    hook_assurance: tuple[tuple[str, str], ...] = ()
 
     @property
     def admitted(self) -> bool:
@@ -51,6 +61,11 @@ class SkillCheckPlan:
             "selected_tools": list(self.selected_tools),
             "status": self.status,
             "admitted": self.admitted,
+            "audit_warnings": list(self.audit_warnings),
+            "audit_errors": list(self.audit_errors),
+            "hook_assurance": {
+                hook: assurance for hook, assurance in self.hook_assurance
+            },
         }
 
 
@@ -61,6 +76,13 @@ class SkillRuntime:
         self._registry = registry
         self._tools = tools
         self._references = ReferenceLoader()
+        self._hook_audit: HookAuditReport = audit_skill_hooks(registry, tools)
+
+    @property
+    def hook_audit_report(self) -> HookAuditReport:
+        """Return the immutable hook audit captured when this runtime loaded."""
+
+        return self._hook_audit
 
     def capabilities(self, skill_name: str) -> SkillCapabilities:
         requested = tuple(
@@ -85,11 +107,29 @@ class SkillRuntime:
         unavailable_capabilities = tuple(item for item in required if item not in known)
         admitted_hooks = tuple(item for item in hooks if item in known)
         unavailable_hooks = tuple(item for item in hooks if item not in known)
+        findings = self._hook_audit.for_skill(skill_name)
+        audit_errors = tuple(
+            f"{item.code}:{item.hook}"
+            for item in findings
+            if item.severity == "error"
+        )
+        audit_warnings = tuple(
+            f"{item.code}:{item.hook}"
+            for item in findings
+            if item.severity == "warning"
+        )
+        hook_assurance = tuple(
+            (hook, policy.claim_scope)
+            for hook in admitted_hooks
+            if (policy := hook_policy(hook)) is not None
+        )
         selected_tools = tuple(
             dict.fromkeys((*admitted_capabilities, *admitted_hooks))
         )
         status = "admitted"
-        if unavailable_capabilities:
+        if audit_errors:
+            status = "verification_hook_invalid"
+        elif unavailable_capabilities:
             status = "capability_unavailable"
         elif unavailable_hooks:
             status = "verification_hook_unavailable"
@@ -103,6 +143,9 @@ class SkillRuntime:
             unavailable_hooks=unavailable_hooks,
             selected_tools=selected_tools,
             status=status,
+            audit_warnings=audit_warnings,
+            audit_errors=audit_errors,
+            hook_assurance=hook_assurance,
         )
 
     def check_plans(self, skill_names: Iterable[str]) -> dict[str, SkillCheckPlan]:
@@ -143,6 +186,7 @@ class SkillRuntime:
         reasons = tuple(
             f"capability_unavailable:{item}" for item in unavailable
         )
+        reasons = (*reasons, *(f"hook_audit:{item}" for item in check.audit_errors))
         if check.admitted:
             return SkillExecutionPlan.from_definition(
                 definition,

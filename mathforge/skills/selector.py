@@ -295,7 +295,11 @@ class DynamicSkillSelector:
             if not plan.admitted:
                 unavailable = tuple(
                     dict.fromkeys(
-                        (*plan.unavailable_capabilities, *plan.unavailable_hooks)
+                        (
+                            *plan.unavailable_capabilities,
+                            *plan.unavailable_hooks,
+                            *plan.audit_errors,
+                        )
                     )
                 )
                 return (
