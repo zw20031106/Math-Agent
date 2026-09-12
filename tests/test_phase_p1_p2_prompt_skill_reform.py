@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from mathforge.agents.registry import PromptContractLoader
+from mathforge.skills.projection import ROLE_SECTIONS, project
 
 
 def test_phase_p1_prompt_contracts_state_role_specific_math_boundaries():
@@ -46,3 +49,74 @@ def test_phase_p1_prompt_contracts_state_role_specific_math_boundaries():
     assert "只规范化已选且通过验证的候选" in bodies["finalizer"]
     assert "不得新增推导" in bodies["finalizer"]
     assert "改变任何验证状态" in bodies["finalizer"]
+
+
+def test_phase_p2_role_projection_matches_mathforge_plan():
+    expected = {
+        "PrimarySolver": (
+            "recognition",
+            "do not use when",
+            "core theorem",
+            "exact preconditions",
+            "procedure",
+            "branch conditions",
+            "failure modes",
+            "verification recipe",
+            "alternative strategy",
+            "stop / escalate conditions",
+        ),
+        "AlternativeSolver": (
+            "recognition",
+            "do not use when",
+            "exact preconditions",
+            "procedure",
+            "branch conditions",
+            "failure modes",
+            "counterexample patterns",
+            "verification recipe",
+            "alternative strategy",
+            "stop / escalate conditions",
+        ),
+        "LemmaCurator": (
+            "core theorem",
+            "exact preconditions",
+            "procedure",
+            "branch conditions",
+            "stop / escalate conditions",
+        ),
+        "VerifierSkeptic": (
+            "do not use when",
+            "core theorem",
+            "exact preconditions",
+            "failure modes",
+            "counterexample patterns",
+            "verification recipe",
+            "stop / escalate conditions",
+        ),
+        "RepairAgent": (
+            "do not use when",
+            "exact preconditions",
+            "procedure",
+            "branch conditions",
+            "failure modes",
+            "verification recipe",
+            "alternative strategy",
+            "stop / escalate conditions",
+        ),
+        "LLMFinalizer": (),
+    }
+
+    assert ROLE_SECTIONS == expected
+    assert "exact preconditions" in ROLE_SECTIONS["AlternativeSolver"]
+    assert "core theorem" in ROLE_SECTIONS["VerifierSkeptic"]
+    assert ROLE_SECTIONS["LLMFinalizer"] == ()
+
+    package = SimpleNamespace(
+        name="demo",
+        version="3.0",
+        sections={"core theorem": "theorem"},
+    )
+    text, selected, omitted = project(package, "LLMFinalizer")
+    assert text == ""
+    assert selected == ()
+    assert omitted == ("core theorem",)

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Completed the 2026-09-12 Skill role projection reform (Phase P2). Primary and
+  Alternative solvers now receive recognition, negative-use boundaries,
+  theorem/precondition, procedure, branch, failure, verification, alternative,
+  and stop/escalation sections; LemmaCurator receives branch conditions;
+  VerifierSkeptic receives the core theorem and stop boundary; RepairAgent
+  receives the complete local-repair boundary; LLMFinalizer receives no
+  mathematical Skill sections. Skill schema version 3.0 and selector behavior
+  remain otherwise unchanged; no real-model accuracy claim is made.
+
 - Completed the 2026-09-12 Prompt contract reform (Phase P1). Expanded the
   seven fixed-role contracts with explicit mathematical boundaries for routing,
   theorem-precondition checks, independent alternatives, local lemma curation,
