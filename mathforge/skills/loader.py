@@ -14,25 +14,55 @@ def _frontmatter(text: str) -> tuple[dict[str, str], str]:
     if marker < 0:
         raise ValueError("unterminated frontmatter")
     fields: dict[str, str] = {}
+    current_key: str | None = None
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        if current_key is not None:
+            fields[current_key] = "\n".join(current_lines).strip()
+
     for line in normalized[4:marker].splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line[:1].isspace():
+            if current_key is None:
+                raise ValueError(f"invalid indented frontmatter line: {line}")
+            current_lines.append(line.strip())
             continue
         key, separator, value = line.partition(":")
         if not separator or not key.strip():
             raise ValueError(f"invalid frontmatter line: {line}")
-        fields[key.strip()] = value.strip()
+        flush()
+        current_key = key.strip()
+        current_lines = [value.strip()]
+    flush()
     return fields, normalized[marker + 5 :].strip()
 
 
-def _list(value: str) -> tuple[str, ...]:
-    value = value.strip()
+def _list(value: str | None) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    value = str(value).strip()
+    if value in {"", "[]", "null", "~"}:
+        return ()
     if value.startswith("[") and value.endswith("]"):
         value = value[1:-1]
+    # Also accept the small YAML subset used for optional block lists.
+    value = value.replace("\n", ",")
     return tuple(
-        item.strip().strip("\"'")
+        item.strip().lstrip("-").strip().strip("\"'")
         for item in value.split(",")
-        if item.strip().strip("\"'")
+        if item.strip().lstrip("-").strip().strip("\"'")
     )
+
+
+def _description(value: str | None) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text[:1] in {">", "|"}:
+        text = text[1:].strip()
+    return " ".join(text.strip("\"'").split())
 
 
 def _float_field(fields: dict[str, str], key: str, default: float) -> float:
@@ -92,6 +122,9 @@ def load_v3_package(package_root: Path) -> SkillPackage:
         sections=_sections(body),
         package_root=source.parent,
         source_path=source,
+        description=_description(fields.get("description")),
+        negative_triggers=_list(fields.get("negative_triggers")),
+        required_observables=_list(fields.get("required_observables")),
         expected_gain=_float_field(fields, "expected_gain", 0.0),
         historical_precision=_float_field(fields, "historical_precision", 1.0),
         token_cost=_int_field(fields, "token_cost", 0),

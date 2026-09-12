@@ -37,6 +37,12 @@ class SkillFragmentDecision:
     expected_accuracy_gain: float = 0.0
     utility: float = 0.0
     source_skill_name: str = ""
+    # V3 optional retrieval metadata is carried into the public selection
+    # trace so an admission decision can be audited without reopening the
+    # package source.  These fields are empty for legacy V2 Skills.
+    description: str = ""
+    negative_triggers: tuple[str, ...] = ()
+    required_observables: tuple[str, ...] = ()
 
     def to_trace_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +64,9 @@ class SkillFragmentDecision:
             "expected_accuracy_gain": self.expected_accuracy_gain,
             "utility": self.utility,
             "source_skill_name": self.source_skill_name,
+            "description": self.description,
+            "negative_triggers": list(self.negative_triggers),
+            "required_observables": list(self.required_observables),
         }
 
 
@@ -220,6 +229,15 @@ class DynamicSkillSelector:
                     plan.source_skill_name
                     if plan.source_skill_name != effective_name
                     else ""
+                ),
+                description=str(getattr(effective_definition, "description", "")),
+                negative_triggers=tuple(
+                    str(item)
+                    for item in getattr(effective_definition, "negative_triggers", ())
+                ),
+                required_observables=tuple(
+                    str(item)
+                    for item in getattr(effective_definition, "required_observables", ())
                 ),
             )
             if score <= 0 or not selected:
@@ -487,6 +505,45 @@ class DynamicSkillSelector:
         if failure_signals and any(_matches(signal, failure_text) for signal in failure_signals):
             score += 28
             reasons.append("failure_feedback")
+
+        # Optional V3 metadata refines ranking but never substitutes for the
+        # Skill's exact preconditions.  Negative triggers are deliberately a
+        # bounded penalty (not a first-version hard veto), while required
+        # observables reward evidence already present in the problem/state and
+        # penalize missing observables so near-miss Skills rank lower.
+        description = str(getattr(definition, "description", "")).strip()
+        if description and _matches(description, context):
+            score += 4
+            reasons.append("description_match")
+        negative_triggers = tuple(
+            str(item)
+            for item in getattr(definition, "negative_triggers", ())
+            if str(item).strip()
+        )
+        negative_hits = [item for item in negative_triggers if _matches(item, context)]
+        if negative_hits:
+            score -= min(32, 16 * len(negative_hits))
+            reasons.append(f"negative_trigger:{negative_hits[0]}")
+        required_observables = tuple(
+            str(item)
+            for item in getattr(definition, "required_observables", ())
+            if str(item).strip()
+        )
+        if required_observables:
+            observable_hits = [
+                item for item in required_observables if _matches(item, context)
+            ]
+            missing_observables = [
+                item for item in required_observables if item not in observable_hits
+            ]
+            if observable_hits:
+                score += min(18, 6 * len(observable_hits))
+                reasons.append(f"required_observable:{observable_hits[0]}")
+            if missing_observables:
+                score -= min(24, 8 * len(missing_observables))
+                reasons.append(
+                    f"missing_required_observable:{missing_observables[0]}"
+                )
         if name == "counterexample-search" and any(
             marker in context
             for marker in ("contradiction", "if and only if", "unique", "forall")

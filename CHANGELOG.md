@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Completed the 2026-09-12 Skill V3 optional-metadata reform (Phase S1).
+  `description`, `negative_triggers`, and `required_observables` are now
+  parsed with backward-compatible defaults, carried through selection traces,
+  and used as bounded retrieval/ranking evidence. Negative triggers reduce
+  rank but are not hard vetoes, and required observables remain distinct from
+  exact theorem preconditions. Existing V3 and legacy packages retain version
+  3.0 compatibility; no real-model accuracy claim is made by this change.
+
 - Completed the 2026-09-12 Skill role projection reform (Phase P2). Primary and
   Alternative solvers now receive recognition, negative-use boundaries,
   theorem/precondition, procedure, branch, failure, verification, alternative,

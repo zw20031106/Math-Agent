@@ -22,6 +22,14 @@ V3_REQUIRED_FIELDS = (
     "failure_signals",
     "verification_hooks",
 )
+# These fields are intentionally optional so existing version-3 packages and
+# legacy V2 adapters keep loading unchanged.  They provide retrieval and
+# admission context without becoming a second mathematical contract.
+V3_OPTIONAL_FIELDS = (
+    "description",
+    "negative_triggers",
+    "required_observables",
+)
 V3_REQUIRED_SECTIONS = (
     "recognition",
     "do not use when",
@@ -56,12 +64,36 @@ class SkillPackage:
     sections: dict[str, str]
     package_root: Path
     source_path: Path
+    # Optional retrieval metadata.  ``negative_triggers`` are ranking
+    # penalties, not hard vetoes; ``required_observables`` describe evidence
+    # worth looking for before applying the Skill's exact preconditions.
+    description: str = ""
+    negative_triggers: tuple[str, ...] = ()
+    required_observables: tuple[str, ...] = ()
     legacy: bool = False
     # Optional offline priors used by SkillExecutionPlan.  They are not
     # model-generated and default conservatively for historical V2 Skills.
     expected_gain: float = 0.0
     historical_precision: float = 1.0
     token_cost: int = 0
+
+    def __post_init__(self) -> None:
+        description = "" if self.description is None else str(self.description)
+        object.__setattr__(self, "description", " ".join(description.split()))
+        for field_name in ("negative_triggers", "required_observables"):
+            value = getattr(self, field_name)
+            if isinstance(value, str):
+                values = (value,)
+            else:
+                values = value or ()
+            normalized = tuple(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in values
+                    if str(item).strip()
+                )
+            )
+            object.__setattr__(self, field_name, normalized)
 
     @property
     def subject(self) -> str:
@@ -87,6 +119,14 @@ class SkillPackage:
             raise ValueError(f"{self.name} sections missing: {', '.join(missing)}")
         if self.kind == "method" and not self.problem_patterns:
             raise ValueError(f"{self.name} method Skill must declare problem_patterns")
+        if not isinstance(self.description, str):
+            raise ValueError(f"{self.name} description must be a string")
+        for field_name in ("negative_triggers", "required_observables"):
+            values = getattr(self, field_name)
+            if not isinstance(values, tuple) or any(
+                not isinstance(item, str) or not item.strip() for item in values
+            ):
+                raise ValueError(f"{self.name} {field_name} must be non-empty strings")
         if not math.isfinite(float(self.expected_gain)) or self.expected_gain < 0:
             raise ValueError(f"{self.name} expected_gain must be finite and nonnegative")
         if not 0.0 <= float(self.historical_precision) <= 1.0:
