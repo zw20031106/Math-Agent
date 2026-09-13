@@ -109,6 +109,7 @@ class SkillRegistry:
                 {
                     "name": fields.get("name", path.stem),
                     "version": fields.get("version", "1"),
+                    "format": fields.get("format", "mmat-method-card-v1"),
                     "roles": fields.get("roles", ""),
                     "sha256": _normalized_file_hash(path),
                 }
@@ -239,6 +240,12 @@ class PromptContract:
     def max_context_chars(self) -> int:
         return int(self.fields["max_context_chars"])
 
+    @property
+    def format_version(self) -> str:
+        """Return the model-facing role-card format declared by the contract."""
+
+        return self.fields.get("format", "mmat-role-card-v1") or "mmat-role-card-v1"
+
     def render_system(self, runtime_instructions: str = "") -> str:
         role = self.fields["role"]
         contract_lines = [
@@ -252,6 +259,7 @@ class PromptContract:
             f"允许的工具：{self.fields['allowed_tools']}。",
             f"失败策略：{self.fields['failure_policy']}。",
             f"停止条件：{self.fields['stop_condition']}。",
+            f"Prompt 格式：{self.format_version}；按 Dispatch、Input、Workflow、Artifacts、Verification、Failure、Output 执行。",
             "语言要求：所有自然语言解释、步骤、理由和结论必须使用中文；数学公式、JSON 字段名、协议标识和技能名称保持原样。",
             self.body,
         ]
@@ -270,6 +278,7 @@ class PromptContract:
             f"可见状态：{self.fields['visible_memory']}。",
             f"禁止状态：{self.fields['forbidden_context']}。",
             f"工具：{self.fields['allowed_tools']}；失败：{self.fields['failure_policy']}；停止：{self.fields['stop_condition']}。",
+            f"Prompt 格式：{self.format_version}；遵循角色方法卡的输入、工作流、工件、验证和升级边界。",
             "自然语言必须中文；公式、JSON 字段名、协议标识和技能名保持原样。使用 standard LaTeX，JSON 反斜杠按 JSON 转义。",
             # The contract body remains part of the authoritative system
             # message.  Compact rendering removes duplicated field prose but
@@ -309,6 +318,7 @@ class PromptContractLoader:
                     "name": path.parent.name,
                     "role": fields.get("role", ""),
                     "version": fields.get("version", "1"),
+                    "format": fields.get("format", "mmat-role-card-v1"),
                     "sha256": _normalized_file_hash(path),
                 }
             )

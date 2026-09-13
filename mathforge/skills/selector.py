@@ -10,6 +10,10 @@ from mathforge.skills.execution_plan import (
     SkillExecutionPlan,
     skill_utility,
 )
+from mathforge.skills.mechmath_format import (
+    COMMON_METHOD_CARD_SECTIONS,
+    render_method_card,
+)
 from mathforge.skills.projection import project
 from mathforge.skills.registry import SkillRegistry
 
@@ -43,6 +47,7 @@ class SkillFragmentDecision:
     description: str = ""
     negative_triggers: tuple[str, ...] = ()
     required_observables: tuple[str, ...] = ()
+    format_version: str = "mmat-method-card-v1"
 
     def to_trace_dict(self) -> dict[str, Any]:
         return {
@@ -67,6 +72,7 @@ class SkillFragmentDecision:
             "description": self.description,
             "negative_triggers": list(self.negative_triggers),
             "required_observables": list(self.required_observables),
+            "format_version": self.format_version,
         }
 
 
@@ -162,7 +168,18 @@ class DynamicSkillSelector:
                     historical_precision,
                 )
             )
-        ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+        # Router-selected Skills are the dispatch contract, not merely a soft
+        # relevance hint.  Keep them ahead of generic utility-ranked cards so
+        # a long MechMath method card cannot evict the route owner from the
+        # bounded prompt.  Utility still orders cards within each group.
+        ranked.sort(
+            key=lambda item: (
+                0 if item[2] in route_names else 1,
+                -item[0],
+                -item[1],
+                item[2],
+            )
+        )
 
         references = reference_fragments or {}
         blocks: list[str] = []
@@ -239,6 +256,9 @@ class DynamicSkillSelector:
                     str(item)
                     for item in getattr(effective_definition, "required_observables", ())
                 ),
+                format_version=str(
+                    getattr(effective_definition, "format_version", "mmat-method-card-v1")
+                ),
             )
             if score <= 0 or not selected:
                 omitted.append(decision)
@@ -258,7 +278,7 @@ class DynamicSkillSelector:
             ):
                 omitted.append(replace(decision, reasons=(*decision.reasons, "top_k")))
                 continue
-            block = self._render(effective_definition, selected, skill_refs)
+            block = self._render(effective_definition, selected, skill_refs, role)
             separator = 2 if blocks else 0
             if used + separator + len(block) > max_chars:
                 omitted.append(
@@ -409,7 +429,11 @@ class DynamicSkillSelector:
             "LLMFinalizer": ("answer normalization", "trace step guidance"),
         }.get(role, ())
         selected = tuple(name for name in selected_names if name in sections)
-        omitted = tuple(name for name in sections if name not in selected)
+        omitted = tuple(
+            name
+            for name in sections
+            if name not in selected and name not in COMMON_METHOD_CARD_SECTIONS
+        )
         return selected, omitted
 
     @staticmethod
@@ -417,25 +441,9 @@ class DynamicSkillSelector:
         definition: Any,
         selected: tuple[str, ...],
         references: tuple[Any, ...],
+        role: str = "Host",
     ) -> str:
-        if DynamicSkillSelector._is_v3(definition):
-            sections = getattr(definition, "sections", {})
-            block = "\n".join(
-                [f"# Skill: {definition.name} ({definition.version})"]
-                + [
-                    f"## {name.title()}\n{sections[name]}"
-                    for name in selected
-                ]
-            ).strip()
-        else:
-            sections = _section_map(str(getattr(definition, "body", "")))
-            block = "\n".join(
-                [f"# Skill: {definition.name}"]
-                + [
-                    f"## {name.title()}\n{sections[name]}"
-                    for name in selected
-                ]
-            ).strip()
+        block = render_method_card(definition, role, selected)
         if references:
             blocks = [block]
             for fragment in references:

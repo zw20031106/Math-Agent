@@ -4,8 +4,8 @@
     "profile": "router",
     "protocol_version": "1.0",
     "contract_version": "5",
-    "contract_sha256": "e81550ce08d8067e66366edbe29b54df3abe95b8fc321c65e61faac8c1925a0e",
-    "prompt_sha256": "8458de16b79feecf514778d357c47621a4222b90e7bbba5a518abcfac2894ea7",
+    "contract_sha256": "399d4a61b45f02b6b61b9d4a01db885b5b5d322a7fe6c0efcc7e929045781cef",
+    "prompt_sha256": "4cf50d36698c6412e8e04949501668387927d7dd2695ac8acf0b47319683d824",
     "output_schema_name": "role:router_planner:router",
     "output_schema_fields": [
       "alternative_methods",
@@ -24,8 +24,8 @@
     "profile": "lemma",
     "protocol_version": "1.0",
     "contract_version": "5",
-    "contract_sha256": "60cc6fc26a8fa60214522118bed3f95e997c3b8aa8054f272c7decf3fa9b844c",
-    "prompt_sha256": "2f6029a5fa8cdeeccdcf5b8d7ae2b27936eff68a0df63f4964fd1cf58b3d3bd0",
+    "contract_sha256": "d135c91c74dd09efe91b186377326845960e36a773b553a5426b862ecc5fe8e0",
+    "prompt_sha256": "b73062a8dd0bf7347c0f2ad419b9516acd349ecbb6887fcfe4f2b1a9d7371964",
     "output_schema_name": "role:lemma_curator:lemma",
     "output_schema_fields": [
       "action",
@@ -45,8 +45,8 @@
     "profile": "verifier",
     "protocol_version": "1.0",
     "contract_version": "8",
-    "contract_sha256": "1f3ad1bf3eaf80a0bf919a9c5da1b8231a9eebaf7aa7590e8e48137c3d6e0de9",
-    "prompt_sha256": "0e46896267e9e57dd46e4afb2a8baeaf559f20222fe5be2586486f780dcb6953",
+    "contract_sha256": "70715f4b5b17c87d10b051a30de50cc80bf3d79dedd3967554ededb0be73ff1d",
+    "prompt_sha256": "2b1ccf4b9851a4fac0fec6dfa4e6437a1164634d4fcde40c19a7c6c6689475ac",
     "output_schema_name": "role:verifier_skeptic:verifier",
     "output_schema_fields": [
       "findings"
@@ -59,8 +59,8 @@
     "profile": "repair",
     "protocol_version": "1.0",
     "contract_version": "7",
-    "contract_sha256": "62c823a3ed1aea851366b339333e853477e275db0d9c2e7eae9e44840e1675b1",
-    "prompt_sha256": "1da372fe6c25d09d8110047a29a7a7d31f48a64d21084728c053bb71bcff0b4f",
+    "contract_sha256": "5905e4b8f2e3f060a784995ee1cd6ddbd24040bfc2c0b8f7798394126eff60cc",
+    "prompt_sha256": "91d59d6eaa65e2c097c5611cb67bcc6fafe15594a65bae375c81b67ef69f42d4",
     "output_schema_name": "role:repair:repair",
     "output_schema_fields": [
       "final_answer",
@@ -76,8 +76,8 @@
     "profile": "finalizer",
     "protocol_version": "1.0",
     "contract_version": "6",
-    "contract_sha256": "8f2a04dff8e6615fdcfb0c43740f5b65ad7bccd5bb8c353bbf4058b2355791db",
-    "prompt_sha256": "9324e92f1d5b603dac9d7e3f15b650e43bb8400eab4570e2afe8ef98cce55ca3",
+    "contract_sha256": "c72bb951195eccebe690644a0b031ae251f4c8c8cf950fb104df5a8efc4b12a7",
+    "prompt_sha256": "125332f74f3e78cc0a97fd22abe25f144441be55b98bd989928842e7a170c6c6",
     "output_schema_name": "role:finalizer:finalizer",
     "output_schema_fields": [
       "final_answer",
@@ -91,8 +91,8 @@
     "profile": "minimal",
     "protocol_version": "1.1-lite",
     "contract_version": "12",
-    "contract_sha256": "c5b4eaf5d74094469c66b8510e11e00ac382db4a23eaab2e7c31e40bc0cca94d",
-    "prompt_sha256": "fa95fbef77e9a3cf855f9616508a36746fa90cfc2e6cbf7c4eeb4d8da973ef6e",
+    "contract_sha256": "bae5971ba870f31419c8ddbf802911fb6d25ad1c25e4a42dba63ba60f974c659",
+    "prompt_sha256": "502d62e1d91172f0b2b816939d3760e8547799135b8a93ac45488d389b41b433",
     "output_schema_name": "agent_turn:1.1-lite:candidate:answer_only",
     "output_schema_fields": [
       "action",
@@ -108,8 +108,8 @@
     "profile": "minimal:explore",
     "protocol_version": "1.1-lite",
     "contract_version": "12",
-    "contract_sha256": "c5b4eaf5d74094469c66b8510e11e00ac382db4a23eaab2e7c31e40bc0cca94d",
-    "prompt_sha256": "18910e733e99003a6c328220de16b5c46774a0b4f9712ddaf9df74bae8218f05",
+    "contract_sha256": "bae5971ba870f31419c8ddbf802911fb6d25ad1c25e4a42dba63ba60f974c659",
+    "prompt_sha256": "4c52b61382028b632a9f1a8f1ab3205c30f582cf05b55673216fff3eb55223c8",
     "output_schema_name": "agent_turn:1.1-lite:progress:explore",
     "output_schema_fields": [
       "action",
@@ -125,8 +125,8 @@
     "profile": "minimal",
     "protocol_version": "1.1-lite",
     "contract_version": "11",
-    "contract_sha256": "2782cc24884d61b0d162206969224a2d70f0da39aa2dbfa809dc391612889640",
-    "prompt_sha256": "3bb242ee8c2f51057e03b25d2dee3409d62c4e3851d99ebae6e903235983b45f",
+    "contract_sha256": "5c52448cc6617150dafbabd05c7ef21e90c397febf13de5ff86ddbf5d3d495cb",
+    "prompt_sha256": "0613740c642363fcbd894653cf308352e3aa7d17fba01cb9406c84ed67eecc26",
     "output_schema_name": "agent_turn:1.1-lite:candidate:answer_only",
     "output_schema_fields": [
       "action",
@@ -142,8 +142,8 @@
     "profile": "minimal:explore",
     "protocol_version": "1.1-lite",
     "contract_version": "11",
-    "contract_sha256": "2782cc24884d61b0d162206969224a2d70f0da39aa2dbfa809dc391612889640",
-    "prompt_sha256": "0563d6cfc0a98d18ed6a9ec4098cf7896e63d9beff27497a055691a79d7f99f0",
+    "contract_sha256": "5c52448cc6617150dafbabd05c7ef21e90c397febf13de5ff86ddbf5d3d495cb",
+    "prompt_sha256": "a32cc3fc50d8e4d81ee9815d76aa1f869a1f79626fddac05e5ca399ef14dea7a",
     "output_schema_name": "agent_turn:1.1-lite:progress:explore",
     "output_schema_fields": [
       "action",

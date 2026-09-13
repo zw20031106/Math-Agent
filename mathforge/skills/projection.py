@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from mathforge.skills.schema import SkillPackage
+from mathforge.skills.mechmath_format import (
+    COMMON_METHOD_CARD_SECTIONS,
+    render_method_card,
+)
 
 
 ROLE_SECTIONS = {
@@ -61,10 +65,14 @@ ROLE_SECTIONS = {
 def project(package: SkillPackage, role: str) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
     wanted = ROLE_SECTIONS.get(role, ())
     selected = tuple(name for name in wanted if package.sections.get(name))
-    omitted = tuple(name for name in package.sections if name not in selected)
+    # The common method-card protocol is rendered for every role, so it is not
+    # reported as omitted even though the role-specific tuple remains stable
+    # for compatibility with existing admission traces.
+    omitted = tuple(
+        name
+        for name in package.sections
+        if name not in selected and name not in COMMON_METHOD_CARD_SECTIONS
+    )
     if not selected:
         return "", selected, omitted
-    blocks = [f"# Skill: {package.name} ({package.version})"]
-    for name in selected:
-        blocks.append(f"## {name.title()}\n{package.sections[name]}")
-    return "\n".join(blocks).strip(), selected, omitted
+    return render_method_card(package, role, selected), selected, omitted

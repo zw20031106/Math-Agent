@@ -128,6 +128,8 @@ def load_v3_package(package_root: Path) -> SkillPackage:
         expected_gain=_float_field(fields, "expected_gain", 0.0),
         historical_precision=_float_field(fields, "historical_precision", 1.0),
         token_cost=_int_field(fields, "token_cost", 0),
+        format_version=str(fields.get("format", "mmat-method-card-v1")).strip()
+        or "mmat-method-card-v1",
     )
     package.validate()
     return package
@@ -155,4 +157,5 @@ def load_legacy_v2_skill(definition: SkillDefinition, source_path: Path) -> Skil
         package_root=source_path.parent,
         source_path=source_path,
         legacy=True,
+        format_version="mmat-method-card-v1",
     )

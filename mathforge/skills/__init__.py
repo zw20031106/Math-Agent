@@ -21,6 +21,11 @@ from mathforge.skills.hook_audit import (
     audit_skill_hooks,
     hook_policy,
 )
+from mathforge.skills.mechmath_format import (
+    COMMON_METHOD_CARD_SECTIONS,
+    MECHMATH_SKILL_FORMAT,
+    render_method_card,
+)
 from mathforge.skills.s5_benchmark import (
     S5_CASE_TYPES,
     S5_DEFAULT_CASE_PATH,
@@ -53,6 +58,9 @@ __all__ = [
     "audit_skill_hooks",
     "expected_accuracy_gain",
     "hook_policy",
+    "COMMON_METHOD_CARD_SECTIONS",
+    "MECHMATH_SKILL_FORMAT",
+    "render_method_card",
     "S5_CASE_TYPES",
     "S5_DEFAULT_CASE_PATH",
     "S5_SCHEMA_VERSION",

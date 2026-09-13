@@ -36,6 +36,7 @@ def _chinese_skill_block(name: str, body: str) -> str:
 
     lines = [
         f"# Skill: {name}",
+        "格式：mmat-method-card-v1；先执行适用性与前提门，再执行方法、验证和工件交接。",
         "语言要求：用中文理解并输出以下数学方法；公式、LaTeX、字段名和技能标识保持原样。",
     ]
     for line in str(body).splitlines():
@@ -92,6 +93,7 @@ class SkillRegistry:
             {
                 "name": skill.name,
                 "version": skill.version,
+                "format": skill.format_version,
                 "roles": ",".join(skill.roles),
                 "sha256": sha256(skill.source_path.read_bytes()).hexdigest(),
             }

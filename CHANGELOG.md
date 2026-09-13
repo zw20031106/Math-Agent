@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Completed the 2026-09-13 MechMath-inspired Prompt/Skill format migration
+  (Phase S7). All seven fixed-role Prompt contracts now expose a stable role
+  card with Dispatch, Input, Workflow, artifact handoff, verification,
+  failure/escalation, and output boundaries. All 35 legacy V2 and 60 V3 Skills
+  now carry the `mmat-method-card-v1` format and the same lifecycle sections;
+  the production selector renders a bounded protocol card before role-scoped
+  mathematical sections and preserves Router-selected Skills in the prompt
+  budget. The injected client, TaskGraph authority, evidence gates, and public
+  output contract were not changed. Golden prompt snapshots and format
+  invariants were regenerated; this change makes no real-model accuracy claim.
+
 - Completed the 2026-09-12 Phase S5 Skill benchmark implementation. Added a
   versioned 110-case corpus covering all 22 newly/majorly modified Skills with
   positive, negative, adversarial, selection, and ablation rows; added a

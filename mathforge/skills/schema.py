@@ -76,6 +76,9 @@ class SkillPackage:
     expected_gain: float = 0.0
     historical_precision: float = 1.0
     token_cost: int = 0
+    # MechMath-inspired method-card presentation.  The mathematical and
+    # lifecycle semantics remain owned by the existing MathForge schema.
+    format_version: str = "mmat-method-card-v1"
 
     def __post_init__(self) -> None:
         description = "" if self.description is None else str(self.description)
@@ -133,3 +136,5 @@ class SkillPackage:
             raise ValueError(f"{self.name} historical_precision must be in [0, 1]")
         if type(self.token_cost) is not int or self.token_cost < 0:
             raise ValueError(f"{self.name} token_cost must be a nonnegative integer")
+        if not str(self.format_version).strip():
+            raise ValueError(f"{self.name} format_version must be non-empty")
